@@ -189,7 +189,7 @@ class NotionOpusAPI:
         return {
             "content-type": "application/json",
             "accept": "application/json",
-            "cookie": f"token_v2={self.token_v2}; notion_user_id={self.user_id}",
+            "cookie": self._build_cookie_header(),
             "x-notion-active-user-header": self.user_id,
             "x-notion-space-id": self.space_id,
             "notion-client-version": NOTION_CLIENT_VERSION,
