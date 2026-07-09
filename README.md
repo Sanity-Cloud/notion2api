@@ -128,12 +128,16 @@ Access the Web UI at `http://localhost:8000`.
 | `claude-sonnet5` | Latest Sonnet with stronger reasoning and agent capabilities |
 | `claude-opus4.6` | Stronger reasoning, use sparingly |
 | `claude-opus4.7` | Latest Claude, strongest reasoning |
+| `gpt-5.6-sol` | GPT-5.6 Sol, high-intelligence OpenAI model |
+| `gpt-5.6-terra` | GPT-5.6 Terra, balanced high-intelligence OpenAI model |
+| `gpt-5.6-luna` | GPT-5.6 Luna, fast GPT-5.6 family model |
 | `gpt-5.5` | Latest GPT (Beta) |
 | `gpt-5.4` | OpenAI model |
 | `gpt-5.2` | OpenAI model |
 | `gemini-2.5flash` | Native fast, no thinking delay — great for quick tasks |
 | `gemini-3.1pro` | Google's strongest reasoning model |
 | `kimi-2.6` | Moonshot AI (Beta) |
+| `kimi-2.7-code` | Kimi K2.7 Code model |
 
 Full list via API: `GET http://localhost:8000/v1/models`
 

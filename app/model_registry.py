@@ -16,8 +16,20 @@ MODEL_MAP: dict[str, str] = {
     "claude-opus4.8": "ambrosia-tart-high",
     "claude-haiku4.5": "anthropic-haiku-4.5",
     "claude-fable5": "acai-budino",
+    "claude-fable-5": "acai-budino",
+    "fable-5": "acai-budino",
+    "fable5": "acai-budino",
+    "claude-fable5-high": "acai-budino-high",
+    "claude-fable-5-high": "acai-budino-high",
+    "fable5-high": "acai-budino-high",
 
     # OpenAI
+    "gpt-5.6-sol": "orange-mousse",
+    "gpt-5.6sol": "orange-mousse",
+    "gpt-5.6-terra": "orchid-muffin",
+    "gpt-5.6terra": "orchid-muffin",
+    "gpt-5.6-luna": "olive-jellyroll",
+    "gpt-5.6luna": "olive-jellyroll",
     "gpt-5.2": "oatmeal-cookie",
     "gpt-5.4": "oval-kumquat-medium",
     "gpt-5.5": "opal-quince-medium",
@@ -40,6 +52,10 @@ MODEL_MAP: dict[str, str] = {
     # Other
     "minimax-m2.5": "fireworks-minimax-m2.5",
     "kimi-2.6": "fireworks-kimi-k2.6",
+    "kimi-2.7": "fireworks-kimi-k2.7",
+    "kimi-2.7-code": "fireworks-kimi-k2.7",
+    "kimi-k2.7": "fireworks-kimi-k2.7",
+    "kimi-k2.7-code": "fireworks-kimi-k2.7",
     "deepseek-v4pro": "baseten-deepseek-v4-pro",
     "glm-5.2": "baseten-glm-5.2",
 
@@ -51,6 +67,9 @@ MODEL_MAP: dict[str, str] = {
     "grok-build-0.1": "xinomavro-cake",
 
     # Backend Model IDs mapping to themselves
+    "orange-mousse": "orange-mousse",
+    "orchid-muffin": "orchid-muffin",
+    "olive-jellyroll": "olive-jellyroll",
     "oatmeal-cookie": "oatmeal-cookie",
     "oval-kumquat-medium": "oval-kumquat-medium",
     "opal-quince-medium": "opal-quince-medium",
@@ -65,6 +84,7 @@ MODEL_MAP: dict[str, str] = {
     "otaheite-apple-medium": "otaheite-apple-medium",
     "fireworks-minimax-m2.5": "fireworks-minimax-m2.5",
     "fireworks-kimi-k2.6": "fireworks-kimi-k2.6",
+    "fireworks-kimi-k2.7": "fireworks-kimi-k2.7",
     "baseten-deepseek-v4-pro": "baseten-deepseek-v4-pro",
     "baseten-glm-5.2": "baseten-glm-5.2",
     "xigua-mochi-medium": "xigua-mochi-medium",
@@ -74,6 +94,7 @@ MODEL_MAP: dict[str, str] = {
     "anthropic-haiku-4.5": "anthropic-haiku-4.5",
     "gingerbread": "gingerbread",
     "acai-budino": "acai-budino",
+    "acai-budino-high": "acai-budino-high",
 }
 
 NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
@@ -85,8 +106,12 @@ NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
     "ambrosia-tart-high": "claude-opus4.8",
     "anthropic-haiku-4.5": "claude-haiku4.5",
     "acai-budino": "claude-fable5",
+    "acai-budino-high": "claude-fable5-high",
 
     # OpenAI
+    "orange-mousse": "gpt-5.6-sol",
+    "orchid-muffin": "gpt-5.6-terra",
+    "olive-jellyroll": "gpt-5.6-luna",
     "oatmeal-cookie": "gpt-5.2",
     "oval-kumquat-medium": "gpt-5.4",
     "opal-quince-medium": "gpt-5.5",
@@ -107,6 +132,7 @@ NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
     # Other
     "fireworks-minimax-m2.5": "minimax-m2.5",
     "fireworks-kimi-k2.6": "kimi-2.6",
+    "fireworks-kimi-k2.7": "kimi-2.7-code",
     "baseten-deepseek-v4-pro": "deepseek-v4pro",
     "baseten-glm-5.2": "glm-5.2",
 }
@@ -120,6 +146,12 @@ DISPLAY_NAMES: dict[str, str] = {
     "claude-opus4.8": "Claude Opus 4.8",
     "claude-haiku4.5": "Claude Haiku 4.5",
     "claude-fable5": "Fable 5",
+    "claude-fable5-high": "Fable 5",
+    "claude-fable-5-high": "Fable 5",
+    "fable5-high": "Fable 5",
+    "gpt-5.6-sol": "GPT-5.6 Sol",
+    "gpt-5.6-terra": "GPT-5.6 Terra",
+    "gpt-5.6-luna": "GPT-5.6 Luna",
     "gpt-5.2": "GPT-5.2",
     "gpt-5.4": "GPT-5.4",
     "gpt-5.4mini": "GPT-5.4 Mini",
@@ -136,10 +168,17 @@ DISPLAY_NAMES: dict[str, str] = {
     "grok-build0.1": "Grok Build 0.1",
     "minimax-m2.5": "MiniMax M2.5",
     "kimi-2.6": "Kimi 2.6",
+    "kimi-2.7": "Kimi K2.7 Code",
+    "kimi-2.7-code": "Kimi K2.7 Code",
+    "kimi-k2.7": "Kimi K2.7 Code",
+    "kimi-k2.7-code": "Kimi K2.7 Code",
     "deepseek-v4pro": "DeepSeek V4 Pro",
     "glm-5.2": "GLM 5.2",
 
     # Backend Model IDs
+    "orange-mousse": "GPT-5.6 Sol",
+    "orchid-muffin": "GPT-5.6 Terra",
+    "olive-jellyroll": "GPT-5.6 Luna",
     "oatmeal-cookie": "GPT-5.2",
     "oval-kumquat-medium": "GPT-5.4",
     "opal-quince-medium": "GPT-5.5",
@@ -154,6 +193,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "otaheite-apple-medium": "GPT-5.4 Nano",
     "fireworks-minimax-m2.5": "MiniMax M2.5",
     "fireworks-kimi-k2.6": "Kimi K2.6",
+    "fireworks-kimi-k2.7": "Kimi K2.7 Code",
     "baseten-deepseek-v4-pro": "DeepSeek V4 Pro",
     "baseten-glm-5.2": "GLM 5.2",
     "xigua-mochi-medium": "Grok 4.3",
@@ -163,12 +203,74 @@ DISPLAY_NAMES: dict[str, str] = {
     "anthropic-haiku-4.5": "Haiku 4.5",
     "gingerbread": "Gemini 3 Flash",
     "acai-budino": "Fable 5",
+    "acai-budino-high": "Fable 5",
 }
 
 
 # Only canonical Notion model codenames are advertised by /v1/models.
 # Friendly names and compatibility aliases remain accepted for requests through MODEL_MAP.
-EXPOSED_MODEL_IDS: tuple[str, ...] = tuple(NOTION_MODEL_REVERSE_MAP.keys())
+STATIC_DISABLED_MODEL_IDS: set[str] = {"acai-budino-high"}
+EXPOSED_MODEL_IDS: tuple[str, ...] = tuple(
+    model_id
+    for model_id in NOTION_MODEL_REVERSE_MAP
+    if model_id not in STATIC_DISABLED_MODEL_IDS
+)
+
+MODEL_DISPLAY_GROUPS: dict[str, str] = {
+    "orange-mousse": "intelligent",
+    "orchid-muffin": "intelligent",
+    "olive-jellyroll": "fast",
+    "oatmeal-cookie": "fast",
+    "oval-kumquat-medium": "fast",
+    "opal-quince-medium": "intelligent",
+    "vertex-gemini-3.5-flash": "fast",
+    "almond-croissant-low": "fast",
+    "angel-cake-high": "intelligent",
+    "avocado-froyo-medium": "intelligent",
+    "apricot-sorbet-high": "intelligent",
+    "ambrosia-tart-high": "intelligent",
+    "oregon-grape-medium": "fast",
+    "otaheite-apple-medium": "fast",
+    "fireworks-kimi-k2.6": "intelligent",
+    "fireworks-kimi-k2.7": "intelligent",
+    "baseten-deepseek-v4-pro": "intelligent",
+    "baseten-glm-5.2": "intelligent",
+    "xigua-mochi-medium": "intelligent",
+    "strawberry-whoopiepie": "intelligent",
+    "xinomavro-cake": "intelligent",
+    "galette-medium-thinking": "intelligent",
+    "anthropic-haiku-4.5": "fast",
+    "gingerbread": "fast",
+    "acai-budino": "intelligent",
+    "acai-budino-high": "intelligent",
+}
+
+MODEL_CARD_ATTRIBUTES: dict[str, dict[str, int]] = {
+    "orange-mousse": {"speed": 3, "intelligence": 5, "cost": 5},
+    "orchid-muffin": {"speed": 4, "intelligence": 4, "cost": 4},
+    "olive-jellyroll": {"speed": 5, "intelligence": 3, "cost": 2},
+    "oatmeal-cookie": {"speed": 4, "intelligence": 4, "cost": 3},
+    "oval-kumquat-medium": {"speed": 4, "intelligence": 5, "cost": 4},
+    "opal-quince-medium": {"speed": 4, "intelligence": 5, "cost": 5},
+    "vertex-gemini-3.5-flash": {"speed": 5, "intelligence": 3, "cost": 3},
+    "almond-croissant-low": {"speed": 3, "intelligence": 5, "cost": 4},
+    "angel-cake-high": {"speed": 3, "intelligence": 5, "cost": 3},
+    "avocado-froyo-medium": {"speed": 2, "intelligence": 5, "cost": 5},
+    "apricot-sorbet-high": {"speed": 2, "intelligence": 5, "cost": 5},
+    "ambrosia-tart-high": {"speed": 2, "intelligence": 5, "cost": 5},
+    "oregon-grape-medium": {"speed": 5, "intelligence": 2, "cost": 2},
+    "otaheite-apple-medium": {"speed": 5, "intelligence": 1, "cost": 1},
+    "fireworks-kimi-k2.6": {"speed": 5, "intelligence": 4, "cost": 2},
+    "fireworks-kimi-k2.7": {"speed": 5, "intelligence": 4, "cost": 2},
+    "baseten-deepseek-v4-pro": {"speed": 3, "intelligence": 5, "cost": 4},
+    "baseten-glm-5.2": {"speed": 3, "intelligence": 5, "cost": 3},
+    "xigua-mochi-medium": {"speed": 3, "intelligence": 5, "cost": 4},
+    "strawberry-whoopiepie": {"speed": 3, "intelligence": 5, "cost": 4},
+    "xinomavro-cake": {"speed": 3, "intelligence": 5, "cost": 4},
+    "anthropic-haiku-4.5": {"speed": 5, "intelligence": 2, "cost": 2},
+    "gingerbread": {"speed": 5, "intelligence": 2, "cost": 2},
+    "acai-budino-high": {"speed": 2, "intelligence": 5, "cost": 5},
+}
 
 MODEL_FAMILIES: dict[str, str] = {
     "almond-croissant-low": "anthropic",
@@ -178,20 +280,25 @@ MODEL_FAMILIES: dict[str, str] = {
     "ambrosia-tart-high": "anthropic",
     "anthropic-haiku-4.5": "anthropic",
     "acai-budino": "anthropic",
+    "acai-budino-high": "anthropic",
+    "orange-mousse": "openai",
+    "orchid-muffin": "openai",
+    "olive-jellyroll": "openai",
     "oatmeal-cookie": "openai",
     "oval-kumquat-medium": "openai",
     "opal-quince-medium": "openai",
     "oregon-grape-medium": "openai",
     "otaheite-apple-medium": "openai",
-    "gingerbread": "google",
-    "galette-medium-thinking": "google",
-    "vertex-gemini-3.5-flash": "google",
-    "vertex-gemini-2.5-flash": "google",
+    "gingerbread": "gemini",
+    "galette-medium-thinking": "gemini",
+    "vertex-gemini-3.5-flash": "gemini",
+    "vertex-gemini-2.5-flash": "gemini",
     "xigua-mochi-medium": "xai",
     "strawberry-whoopiepie": "xai",
     "xinomavro-cake": "xai",
     "fireworks-minimax-m2.5": "minimax",
     "fireworks-kimi-k2.6": "kimi",
+    "fireworks-kimi-k2.7": "kimi",
     "baseten-deepseek-v4-pro": "deepseek",
     "baseten-glm-5.2": "glm",
 }
@@ -206,6 +313,9 @@ MODEL_ICONS: dict[str, str] = {
     "claude-haiku4.5": "✳️",
     "claude-fable5": "✳️",
     # OpenAI
+    "gpt-5.6-sol": "⚙",
+    "gpt-5.6-terra": "⚙",
+    "gpt-5.6-luna": "⚙",
     "gpt-5.2": "⚙",
     "gpt-5.4": "⚙",
     "gpt-5.4mini": "⚙",
@@ -225,6 +335,10 @@ MODEL_ICONS: dict[str, str] = {
     # Other
     "minimax-m2.5": "◈",
     "kimi-2.6": "🌙",
+    "kimi-2.7": "🌙",
+    "kimi-2.7-code": "🌙",
+    "kimi-k2.7": "🌙",
+    "kimi-k2.7-code": "🌙",
     "deepseek-v4pro": "🔷",
     "glm-5.2": "◆",
 
@@ -236,6 +350,10 @@ MODEL_ICONS: dict[str, str] = {
     "ambrosia-tart-high": "✳️",
     "anthropic-haiku-4.5": "✳️",
     "acai-budino": "✳️",
+    "acai-budino-high": "✳️",
+    "orange-mousse": "⚙",
+    "orchid-muffin": "⚙",
+    "olive-jellyroll": "⚙",
     "oatmeal-cookie": "⚙",
     "oval-kumquat-medium": "⚙",
     "oregon-grape-medium": "⚙",
@@ -250,6 +368,7 @@ MODEL_ICONS: dict[str, str] = {
     "xinomavro-cake": "◐",
     "fireworks-minimax-m2.5": "◈",
     "fireworks-kimi-k2.6": "🌙",
+    "fireworks-kimi-k2.7": "🌙",
     "baseten-deepseek-v4-pro": "🔷",
     "baseten-glm-5.2": "◆",
 }
@@ -327,11 +446,16 @@ def get_model_metadata(model_name: str) -> dict[str, object]:
         if target == notion_model and alias != notion_model
     ]
 
+    is_disabled = notion_model in STATIC_DISABLED_MODEL_IDS
     return {
         "canonical_id": notion_model,
         "public_name": public_name,
         "display_name": DISPLAY_NAMES.get(notion_model, DISPLAY_NAMES.get(public_name, public_name)),
         "model_family": MODEL_FAMILIES.get(notion_model, "unknown"),
+        "display_group": MODEL_DISPLAY_GROUPS.get(notion_model, ""),
+        "model_card_attributes": MODEL_CARD_ATTRIBUTES.get(notion_model),
+        "is_disabled": is_disabled,
+        "disabled_reason": "trial_not_allowed" if is_disabled else "",
         "transport": "notion2api",
         "upstream_host": upstream_host,
         "aliases": aliases,
@@ -360,9 +484,24 @@ def get_restricted_models_for_space(client: object) -> set[str]:
     return restricted
 
 
+def is_static_disabled_model(model_name: str) -> bool:
+    normalized_name = normalize_model_id(model_name)
+    if not normalized_name:
+        return False
+    if normalized_name in NOTION_MODEL_REVERSE_MAP:
+        notion_model = normalized_name
+    elif normalized_name in MODEL_MAP:
+        notion_model = MODEL_MAP[normalized_name]
+    else:
+        return False
+    return notion_model in STATIC_DISABLED_MODEL_IDS
+
+
 def is_supported_model(model_name: str) -> bool:
     normalized_name = normalize_model_id(model_name)
-    return bool(normalized_name and normalized_name in MODEL_MAP)
+    if not normalized_name or normalized_name not in MODEL_MAP:
+        return False
+    return not is_static_disabled_model(normalized_name)
 
 
 def get_display_name(model_name: str) -> str:

@@ -5,12 +5,16 @@ from app.model_registry import (
     get_standard_model,
     get_thread_type,
     list_available_models,
+    is_static_disabled_model,
     is_supported_model,
 )
 
 
 def test_captured_notion_backend_mappings_are_registered():
     expected = {
+        "gpt-5.6-sol": "orange-mousse",
+        "gpt-5.6-terra": "orchid-muffin",
+        "gpt-5.6-luna": "olive-jellyroll",
         "gpt-5.2": "oatmeal-cookie",
         "gpt-5.4": "oval-kumquat-medium",
         "gpt-5.5": "opal-quince-medium",
@@ -25,6 +29,7 @@ def test_captured_notion_backend_mappings_are_registered():
         "gpt-5.4nano": "otaheite-apple-medium",
         "minimax-m2.5": "fireworks-minimax-m2.5",
         "kimi-2.6": "fireworks-kimi-k2.6",
+        "kimi-2.7-code": "fireworks-kimi-k2.7",
         "deepseek-v4pro": "baseten-deepseek-v4-pro",
         "glm-5.2": "baseten-glm-5.2",
         "grok-4.3": "xigua-mochi-medium",
@@ -43,6 +48,12 @@ def test_captured_notion_backend_mappings_are_registered():
 
 
 def test_captured_display_names_are_registered():
+    assert get_display_name("gpt-5.6-sol") == "GPT-5.6 Sol"
+    assert get_display_name("orange-mousse") == "GPT-5.6 Sol"
+    assert get_display_name("gpt-5.6-terra") == "GPT-5.6 Terra"
+    assert get_display_name("gpt-5.6-luna") == "GPT-5.6 Luna"
+    assert get_display_name("kimi-2.7-code") == "Kimi K2.7 Code"
+    assert get_display_name("fireworks-kimi-k2.7") == "Kimi K2.7 Code"
     assert get_display_name("grok-4.3") == "Grok 4.3"
     assert get_display_name("grok-4.5") == "Grok 4.5"
     assert get_display_name("strawberry-whoopiepie") == "Grok 4.5"
@@ -62,8 +73,13 @@ def test_gemini_3_5_flash_no_longer_uses_markdown_chat_route():
 def test_available_models_expose_only_canonical_notion_ids():
     models = list_available_models()
 
-    assert len(models) == 23
+    assert len(models) == 27
     assert len(models) == len(set(models))
+    assert "orange-mousse" in models
+    assert "orchid-muffin" in models
+    assert "olive-jellyroll" in models
+    assert "fireworks-kimi-k2.7" in models
+    assert "acai-budino-high" not in models
     assert "angel-cake-high" in models
     assert "claude-sonnet5" not in models
     assert "apricot-sorbet-high" in models
@@ -74,35 +90,70 @@ def test_available_models_expose_only_canonical_notion_ids():
     assert "grok-4.5" not in models
 
 
+def test_disabled_picker_models_have_metadata_but_are_not_selectable():
+    fable = get_model_metadata("acai-budino-high")
+
+    assert is_static_disabled_model("acai-budino-high") is True
+    assert is_supported_model("acai-budino-high") is False
+    assert fable["canonical_id"] == "acai-budino-high"
+    assert fable["display_name"] == "Fable 5"
+    assert fable["is_disabled"] is True
+    assert fable["disabled_reason"] == "trial_not_allowed"
+    assert "acai-budino-high" not in list_available_models()
+
+
 def test_model_metadata_preserves_transport_and_underlying_family():
     sonnet = get_model_metadata("claude-sonnet5")
     opus = get_model_metadata("claude-opus4.7")
     glm = get_model_metadata("baseten-glm-5.2")
+    gpt56 = get_model_metadata("orange-mousse")
 
-    assert sonnet == {
+    assert {
         "canonical_id": "angel-cake-high",
         "public_name": "claude-sonnet5",
         "display_name": "Sonnet 5",
         "model_family": "anthropic",
+        "display_group": "intelligent",
         "transport": "notion2api",
         "upstream_host": "notion",
-        "aliases": ["claude-sonnet5", "claude-sonnet-5", "sonnet-5", "sonnet5"],
-    }
-    assert opus == {
+        "is_disabled": False,
+    }.items() <= sonnet.items()
+    assert sonnet["aliases"] == ["claude-sonnet5", "claude-sonnet-5", "sonnet-5", "sonnet5"]
+    assert sonnet["model_card_attributes"] == {"speed": 3, "intelligence": 5, "cost": 3}
+
+    assert {
         "canonical_id": "apricot-sorbet-high",
         "public_name": "claude-opus4.7",
         "display_name": "Opus 4.7",
         "model_family": "anthropic",
+        "display_group": "intelligent",
         "transport": "notion2api",
         "upstream_host": "notion",
-        "aliases": ["claude-opus4.7"],
-    }
-    assert glm == {
+        "is_disabled": False,
+    }.items() <= opus.items()
+    assert opus["aliases"] == ["claude-opus4.7"]
+
+    assert {
         "canonical_id": "baseten-glm-5.2",
         "public_name": "glm-5.2",
         "display_name": "GLM 5.2",
         "model_family": "glm",
+        "display_group": "intelligent",
         "transport": "notion2api",
         "upstream_host": "baseten",
-        "aliases": ["glm-5.2"],
-    }
+        "is_disabled": False,
+    }.items() <= glm.items()
+    assert glm["aliases"] == ["glm-5.2"]
+
+    assert {
+        "canonical_id": "orange-mousse",
+        "public_name": "gpt-5.6-sol",
+        "display_name": "GPT-5.6 Sol",
+        "model_family": "openai",
+        "display_group": "intelligent",
+        "transport": "notion2api",
+        "upstream_host": "notion",
+        "is_disabled": False,
+    }.items() <= gpt56.items()
+    assert "gpt-5.6-sol" in gpt56["aliases"]
+    assert gpt56["model_card_attributes"] == {"speed": 3, "intelligence": 5, "cost": 5}
