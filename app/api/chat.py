@@ -454,7 +454,7 @@ def _response_model_metadata(requested_model: str, model_metadata: dict[str, Any
         # like Fable 5 silently swap to a different model while still
         # reporting the original codename).  Only mark as verified when the
         # upstream reports a DIFFERENT model than what was requested.
-        if notion_requested and actual == notion_requested:
+        if actual != notion_requested:
             payload["actual_model_verified"] = False
             payload.setdefault(
                 "actual_model_unverified_reason",
@@ -466,7 +466,7 @@ def _response_model_metadata(requested_model: str, model_metadata: dict[str, Any
         # step.model (notion_step_model) is usually the requested route, but
         # when it DIFFERS from the requested notion model that is genuine
         # proof of a silent model swap (e.g. Fable 5 → Gemini 3.5 Flash).
-        if notion_requested and step_model != notion_requested:
+        if step_model != notion_requested:
             payload["actual_model"] = step_model
             payload["actual_model_verified"] = True
             payload["actual_model_source"] = "notion_step_model_mismatch"
@@ -722,6 +722,18 @@ def _prepare_messages(
         raise HTTPException(
             status_code=400, detail="The last message must be from role 'user'."
         )
+    
+    if isinstance(user_prompt, list):
+        raw_user_prompt = ""
+        for prompt in user_prompt:
+            if isinstance(prompt, dict):
+                prompt = prompt.get("text", "")
+                if prompt:
+                    raw_user_prompt += prompt
+                    raw_user_prompt += "\n"
+        
+        user_prompt = raw_user_prompt
+
     if not user_prompt.strip():
         raise HTTPException(
             status_code=400, detail="The last user message cannot be empty."

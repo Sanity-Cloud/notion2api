@@ -20,6 +20,9 @@ MODEL_MAP: dict[str, str] = {
     "gpt-5.5": "opal-quince-medium",
     "gpt-5.4mini": "oregon-grape-medium",
     "gpt-5.4nano": "otaheite-apple-medium",
+    "gpt-5.6-sol": "orange-mousse",
+    "gpt-5.6-terra": "orchid-muffin",
+    "gpt-5.6-luna": "olive-jellyroll",
 
     # Google
     "gemini-3-flash": "gingerbread",
@@ -31,6 +34,7 @@ MODEL_MAP: dict[str, str] = {
 
     # xAI
     "grok-4.3": "xigua-mochi-medium",
+    "grok-4.5": "strawberry-whoopiepie",
     "grok-build0.1": "xinomavro-cake",
 
     # Other
@@ -69,6 +73,10 @@ MODEL_MAP: dict[str, str] = {
     "anthropic-haiku-4.5": "anthropic-haiku-4.5",
     "gingerbread": "gingerbread",
     "acai-budino": "acai-budino",
+    "orange-mousse": "orange-mousse",
+    "orchid-muffin": "orchid-muffin",
+    "olive-jellyroll": "olive-jellyroll",
+    "strawberry-whoopiepie": "strawberry-whoopiepie"
 }
 
 NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
@@ -87,6 +95,9 @@ NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
     "opal-quince-medium": "gpt-5.5",
     "oregon-grape-medium": "gpt-5.4mini",
     "otaheite-apple-medium": "gpt-5.4nano",
+    "orange-mousse": "gpt-5.6-sol",
+    "orchid-muffin": "gpt-5.6-terra",
+    "olive-jellyroll": "gpt-5.6-luna",
 
     # Google
     "gingerbread": "gemini-3flash",
@@ -96,6 +107,7 @@ NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
 
     # xAI
     "xigua-mochi-medium": "grok-4.3",
+    "strawberry-whoopiepie": "grok-4.5",
     "xinomavro-cake": "grok-build0.1",
 
     # Other
@@ -119,6 +131,9 @@ DISPLAY_NAMES: dict[str, str] = {
     "gpt-5.4mini": "GPT-5.4 Mini",
     "gpt-5.4nano": "GPT-5.4 Nano",
     "gpt-5.5": "GPT-5.5",
+    "gpt-5.6-sol": "GPT-5.6 Sol",
+    "gpt-5.6-terra": "GPT-5.6 Terra",
+    "gpt-5.6-luna": "GPT-5.6 Luna",
     "gemini-3flash": "Gemini 3 Flash",
     "gemini-3-flash": "Gemini 3 Flash",
     "gemini-3.1pro": "Gemini 3.1 Pro",
@@ -126,6 +141,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "gemini-3.5flash": "Gemini 3.5 Flash",
     "gemini-2.5flash": "Gemini 2.5 Flash",
     "grok-4.3": "Grok 4.3",
+    "grok-4.5": "Grok 4.5",
     "grok-build0.1": "Grok Build 0.1",
     "minimax-m2.5": "MiniMax M2.5",
     "kimi-2.6": "Kimi 2.6",
@@ -175,12 +191,16 @@ MODEL_FAMILIES: dict[str, str] = {
     "opal-quince-medium": "openai",
     "oregon-grape-medium": "openai",
     "otaheite-apple-medium": "openai",
+    "orange-mousse": "openai",
+    "orchid-muffin": "openai",
+    "olive-jellyroll": "openai",
     "gingerbread": "google",
     "galette-medium-thinking": "google",
     "vertex-gemini-3.5-flash": "google",
     "vertex-gemini-2.5-flash": "google",
     "xigua-mochi-medium": "xai",
     "xinomavro-cake": "xai",
+    "strawberry-whoopiepie": "xai",
     "fireworks-minimax-m2.5": "minimax",
     "fireworks-kimi-k2.6": "kimi",
     "baseten-deepseek-v4-pro": "deepseek",
@@ -202,6 +222,10 @@ MODEL_ICONS: dict[str, str] = {
     "gpt-5.4mini": "⚙",
     "gpt-5.4nano": "⚙",
     "gpt-5.5": "⚙",
+    "gpt-5.6-sol": "⚙",
+    "gpt-5.6-terra": "⚙",
+    "gpt-5.6-luna": "⚙",
+
     # Google
     "gemini-3flash": "✦",
     "gemini-3-flash": "✦",
@@ -211,6 +235,7 @@ MODEL_ICONS: dict[str, str] = {
     "gemini-2.5flash": "✦",
     # xAI
     "grok-4.3": "◐",
+    "grok-4.5": "◑",
     "grok-build0.1": "◐",
     # Other
     "minimax-m2.5": "◈",

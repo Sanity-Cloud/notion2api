@@ -700,6 +700,17 @@ class ConversationManager:
 
             # text
             # textrole + contenttext
+
+            if isinstance(content, list):
+                temp_content = content
+                content = ""
+                for prompt in temp_content:
+                    if isinstance(prompt, dict):
+                        prompt = prompt.get("text", "")
+                        if prompt:
+                            content += prompt
+                            content += "\n"
+
             last_message = conn.execute(
                 """
                 SELECT role, content

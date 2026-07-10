@@ -597,6 +597,14 @@ def _extract_model_metadata_from_step(
     # `step.model` is often the requested/route model, not proof of the model
     # that actually produced the response. Only `notionModelName` is treated
     # as observed responder metadata.
+    
+    if not notion_model_name and isinstance(step.get('value'), dict):
+        notion_model_name = _non_empty_str(step.get('value', {}).get('model', ''))
+    
+    if not notion_model_name and "model" in step.keys():
+        notion_model_name = _non_empty_str(step.get('model', ''))
+
+    
     actual_model = notion_model_name
     if not any((actual_model, notion_step_model, notion_model_name, model_provider)):
         return {}

@@ -39,6 +39,9 @@ window.NotionAI.Core.Constants = {
                 { id: "gpt-5.4mini", label: "GPT-5.4 Mini", icon: "⚙", desc: "Fast & lightweight" },
                 { id: "gpt-5.4nano", label: "GPT-5.4 Nano", icon: "⚙", desc: "Fastest & smallest" },
                 { id: "gpt-5.5", label: "GPT-5.5", icon: "⚙", badge: "Beta" },
+                { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", icon: "⚙", badge: "Beta" },
+                { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", icon: "⚙", badge: "Beta" },
+                { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", icon: "⚙", badge: "Beta" },
             ]
         },
         {
@@ -60,6 +63,7 @@ window.NotionAI.Core.Constants = {
             label: 'xAI',
             models: [
                 { id: "grok-4.3", label: "Grok 4.3", icon: "◐", badge: "Beta" },
+                { id: "grok-4.5", label: "Grok 4.5", icon: "◑", badge: "Beta" },
                 { id: "grok-build0.1", label: "Grok Build 0.1", icon: "◐", badge: "Beta" },
             ]
         },
