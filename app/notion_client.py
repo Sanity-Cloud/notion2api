@@ -1,5 +1,4 @@
 import os
-import json
 import datetime
 import threading
 import time
@@ -177,6 +176,7 @@ class NotionOpusAPI:
 
         self.url = "https://www.notion.so/api/v3/runInferenceTranscript"
         self.delete_url = "https://www.notion.so/api/v3/saveTransactions"
+        self.thread_title_url = "https://app.notion.com/api/v3/saveTransactionsFanout"
         self.account_key = self.user_email or self.user_id or "unknown-account"
 
         # Reuse cloudscraper instance when available; otherwise fall back to requests.Session.
@@ -899,6 +899,65 @@ class NotionOpusAPI:
         """Mark one remote Notion AI thread inactive."""
         self.delete_threads([thread_id])
 
+    def set_thread_title(self, thread_id: str, title: str) -> bool:
+        """Set the exact title of a persisted remote Notion AI thread."""
+        from app.thread_title import normalize_thread_title
+
+        clean_thread_id = str(thread_id or "").strip()
+        clean_title = normalize_thread_title(title)
+        if not clean_thread_id or not clean_title:
+            return False
+
+        payload = {
+            "requestId": str(uuid.uuid4()),
+            "transactions": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "spaceId": self.space_id,
+                    "debug": {
+                        "userAction": "agentChat.threadPersistenceActions.updateThreadTitle",
+                    },
+                    "operations": [
+                        {
+                            "pointer": {
+                                "table": "thread",
+                                "id": clean_thread_id,
+                                "spaceId": self.space_id,
+                            },
+                            "command": "update",
+                            "path": ["data"],
+                            "args": {
+                                "title": clean_title,
+                                "user_set_title": True,
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        try:
+            response = requests.post(
+                self.thread_title_url,
+                json=payload,
+                headers=self._build_thread_headers(),
+                timeout=20,
+            )
+        except requests.exceptions.RequestException as exc:
+            raise NotionUpstreamError(
+                "Request to Notion upstream failed while setting the thread title.",
+                retriable=True,
+                response_excerpt=str(exc),
+            ) from exc
+        if response.status_code != 200:
+            excerpt = (response.text or "").strip().replace("\n", " ")[:300]
+            raise NotionUpstreamError(
+                f"Notion thread title update returned HTTP {response.status_code}.",
+                status_code=response.status_code,
+                retriable=response.status_code >= 500 or response.status_code == 429,
+                response_excerpt=excerpt,
+            )
+        return True
+
     def stream_response(
         self,
         transcript: list,
@@ -906,6 +965,7 @@ class NotionOpusAPI:
         attachments: list | None = None,
         persist_remote_chat: Optional[bool] = None,
         computer_use_review: Optional[bool] = None,
+        thread_title: Optional[str] = None,
     ) -> Generator[dict[str, Any], None, None]:
         """
         text Notion API text
@@ -933,6 +993,9 @@ class NotionOpusAPI:
         request_profile = self._resolve_request_profile(thread_type)
         thread_persistence = _resolve_thread_persistence()
 
+        from app.thread_title import normalize_thread_title
+        requested_thread_title = normalize_thread_title(thread_title)
+
         if persist_remote_chat is not None:
             if persist_remote_chat:
                 thread_persistence["persist"] = True
@@ -943,6 +1006,9 @@ class NotionOpusAPI:
             else:
                 thread_persistence["persist"] = False
                 thread_persistence["delete_after_stream"] = True
+
+        if requested_thread_title and thread_persistence["persist"]:
+            thread_persistence["generate_title"] = False
 
         if not thread_persistence["persist"]:
             request_profile["precreate_thread"] = False
@@ -957,14 +1023,28 @@ class NotionOpusAPI:
         # text thread_id text
         self.current_thread_id = thread_id
 
+        if (
+            requested_thread_title
+            and thread_persistence["persist"]
+            and not should_create_thread
+        ):
+            self.set_thread_title(thread_id, requested_thread_title)
+
         uploaded_attachments: list[UploadedAttachment] = []
         if attachments:
             try:
                 uploader = NotionAttachmentUploader(self)
+                attachment_create_thread = bool(request_profile["create_thread"] and should_create_thread)
+                if not computer_use_review and should_create_thread:
+                    # Native attachment descriptor requests require an existing
+                    # assistant chat transcript session.  For a new stateless
+                    # markdown chat, let the first descriptor request create it;
+                    # otherwise Notion returns "Chat transcript session not found".
+                    attachment_create_thread = True
                 uploaded_attachments, resolved_thread_id = uploader.upload_attachments(
                     thread_id=thread_id,
                     attachments=list(attachments),
-                    create_thread=request_profile["create_thread"],
+                    create_thread=attachment_create_thread,
                 )
                 if resolved_thread_id and resolved_thread_id != thread_id:
                     thread_id = resolved_thread_id
@@ -985,12 +1065,16 @@ class NotionOpusAPI:
                 notion_transcript = notion_transcript + attachment_steps
                 if computer_use_review and thread_persistence["persist"]:
                     notion_transcript.append(self._build_computer_use_zip_instruction_step())
-                    # Browser workflow ZIP uploads create the assistant-chat upload
-                    # pointer first, then still ask runInferenceTranscript to create
-                    # the workflow thread server-side for the same thread id.
-                    should_create_thread = True
-                    request_profile["create_thread"] = True
-                    request_profile["is_partial_transcript"] = False
+                    if should_create_thread:
+                        # A new workflow needs inference to create its thread after
+                        # the assistant-chat upload pointer has been staged.
+                        request_profile["create_thread"] = True
+                        request_profile["is_partial_transcript"] = False
+                    else:
+                        # A bound review conversation is a continuation even when
+                        # each model pass attaches a fresh source archive.
+                        request_profile["create_thread"] = False
+                        request_profile["is_partial_transcript"] = True
                 else:
                     should_create_thread = False
                     request_profile["create_thread"] = False
@@ -1137,6 +1221,12 @@ class NotionOpusAPI:
                     response_excerpt=excerpt,
                 )
 
+            # The thread exists once inference is accepted. Apply the explicit
+            # title before consuming a potentially long model stream so the UI
+            # never exposes Notion's prompt-derived placeholder for minutes.
+            if requested_thread_title and thread_persistence["persist"]:
+                self.set_thread_title(thread_id, requested_thread_title)
+
             emitted = False
             stream_completed = False
             for chunk in parse_stream(response):
@@ -1186,6 +1276,8 @@ class NotionOpusAPI:
                         },
                     )
             else:
+                if requested_thread_title:
+                    self.set_thread_title(thread_id, requested_thread_title)
                 # text thread
                 # textNotion API text workflow text
                 # text thread textAI text

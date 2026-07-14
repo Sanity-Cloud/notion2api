@@ -5,6 +5,22 @@ from app.server import app
 from app.config import API_KEY
 from app.schemas import ChatCompletionRequest
 from app.notion_client import NotionOpusAPI
+from app.api.chat_resume_thread_binding import _resolve_persistent_thread_id
+from app.conversation import ConversationManager
+
+
+class _BoundThreadManager:
+    def conversation_exists(self, conversation_id):
+        return conversation_id == "review-1"
+
+    def get_conversation_thread_id(self, conversation_id):
+        return "notion-thread-1"
+
+
+def test_model_independent_review_conversation_keeps_bound_thread():
+    manager = _BoundThreadManager()
+    assert _resolve_persistent_thread_id(manager, "review-1") == "notion-thread-1"
+    assert _resolve_persistent_thread_id(manager, "review-1", "explicit-thread") == "explicit-thread"
 
 class PersistRemoteChatTests(unittest.TestCase):
     def setUp(self):
@@ -34,6 +50,27 @@ class PersistRemoteChatTests(unittest.TestCase):
         self.assertIsNotNone(req.metadata)
         self.assertEqual(req.metadata.get("persist_remote_chat"), True)
         self.assertEqual(req.metadata.get("some_other_flag"), "test")
+
+    def test_new_conversation_preserves_requested_persistent_id(self):
+        import tempfile
+
+        handle = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+        handle.close()
+        manager = ConversationManager()
+        manager.db_path = handle.name
+        manager._init_db()
+
+        conversation_id = manager.new_conversation(
+            title="RepoAI persistent review",
+            conversation_id="campaign-review-123",
+        )
+
+        self.assertEqual(conversation_id, "campaign-review-123")
+        self.assertTrue(manager.conversation_exists("campaign-review-123"))
+        self.assertEqual(
+            manager.get_conversation_title("campaign-review-123"),
+            "RepoAI persistent review",
+        )
 
     def test_stream_response_persistence_override_true(self):
         """Verify stream_response overrides settings to persist when persist_remote_chat=True."""
@@ -75,6 +112,29 @@ class PersistRemoteChatTests(unittest.TestCase):
                     )
                     list(gen)
                     mock_delete.assert_not_called()
+
+    def test_set_thread_title_matches_notion_ui_rename_transaction(self):
+        client = NotionOpusAPI({"user_id": "u1", "space_id": "s1", "token_v2": "t1"})
+        response = MagicMock(status_code=200)
+
+        with patch("app.notion_client.requests.post", return_value=response) as mock_post:
+            self.assertTrue(client.set_thread_title("thread-1", "RepoAI: Review workflow updates"))
+
+        url = mock_post.call_args.args[0]
+        payload = mock_post.call_args.kwargs["json"]
+        transaction = payload["transactions"][0]
+        operation = transaction["operations"][0]
+        self.assertEqual(url, "https://app.notion.com/api/v3/saveTransactionsFanout")
+        self.assertEqual(
+            transaction["debug"]["userAction"],
+            "agentChat.threadPersistenceActions.updateThreadTitle",
+        )
+        self.assertEqual(operation["path"], ["data"])
+        self.assertEqual(operation["command"], "update")
+        self.assertEqual(
+            operation["args"],
+            {"title": "RepoAI: Review workflow updates", "user_set_title": True},
+        )
 
     def test_stream_response_computer_use_keeps_workflow_with_attachments(self):
         """Repo AI computer-use reviews keep workflow threads even with ZIP attachments."""
@@ -121,8 +181,8 @@ class PersistRemoteChatTests(unittest.TestCase):
         mock_with_type.assert_not_called()
         payload = mock_scraper.post.call_args.kwargs["json"]
         self.assertEqual(payload["threadType"], "workflow")
-        self.assertTrue(payload["createThread"])
-        self.assertFalse(payload["isPartialTranscript"])
+        self.assertFalse(payload["createThread"])
+        self.assertTrue(payload["isPartialTranscript"])
         self.assertEqual(payload["createdSource"], "ai_module")
         config = next(step for step in payload["transcript"] if step.get("type") == "config")
         self.assertTrue(config["value"]["enableComputer"])
@@ -135,7 +195,7 @@ class PersistRemoteChatTests(unittest.TestCase):
         self.assertEqual(followup["type"], "user")
         self.assertIn("Do not wait for a manual response", followup["value"][0][0])
         uploader.upload_attachments.assert_called_once()
-        self.assertTrue(uploader.upload_attachments.call_args.kwargs["create_thread"])
+        self.assertFalse(uploader.upload_attachments.call_args.kwargs["create_thread"])
         mock_delete.assert_not_called()
 
     def test_stream_response_persistence_override_false(self):

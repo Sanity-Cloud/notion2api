@@ -35,6 +35,9 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = Field(default=False, description="Whether to stream the response as SSE.")
     temperature: Optional[float] = Field(default=None, description="Sampling temperature.")
     conversation_id: Optional[str] = Field(default=None, description="Extension for stateful conversation tracking.")
+    chat_title: Optional[str] = Field(default=None, description="Preferred persistent chat thread title.")
+    title: Optional[str] = Field(default=None, description="Compatibility alias for chat_title.")
+    session_name: Optional[str] = Field(default=None, description="Compatibility alias for chat_title.")
     attachments: Optional[List[Dict[str, Any]]] = Field(
         default=None,
         description="Optional attachment descriptors. Normalized by the chat handler.",

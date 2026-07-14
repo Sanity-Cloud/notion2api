@@ -34,8 +34,26 @@ from app.schemas import (
     ChatMessage,
     ChatMessageResponseChoice,
 )
+from app.thread_title import resolve_requested_thread_title
+from app.api.chat_resume_thread_binding import _resolve_persistent_thread_id
 
 router = APIRouter()
+
+
+def _requested_thread_title(req_body: ChatCompletionRequest) -> str | None:
+    return resolve_requested_thread_title(
+        chat_title=req_body.chat_title,
+        title=req_body.title,
+        session_name=req_body.session_name,
+        metadata=req_body.metadata,
+    )
+
+
+def _persist_local_thread_title(request: Request, req_body: ChatCompletionRequest, title: str | None) -> None:
+    conversation_id = str(req_body.conversation_id or "").strip()
+    manager = getattr(request.app.state, "conversation_manager", None)
+    if title and conversation_id and manager and manager.conversation_exists(conversation_id):
+        manager.set_conversation_title(conversation_id, title)
 
 
 # Structured error responses
@@ -1365,6 +1383,8 @@ def _handle_lite_request(
             if req_body.metadata and isinstance(req_body.metadata, dict):
                 persist_remote_chat = req_body.metadata.get("persist_remote_chat")
             computer_use_review = _request_computer_use_review(req_body)
+            thread_title = _requested_thread_title(req_body)
+            _persist_local_thread_title(request, req_body, thread_title)
 
             stream_gen = client.stream_response(
                 transcript,
@@ -1372,6 +1392,7 @@ def _handle_lite_request(
                 attachments=attachments if attachments else None,
                 persist_remote_chat=persist_remote_chat,
                 computer_use_review=computer_use_review,
+                thread_title=thread_title,
             )
             first_item = next(stream_gen, None)
 
@@ -1619,6 +1640,8 @@ def _handle_standard_request(
             if req_body.metadata and isinstance(req_body.metadata, dict):
                 persist_remote_chat = req_body.metadata.get("persist_remote_chat")
             computer_use_review = _request_computer_use_review(req_body)
+            thread_title = _requested_thread_title(req_body)
+            _persist_local_thread_title(request, req_body, thread_title)
 
             stream_gen = client.stream_response(
                 transcript,
@@ -1626,6 +1649,7 @@ def _handle_standard_request(
                 attachments=attachments if attachments else None,
                 persist_remote_chat=persist_remote_chat,
                 computer_use_review=computer_use_review,
+                thread_title=thread_title,
             )
             first_item = next(stream_gen, None)
 
@@ -1968,7 +1992,7 @@ async def create_chat_completion(
     conversation_id = req_body.conversation_id.strip() if req_body.conversation_id else ""
     restore_history = False
     if not conversation_id:
-        conversation_id = manager.new_conversation()
+        conversation_id = manager.new_conversation(title=_requested_thread_title(req_body))
         restore_history = True
     elif not manager.conversation_exists(conversation_id):
         logger.warning(
@@ -1980,7 +2004,10 @@ async def create_chat_completion(
                 }
             },
         )
-        conversation_id = manager.new_conversation()
+        conversation_id = manager.new_conversation(
+            title=_requested_thread_title(req_body),
+            conversation_id=conversation_id,
+        )
         restore_history = True
 
     # text
@@ -2041,32 +2068,7 @@ async def create_chat_completion(
             memory_headers = {"X-Memory-Status": "degraded"} if memory_degraded else {}
 
             # text thread_id text
-            thread_id = manager.get_conversation_thread_id(conversation_id)
-
-            # textNotion text thread text config text model
-            # text thread text thread text transcript text modeltext
-            # text thread text Notion text model text
-            # text + text
-            if thread_id:
-                bound_model = manager.get_conversation_thread_model(conversation_id)
-                # bound_model text None text
-                # text thread text bugtext
-                # text"text"text thread text
-                if not bound_model or bound_model != req_body.model:
-                    logger.info(
-                        "Recreating Notion thread: model changed or legacy binding",
-                        extra={
-                            "request_info": {
-                                "event": "thread_model_switched",
-                                "conversation_id": conversation_id,
-                                "old_model": bound_model,
-                                "new_model": req_body.model,
-                                "reason": "model_mismatch" if bound_model else "legacy_no_binding",
-                            }
-                        },
-                    )
-                    manager.clear_conversation_thread(conversation_id)
-                    thread_id = None
+            thread_id = _resolve_persistent_thread_id(manager, conversation_id)
 
             # Pass attachments when present
             _cleaned_msgs, attachments = normalize_chat_messages(
@@ -2083,6 +2085,9 @@ async def create_chat_completion(
             if req_body.metadata and isinstance(req_body.metadata, dict):
                 persist_remote_chat = req_body.metadata.get("persist_remote_chat")
             computer_use_review = _request_computer_use_review(req_body)
+            thread_title = _requested_thread_title(req_body)
+            if thread_title:
+                manager.set_conversation_title(conversation_id, thread_title)
 
             stream_gen = client.stream_response(
                 transcript,
@@ -2090,6 +2095,7 @@ async def create_chat_completion(
                 attachments=attachments if attachments else None,
                 persist_remote_chat=persist_remote_chat,
                 computer_use_review=computer_use_review,
+                thread_title=thread_title,
             )
             first_item = next(stream_gen, None)
 

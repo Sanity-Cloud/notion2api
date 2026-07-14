@@ -176,6 +176,8 @@ for chunk in response:
 | `/health` | GET | Health check (account pool status, uptime) |
 | `/` | GET | Built-in Web UI |
 
+For durable workflows, send the same top-level `conversation_id` with each `/v1/chat/completions` request and set `metadata.persist_remote_chat=true`. The bound Notion thread is reused across follow-ups and requested-model changes; omit `conversation_id` only when a separate chat is intended. The response exposes `X-Conversation-Id`, `X-Notion-Thread-Id`, and `model_metadata.notion_thread_id` for persistence and audit.
+
 ---
 
 ## Web UI

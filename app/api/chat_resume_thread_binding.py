@@ -38,6 +38,15 @@ def _get_bound_thread_id(manager: Any, conversation_id: str) -> str | None:
     return clean or None
 
 
+def _resolve_persistent_thread_id(
+    manager: Any,
+    conversation_id: str,
+    explicit_thread_id: str | None = None,
+) -> str | None:
+    """Prefer an explicit thread, otherwise keep the conversation's bound thread."""
+    return explicit_thread_id or _get_bound_thread_id(manager, conversation_id)
+
+
 def _set_bound_thread_id(manager: Any, conversation_id: str, thread_id: str | None, model_name: str | None = None) -> None:
     clean = str(thread_id or "").strip()
     if not clean or not _conversation_exists(manager, conversation_id):
@@ -95,29 +104,10 @@ def _apply_stream_response_patch() -> None:
         model_name = binding["model_name"]
         manager = binding["manager"]
 
-        # Check if we already have a bound thread ID for standard/lite mode
+        # A conversation ID owns one durable Notion thread across model changes.
         bound_thread_id = _get_bound_thread_id(manager, conversation_id)
-        if bound_thread_id and model_name:
-            try:
-                bound_model = manager.get_conversation_thread_model(conversation_id)
-                if bound_model and bound_model != model_name:
-                    logger.info(
-                        "Recreating Notion thread in standard/lite mode: model changed",
-                        extra={
-                            "request_info": {
-                                "event": "thread_model_switched_patched",
-                                "conversation_id": conversation_id,
-                                "old_model": bound_model,
-                                "new_model": model_name,
-                            }
-                        }
-                    )
-                    manager.clear_conversation_thread(conversation_id)
-                    bound_thread_id = None
-            except Exception as e:
-                logger.warning("Error checking model binding in standard/lite patch: %s", e)
 
-        active_thread_id = thread_id or bound_thread_id
+        active_thread_id = _resolve_persistent_thread_id(manager, conversation_id, thread_id)
         stream = _ORIGINAL_STREAM_RESPONSE(
             self,
             transcript,

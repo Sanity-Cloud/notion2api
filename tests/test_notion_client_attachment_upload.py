@@ -335,12 +335,51 @@ class NotionClientAttachmentTests(unittest.TestCase):
         uploader_instance.upload_attachments.assert_called_once_with(
             thread_id=created_thread_id,
             attachments=attachments,
-            create_thread=False,
+            create_thread=True,
         )
         payload = scraper.post.call_args.kwargs["json"]
         self.assertEqual(payload["threadId"], created_thread_id)
         self.assertEqual(payload["threadType"], "markdown-chat")
         self.assertEqual(payload["createdSource"], "ai_module")
+
+    def test_new_ephemeral_attachment_chat_creates_descriptor_thread(self):
+        response = Mock(status_code=200, text="")
+        response.close = Mock()
+        scraper = Mock()
+        scraper.cookies.clear = Mock()
+        scraper.post.return_value = response
+
+        transcript = [{"type": "config", "value": {"type": "workflow", "model": "gpt-4"}}]
+        attachments = [InputAttachment(name="a.csv", content_type="text/csv", source="inline_data", data="YQpi")]
+        uploaded = [UploadedAttachment(name="a.csv", content_type="text/csv", size_bytes=3, source="inline_data", file_id="file-1", thread_mounted=True, attachment_url="https://files.test/a.csv")]
+
+        uploader_instance = Mock()
+        uploader_instance.upload_attachments.side_effect = lambda **kwargs: (uploaded, kwargs["thread_id"])
+        with patch.object(self.client, "_create_thread", return_value=True) as create_thread, patch(
+            "app.notion_client.NotionAttachmentUploader", return_value=uploader_instance
+        ), patch("app.notion_client.requests.Session", return_value=scraper), patch(
+            "app.notion_client.cloudscraper", Mock(create_scraper=Mock(return_value=scraper))
+        ), patch(
+            "app.notion_client.parse_stream",
+            return_value=[{"type": "chunk", "value": "ok"}, {"type": "stream_complete"}],
+        ), patch(
+            "app.notion_client._resolve_thread_persistence",
+            return_value={"persist": False, "generate_title": False, "save_all_thread_operations": False, "set_unread_state": False, "delete_after_stream": True},
+        ):
+            list(self.client.stream_response(transcript, attachments=attachments))
+
+        create_thread.assert_not_called()
+        created_thread_id = uploader_instance.upload_attachments.call_args.kwargs["thread_id"]
+        uploader_instance.upload_attachments.assert_called_once_with(
+            thread_id=created_thread_id,
+            attachments=attachments,
+            create_thread=True,
+        )
+        payload = scraper.post.call_args.kwargs["json"]
+        self.assertEqual(payload["threadId"], created_thread_id)
+        self.assertFalse(payload["createThread"])
+        self.assertEqual(payload["threadType"], "markdown-chat")
+        self.assertNotIn("threadParentPointer", payload)
 
     def test_stream_response_attachment_failure_wraps_upstream_error(self):
         self.client._scraper.cookies = Mock()
