@@ -560,3 +560,49 @@ def test_startup_reconciliation_closes_orphaned_jobs(monkeypatch):
     assert state["jobs"]["completed-request"]["status"] == "completed"
     assert state["jobs"]["completed-request"]["response_text"] == "done"
     assert state["jobs"]["stale-request"]["status"] == "stale"
+
+
+def test_submit_passes_message_checkpoint_to_worker(monkeypatch):
+    from types import SimpleNamespace
+
+    captured = {}
+
+    async def fake_worker(**kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "status": "completed",
+            "response_text": "done",
+            "request_id": kwargs["request_id"],
+            "job_id": kwargs["request_id"],
+        }
+
+    monkeypatch.setattr(mcp_server, "_conversation_message_checkpoint", lambda _cid: 17)
+    monkeypatch.setattr(mcp_server, "_active_job_for_conversation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: None)
+    monkeypatch.setattr(mcp_server, "_persist_chat_job", lambda _job: None)
+    monkeypatch.setattr(mcp_server, "_update_session_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_finalize_chat_job", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_run_chat_completion_job", fake_worker)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    client = SimpleNamespace(base_url="http://127.0.0.1:8120", timeout=30.0)
+    result = asyncio.run(
+        mcp_server._submit_or_resume_chat_job(
+            client=client,
+            path="/v1/chat/completions",
+            payload={
+                "model": "terra",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            model="terra",
+            session_key="checkpoint-test",
+            conversation_id="conv-checkpoint",
+            session_created=True,
+            request_id="request-checkpoint",
+            wait_seconds=1,
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert captured["baseline_message_id"] == 17

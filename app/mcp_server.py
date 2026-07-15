@@ -1481,6 +1481,7 @@ async def _submit_or_resume_chat_job(
                 session_created=session_created,
                 request_id=normalized_id,
                 wait_seconds=bounded_wait,
+                baseline_message_id=baseline_message_id,
             )
         )
         _CHAT_JOB_TASKS[normalized_id] = task
