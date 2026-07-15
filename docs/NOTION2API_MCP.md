@@ -37,6 +37,11 @@ ChatGPT custom connectors expect an MCP endpoint. For local development, expose 
 | `MCP_PORT` | MCP listen port | `8130` |
 | `MCP_PATH` | Streamable HTTP MCP path | `/mcp` |
 | `MCP_TRANSPORT` | `streamable-http`, `stdio`, or `sse` | `streamable-http` |
+| `MCP_NOTION2API_CALL_WAIT_SECONDS` | Initial bounded wait before a chat job returns pending | `45` |
+| `MCP_NOTION2API_MAX_CALL_WAIT_SECONDS` | Maximum bounded wait for one MCP call | `50` |
+| `MCP_NOTION2API_STALL_SECONDS` | No-progress interval before dead-loop suspicion | `180` |
+| `MCP_NOTION2API_SESSION_STATE` | Durable named-session state file | `.notion2api_mcp_sessions.json` |
+| `MCP_NOTION2API_CHAT_JOB_STATE` | Durable request/job state file | `.notion2api_mcp_chat_jobs.json` |
 
 ## Tools
 
@@ -45,6 +50,29 @@ ChatGPT custom connectors expect an MCP endpoint. For local development, expose 
 - `notion2api_chat`
 - `notion2api_chat_completion`
 - `notion2api_responses`
+- `notion2api_list_sessions`
+- `notion2api_get_messages`
+- `notion2api_get_last_response`
+- `notion2api_get_chat_job`
+- `notion2api_cancel_chat_job`
+- `notion2api_reset_session`
+- `notion2api_rename_session`
+
+## Models, sessions, and continuation
+
+The default requested model is the consumer-facing `terra` alias, which resolves to the current Terra backend route. `sol`, `terra`, and `luna` are accepted alongside the longer public model names and canonical Notion route IDs.
+
+Omitting `session_name` creates a descriptive generated session name for new work. The literal `op` remains available only as an explicit legacy shared session; it is not used as the inferred title for ordinary new requests.
+
+Continue an existing chat with any authoritative identifier:
+
+- reuse its `session_name`;
+- pass its local `conversation_id`; or
+- pass `continue_from_request_id` from an earlier job.
+
+The model may change on a later turn without changing the local conversation or remote Notion chat. Results expose the local `conversation_id`, the durable `remote_chat_id`/`notion_thread_id`, and the pollable `request_id`.
+
+Long requests return `pending` after the bounded wait. Poll `notion2api_get_chat_job` for the visible response, bounded activity summary, checklist/task state, poll count, and stall indicators. Raw private reasoning is not persisted. A stalled job reports `dead_loop_suspected` and `cancel_recommended`; cancel it explicitly with `notion2api_cancel_chat_job` or set `cancel_if_stalled=true` while polling.
 
 ## File attachments and ZIP uploads
 

@@ -1,4 +1,8 @@
-﻿import json
+import json
+
+import asyncio
+
+import httpx
 
 from app import mcp_server
 from app.mcp_server import _extract_chat_content, _extract_responses_text, create_server
@@ -87,3 +91,275 @@ def test_load_chat_job_state_recovers_valid_tmp_file(tmp_path):
     assert sorted(state["jobs"]) == ["new", "old"]
     assert state["jobs"]["old"]["updated_at"] == 2
     assert json.loads(path.read_text(encoding="utf-8"))["jobs"]["new"]["updated_at"] == 3
+
+
+def test_default_op_session_is_shared_not_unique():
+    assert mcp_server._session_key(None) == "op"
+    assert mcp_server._session_key("OP") == "op"
+
+
+def test_persist_chat_progress_updates_pollable_job(monkeypatch):
+    state = {"jobs": {"request-1": {"request_id": "request-1", "status": "running"}}}
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+
+    mcp_server._persist_chat_progress(
+        "request-1",
+        "Working through the record.\n- [x] Map pages\n- [ ] Apply edits",
+        "",
+        3,
+        False,
+    )
+
+    progress = state["jobs"]["request-1"]["progress"]
+    assert progress["phase"] == "working"
+    assert progress["event_count"] == 3
+    assert progress["latest_update"] == "Apply edits (pending)"
+    assert progress["checklist"] == [
+        {"completed": True, "text": "Map pages"},
+        {"completed": False, "text": "Apply edits"},
+    ]
+
+
+def test_chat_stream_updates_progress_and_returns_final_content(monkeypatch):
+    body = "\n".join([
+        'data: {"model":"test-model","choices":[{"delta":{"reasoning_content":"Reviewing records.\\n- [ ] Apply edits"}}]}',
+        'data: {"model":"test-model","choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+    ]).encode()
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            headers={
+                "content-type": "text/event-stream",
+                "X-Conversation-Id": "conversation-123",
+                "X-Notion-Thread-Id": "thread-123",
+            },
+            content=body,
+        )
+    )
+    real_client = httpx.AsyncClient
+
+    class TestAsyncClient(real_client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", TestAsyncClient)
+    updates = []
+    client = mcp_server.Notion2APIClient("http://test")
+    result = asyncio.run(
+        client.post_chat_stream(
+            "/v1/chat/completions",
+            {"model": "test-model"},
+            lambda *args: updates.append(args),
+        )
+    )
+
+    assert result["choices"][0]["message"]["content"] == "Done"
+    assert "reasoning_content" not in result["choices"][0]["message"]
+    assert result["model_metadata"]["conversation_id"] == "conversation-123"
+    assert result["model_metadata"]["notion_thread_id"] == "thread-123"
+    assert updates[-1] == ("Reviewing records.\n- [ ] Apply edits", "Done", 2, True)
+
+
+def test_session_records_migrate_legacy_and_preserve_remote_ids(tmp_path):
+    state_path = tmp_path / "sessions.json"
+    state_path.write_text(json.dumps({"sessions": {"Review Work": "conv-1"}}), encoding="utf-8")
+
+    records = mcp_server._load_session_records(state_path)
+    assert records == {"review-work": {"conversation_id": "conv-1"}}
+
+    records["review-work"].update(
+        remote_chat_id="thread-1",
+        notion_thread_id="thread-1",
+        last_model="terra",
+    )
+    mcp_server._save_session_records(records, state_path)
+
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted["version"] == 2
+    assert persisted["sessions"]["review-work"]["remote_chat_id"] == "thread-1"
+    assert mcp_server._load_session_state(state_path) == {"review-work": "conv-1"}
+
+
+def test_continue_from_request_id_reuses_prior_session(monkeypatch):
+    records = {}
+
+    def save(updated, path=mcp_server.DEFAULT_SESSION_STATE_PATH):
+        snapshot = {key: dict(value) for key, value in updated.items()}
+        records.clear()
+        records.update(snapshot)
+
+    monkeypatch.setattr(mcp_server, "_load_session_records", lambda path=mcp_server.DEFAULT_SESSION_STATE_PATH: records)
+    monkeypatch.setattr(mcp_server, "_save_session_records", save)
+    monkeypatch.setattr(
+        mcp_server,
+        "_load_chat_job",
+        lambda request_id: {
+            "request_id": request_id,
+            "session_name": "repo-ai-review",
+            "conversation_id": "conv-review-1",
+        },
+    )
+
+    conversation_id, session_name, created = mcp_server._conversation_id_for_session(
+        "op",
+        continue_from_request_id="prior-request",
+    )
+
+    assert conversation_id == "conv-review-1"
+    assert session_name == "repo-ai-review"
+    assert created is False
+    assert records["repo-ai-review"]["continued_from_request_id"] == "prior-request"
+
+
+def test_explicit_conversation_id_infers_existing_session(monkeypatch):
+    records = {
+        "repo-ai-review": {
+            "conversation_id": "conv-review-1",
+            "remote_chat_id": "thread-review-1",
+        }
+    }
+    monkeypatch.setattr(mcp_server, "_load_session_records", lambda path=mcp_server.DEFAULT_SESSION_STATE_PATH: records)
+    monkeypatch.setattr(mcp_server, "_save_session_records", lambda *args, **kwargs: None)
+
+    conversation_id, session_name, created = mcp_server._conversation_id_for_session(
+        "op",
+        conversation_id="conv-review-1",
+    )
+
+    assert (conversation_id, session_name, created) == (
+        "conv-review-1",
+        "repo-ai-review",
+        False,
+    )
+
+
+def test_remote_chat_id_and_stall_monitoring(monkeypatch):
+    assert mcp_server._extract_remote_chat_id(
+        {"model_metadata": {"notion_thread_id": "thread-123"}}
+    ) == "thread-123"
+
+    monkeypatch.setattr(mcp_server, "_now_ms", lambda: 31_000)
+    monkeypatch.setattr(mcp_server, "_configured_chat_stall_seconds", lambda: 15.0)
+    job = mcp_server._refresh_chat_job_health(
+        {
+            "status": "pending",
+            "created_at": 1_000,
+            "last_progress_at": 1_000,
+            "poll_count": 2,
+        },
+        increment_poll=True,
+    )
+    assert job["poll_count"] == 3
+    assert job["stalled_for_seconds"] == 30.0
+    assert job["dead_loop_suspected"] is True
+    assert job["cancel_recommended"] is True
+
+
+def test_cancel_chat_job_marks_persisted_job_cancelled(monkeypatch):
+    state = {
+        "jobs": {
+            "request-1": {
+                "request_id": "request-1",
+                "job_id": "request-1",
+                "status": "pending",
+                "session_name": "repo-ai-review",
+                "conversation_id": "conv-1",
+                "created_at": 1,
+                "updated_at": 1,
+            }
+        }
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+
+    result = mcp_server._cancel_chat_job("request-1", "obsolete")
+
+    assert result.status == "cancelled"
+    assert result.error == "obsolete"
+    assert state["jobs"]["request-1"]["status"] == "cancelled"
+
+
+def test_cancel_unknown_chat_job_returns_not_found(monkeypatch):
+    state = {"jobs": {}}
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+
+    result = mcp_server._cancel_chat_job("missing-request")
+
+    assert result.found is False
+    assert state["jobs"] == {}
+
+
+def test_pending_job_without_live_task_is_marked_stale(monkeypatch):
+    state = {
+        "jobs": {
+            "request-2": {
+                "request_id": "request-2",
+                "job_id": "request-2",
+                "status": "pending",
+                "session_name": "review",
+                "conversation_id": "conv-2",
+                "created_at": 1,
+                "updated_at": 1,
+            }
+        }
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    result = mcp_server._chat_job_output("request-2")
+
+    assert result.status == "stale"
+    assert "lost the in-memory task" in (result.error or "")
+
+
+def test_mcp_schema_exposes_continuation_and_cancellation():
+    server = create_server(
+        base_url="http://127.0.0.1:8120",
+        api_key="test-key",
+        timeout=30,
+        host="127.0.0.1",
+        port=8130,
+        mcp_path="/mcp",
+    )
+    tools = asyncio.run(server.list_tools())
+    by_name = {tool.name: tool for tool in tools}
+    chat_schema = by_name["notion2api_chat"].inputSchema["properties"]
+
+    assert chat_schema["model"]["default"] == "terra"
+    assert "conversation_id" in chat_schema
+    assert "continue_from_request_id" in chat_schema
+    assert "notion2api_cancel_chat_job" in by_name
+
+
+def test_omitted_session_name_is_descriptive_and_not_shared_op():
+    first = mcp_server._infer_session_name(
+        None,
+        "Add durable Notion2API session continuation and polling",
+    )
+    second = mcp_server._infer_session_name(
+        None,
+        "Add durable Notion2API session continuation and polling",
+    )
+    stable_first = mcp_server._infer_session_name(
+        None,
+        "Add durable Notion2API session continuation and polling",
+        request_id="request-123",
+    )
+    stable_second = mcp_server._infer_session_name(
+        None,
+        "Add durable Notion2API session continuation and polling",
+        request_id="request-123",
+    )
+
+    assert first != second
+    assert first != "op"
+    assert stable_first == stable_second
+    assert first.startswith("add-durable-notion2api-session-continuation-polling-")
+    assert mcp_server._infer_session_name("op", "unrelated prompt") == "op"
+    assert mcp_server._infer_session_name("RepoAI Review", "unrelated prompt") == "repoai-review"

@@ -25,8 +25,6 @@ from app.output_hygiene import (
     detect_visible_output_contamination,
     finalize_visible_output,
     prepare_visible_stream_chunk,
-    strip_thinking_blocks,
-    strip_thinking_blocks_from_chunk,
 )
 from app.schemas import (
     ChatCompletionRequest,
@@ -2455,6 +2453,9 @@ async def create_chat_completion(
                     yield "data: [DONE]\n\n"
 
             if req_body.stream:
+                active_thread_id = str(
+                    thread_id or getattr(client, "current_thread_id", None) or ""
+                ).strip()
                 stream_headers = {
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
@@ -2462,6 +2463,8 @@ async def create_chat_completion(
                     "X-Conversation-Id": conversation_id,
                     **memory_headers,
                 }
+                if active_thread_id:
+                    stream_headers["X-Notion-Thread-Id"] = active_thread_id
                 return StreamingResponse(
                     openai_stream_generator(),
                     media_type="text/event-stream",

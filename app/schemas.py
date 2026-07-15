@@ -30,7 +30,7 @@ class ChatCompletionRequest(BaseModel):
       see a hybrid request before normalization, which could duplicate screenshot/file
       content across message preparation, persistence, and upstream dispatch.
     """
-    model: str = Field(default="", description="Requested model.")
+    model: str = Field(default="terra", description="Requested model. Defaults to the consumer-friendly Terra alias.")
     messages: List[ChatMessage]
     stream: bool = Field(default=False, description="Whether to stream the response as SSE.")
     temperature: Optional[float] = Field(default=None, description="Sampling temperature.")

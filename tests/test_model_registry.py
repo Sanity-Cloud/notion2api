@@ -157,3 +157,14 @@ def test_model_metadata_preserves_transport_and_underlying_family():
     }.items() <= gpt56.items()
     assert "gpt-5.6-sol" in gpt56["aliases"]
     assert gpt56["model_card_attributes"] == {"speed": 3, "intelligence": 5, "cost": 5}
+
+def test_consumer_friendly_model_aliases_and_default():
+    from app import model_registry
+
+    assert model_registry.DEFAULT_MODEL == "terra"
+    assert is_supported_model("terra")
+    assert is_supported_model("Terra")
+    assert get_notion_model("terra") == "orchid-muffin"
+    assert get_notion_model("Terra") == "orchid-muffin"
+    assert get_notion_model("sol") == "orange-mousse"
+    assert get_notion_model("luna") == "olive-jellyroll"

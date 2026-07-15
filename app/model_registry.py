@@ -26,10 +26,13 @@ MODEL_MAP: dict[str, str] = {
     # OpenAI
     "gpt-5.6-sol": "orange-mousse",
     "gpt-5.6sol": "orange-mousse",
+    "sol": "orange-mousse",
     "gpt-5.6-terra": "orchid-muffin",
     "gpt-5.6terra": "orchid-muffin",
+    "terra": "orchid-muffin",
     "gpt-5.6-luna": "olive-jellyroll",
     "gpt-5.6luna": "olive-jellyroll",
+    "luna": "olive-jellyroll",
     "gpt-5.2": "oatmeal-cookie",
     "gpt-5.4": "oval-kumquat-medium",
     "gpt-5.5": "opal-quince-medium",
@@ -373,8 +376,8 @@ MODEL_ICONS: dict[str, str] = {
     "baseten-glm-5.2": "◆",
 }
 
-# Default to Sonnet 4.6 for a balance of speed and quality.
-DEFAULT_MODEL = "claude-sonnet4.6"
+# Consumer-facing default. "terra" resolves to Notion's orchid-muffin route.
+DEFAULT_MODEL = "terra"
 
 
 def get_notion_model(model_name: str) -> str:
@@ -411,7 +414,8 @@ def get_thread_type(model_name: str) -> str:
 
 
 def get_standard_model(model_name: str) -> str:
-    model_name = normalize_model_id(model_name)
+    normalized = normalize_model_id(model_name)
+    model_name = str(normalized or "").strip().lower()
     if not model_name:
         return DEFAULT_MODEL
     if model_name in NOTION_MODEL_REVERSE_MAP:
@@ -463,7 +467,8 @@ def get_model_metadata(model_name: str) -> dict[str, object]:
 
 
 def is_static_disabled_model(model_name: str) -> bool:
-    normalized_name = normalize_model_id(model_name)
+    normalized = normalize_model_id(model_name)
+    normalized_name = str(normalized or "").strip().lower()
     if not normalized_name:
         return False
     if normalized_name in NOTION_MODEL_REVERSE_MAP:
@@ -476,7 +481,8 @@ def is_static_disabled_model(model_name: str) -> bool:
 
 
 def is_supported_model(model_name: str) -> bool:
-    normalized_name = normalize_model_id(model_name)
+    normalized = normalize_model_id(model_name)
+    normalized_name = str(normalized or "").strip().lower()
     if not normalized_name or normalized_name not in MODEL_MAP:
         return False
     return not is_static_disabled_model(normalized_name)

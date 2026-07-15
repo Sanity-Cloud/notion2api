@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Literal, Annotated
+from typing import Any, Annotated
 
 import httpx
 from pydantic import BaseModel, Field
@@ -31,8 +31,10 @@ DEFAULT_MCP_HOST = "127.0.0.1"
 DEFAULT_MCP_PORT = 8130
 DEFAULT_MCP_PATH = "/mcp"
 DEFAULT_TIMEOUT_SECONDS = 900.0
-DEFAULT_MODEL = "claude-opus4.8"
-DEFAULT_SESSION_NAME = "op"
+DEFAULT_MODEL = "terra"
+LEGACY_SHARED_SESSION_NAME = "op"
+DEFAULT_SESSION_NAME = LEGACY_SHARED_SESSION_NAME
+AUTO_SESSION_LABEL = "auto-generated"
 DEFAULT_SESSION_STATE_PATH = Path(
     os.getenv(
         "MCP_NOTION2API_SESSION_STATE",
@@ -47,6 +49,9 @@ DEFAULT_CHAT_JOB_STATE_PATH = Path(
 )
 DEFAULT_CHAT_WAIT_SECONDS = 45.0
 MAX_CHAT_WAIT_SECONDS = 50.0
+DEFAULT_CHAT_STALL_SECONDS = 180.0
+MAX_PROGRESS_REASONING_CHARS = 200_000
+SESSION_STATE_VERSION = 2
 _CHAT_JOB_STATE_MUTEX = threading.RLock()
 _CHAT_JOB_TASKS: dict[str, asyncio.Task[dict[str, Any]]] = {}
 logger = logging.getLogger(__name__)
@@ -92,10 +97,10 @@ class ChatOutput(BaseModel):
     session_state_path: str = Field(default="", description="Path to the MCP session state file.")
     local_conversations_db: str = Field(default="", description="Expected local Notion2API conversations DB path.")
     imported_history_db: str = Field(default="", description="Expected imported Notion history DB path.")
-    session_name: str | None = Field(default=None, description="Normalized MCP session name.")
+    session_name: str | None = Field(default=None, description="Normalized MCP session name. Omitted names are generated; explicit 'op' is the legacy shared session.")
     conversation_id: str | None = Field(default=None, description="Stable Notion2API conversation id used for the request.")
     session_created: bool | None = Field(default=None, description="True when the wrapper created a new MCP conversation binding.")
-    status: str = Field(default="completed", description="MCP wrapper job status: completed, pending, running, error, or stale.")
+    status: str = Field(default="completed", description="MCP wrapper job status: completed, pending, running, error, stale, or cancelled.")
     request_id: str | None = Field(default=None, description="Idempotency key used to deduplicate or poll this MCP chat request.")
     job_id: str | None = Field(default=None, description="Pollable job id. Currently identical to request_id.")
     retry_safe: bool = Field(default=False, description="True when retrying with the same request_id is safe and will not resubmit.")
@@ -103,6 +108,9 @@ class ChatOutput(BaseModel):
     poll_hint: str = Field(default="", description="Human-readable polling instruction for pending or stale jobs.")
     error: str | None = Field(default=None, description="Error summary if the backend call failed or the job became stale.")
     response_text: str = Field(default="", description="Extracted assistant response text.")
+    progress: dict[str, Any] | None = Field(default=None, description="Bounded public activity snapshot captured while the job runs.")
+    remote_chat_id: str = Field(default="", description="Durable remote Notion chat/thread id, when available.")
+    notion_thread_id: str = Field(default="", description="Compatibility alias for remote_chat_id.")
     raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend response.")
 
 
@@ -125,9 +133,9 @@ class ResponsesOutput(BaseModel):
 class ListSessionsOutput(BaseModel):
     ok: bool = Field(default=True, description="Whether the session listing succeeded.")
     count: int = Field(description="Number of known MCP sessions.")
-    default_session: str = Field(description="Default session name used by OP calls.")
+    default_session: str = Field(description="Default session policy. New chats are auto-named; explicit op remains a shared legacy alias.")
     state_path: str = Field(description="Path to the MCP session state file.")
-    sessions: list[dict[str, str]] = Field(default_factory=list, description="Known named MCP session bindings.")
+    sessions: list[dict[str, Any]] = Field(default_factory=list, description="Known named MCP session bindings and remote thread metadata.")
 
 
 class SessionActionOutput(BaseModel):
@@ -166,7 +174,7 @@ class LastResponseOutput(BaseModel):
 class ChatJobOutput(BaseModel):
     ok: bool = Field(description="Whether the chat job lookup completed.")
     found: bool = Field(default=False, description="Whether a job with this request_id exists.")
-    status: str = Field(default="", description="Persisted job status: running, completed, error, or stale.")
+    status: str = Field(default="", description="Persisted job status: running, pending, completed, error, stale, or cancelled.")
     request_id: str = Field(default="", description="Idempotency key / job id.")
     job_id: str = Field(default="", description="Pollable job id. Currently identical to request_id.")
     session_name: str = Field(default="", description="Normalized MCP session name.")
@@ -176,6 +184,13 @@ class ChatJobOutput(BaseModel):
     created_at: int = Field(default=0, description="Unix epoch milliseconds when the job was created.")
     updated_at: int = Field(default=0, description="Unix epoch milliseconds when the job was last updated.")
     response_text: str = Field(default="", description="Completed assistant response text, if available.")
+    progress: dict[str, Any] | None = Field(default=None, description="Latest bounded activity/checklist snapshot.")
+    remote_chat_id: str = Field(default="", description="Durable remote Notion chat/thread id, when available.")
+    notion_thread_id: str = Field(default="", description="Compatibility alias for remote_chat_id.")
+    poll_count: int = Field(default=0, description="Number of explicit status polls recorded for this job.")
+    stalled_for_seconds: float = Field(default=0.0, description="Seconds since meaningful public progress changed.")
+    dead_loop_suspected: bool = Field(default=False, description="Whether the job appears stalled and may require cancellation.")
+    cancel_recommended: bool = Field(default=False, description="Whether cancellation should be considered before further polling.")
     response: dict[str, Any] | None = Field(default=None, description="Persisted ChatOutput-compatible response, if available.")
     error: str | None = Field(default=None, description="Persisted error summary, if any.")
     raw_job: dict[str, Any] = Field(default_factory=dict, description="Raw persisted job state.")
@@ -283,6 +298,84 @@ class Notion2APIClient:
             response = await client.post(f"{self.base_url}{path}", headers=self._headers(), json=payload)
         return _json_or_error(response)
 
+    async def post_chat_stream(self, path: str, payload: dict[str, Any], on_progress: Any) -> dict[str, Any]:
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        content_parts: list[str] = []
+        reasoning_buffer = ""
+        model_metadata: dict[str, Any] = {}
+        response_model = str(payload.get("model") or "")
+        event_count = 0
+        last_update = 0.0
+
+        headers = self._headers()
+        headers["Accept"] = "text/event-stream"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream("POST", f"{self.base_url}{path}", headers=headers, json=stream_payload) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    return _json_or_error(httpx.Response(response.status_code, headers=response.headers, content=body))
+                remote_conversation_id = str(response.headers.get("X-Conversation-Id") or "").strip()
+                remote_chat_id = str(response.headers.get("X-Notion-Thread-Id") or "").strip()
+                if remote_conversation_id:
+                    model_metadata.setdefault("conversation_id", remote_conversation_id)
+                if remote_chat_id:
+                    model_metadata.setdefault("notion_thread_id", remote_chat_id)
+                    model_metadata.setdefault("remote_chat_id", remote_chat_id)
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if not raw or raw == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    response_model = str(event.get("model") or response_model)
+                    if isinstance(event.get("model_metadata"), dict):
+                        model_metadata.update(event["model_metadata"])
+                    choices = event.get("choices")
+                    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+                        continue
+                    delta = choices[0].get("delta")
+                    if not isinstance(delta, dict):
+                        continue
+                    content = delta.get("content")
+                    reasoning = delta.get("reasoning_content") or delta.get("thinking")
+                    if isinstance(content, str) and content:
+                        content_parts.append(content)
+                    if isinstance(reasoning, str) and reasoning:
+                        reasoning_buffer = (reasoning_buffer + reasoning)[
+                            -MAX_PROGRESS_REASONING_CHARS:
+                        ]
+                    if content or reasoning:
+                        event_count += 1
+                        now = time.monotonic()
+                        if now - last_update >= 0.75:
+                            on_progress(
+                                reasoning_buffer,
+                                "".join(content_parts),
+                                event_count,
+                                False,
+                            )
+                            last_update = now
+
+        on_progress(reasoning_buffer, "".join(content_parts), event_count, True)
+        # Persist only the final visible answer. Raw reasoning is used transiently
+        # to derive the bounded progress snapshot and is never stored in MCP jobs.
+        message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
+        return {
+            "ok": True,
+            "status_code": 200,
+            "model": response_model,
+            "actual_model": str(model_metadata.get("actual_model") or ""),
+            "model_metadata": model_metadata or None,
+            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        }
+
 
 def _json_or_error(response: httpx.Response) -> dict[str, Any]:
     content_type = response.headers.get("content-type", "")
@@ -300,6 +393,18 @@ def _json_or_error(response: httpx.Response) -> dict[str, Any]:
     if isinstance(data, dict):
         data.setdefault("ok", True)
         data.setdefault("status_code", response.status_code)
+        conversation_id = str(response.headers.get("X-Conversation-Id") or "").strip()
+        remote_chat_id = str(response.headers.get("X-Notion-Thread-Id") or "").strip()
+        if conversation_id or remote_chat_id:
+            metadata = data.get("model_metadata") if isinstance(data.get("model_metadata"), dict) else {}
+            if conversation_id:
+                metadata.setdefault("conversation_id", conversation_id)
+                data.setdefault("conversation_id", conversation_id)
+            if remote_chat_id:
+                metadata.setdefault("notion_thread_id", remote_chat_id)
+                metadata.setdefault("remote_chat_id", remote_chat_id)
+                data.setdefault("notion_thread_id", remote_chat_id)
+            data["model_metadata"] = metadata
         return data
     return {"ok": True, "status_code": response.status_code, "data": data}
 
@@ -356,6 +461,19 @@ def _extract_actual_model(data: dict[str, Any]) -> str:
         return actual.strip()
     direct = data.get("actual_model")
     return direct.strip() if isinstance(direct, str) and direct.strip() else ""
+
+
+def _extract_remote_chat_id(data: dict[str, Any]) -> str:
+    metadata = data.get("model_metadata") if isinstance(data.get("model_metadata"), dict) else {}
+    for key in ("notion_thread_id", "remote_chat_id", "thread_id", "chat_id"):
+        value = metadata.get(key) if isinstance(metadata, dict) else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for key in ("notion_thread_id", "remote_chat_id", "thread_id", "chat_id"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _extract_chat_content(data: dict[str, Any]) -> str:
@@ -485,6 +603,12 @@ def _configured_chat_max_wait_seconds() -> float:
     return _safe_float(raw, MAX_CHAT_WAIT_SECONDS) if raw.strip() else MAX_CHAT_WAIT_SECONDS
 
 
+def _configured_chat_stall_seconds() -> float:
+    raw = os.getenv("MCP_NOTION2API_STALL_SECONDS", "")
+    configured = _safe_float(raw, DEFAULT_CHAT_STALL_SECONDS) if raw.strip() else DEFAULT_CHAT_STALL_SECONDS
+    return max(15.0, configured)
+
+
 def _bounded_chat_wait_seconds(wait_seconds: float | None) -> float:
     requested = _configured_chat_wait_seconds() if wait_seconds is None else _safe_float(wait_seconds, DEFAULT_CHAT_WAIT_SECONDS)
     maximum = max(0.0, min(_configured_chat_max_wait_seconds(), 55.0))
@@ -503,6 +627,52 @@ def _session_key(session_name: str | None) -> str:
     raw = (session_name or DEFAULT_SESSION_NAME).strip().lower()
     key = re.sub(r"[^a-z0-9_.-]+", "-", raw).strip("-._")
     return key or DEFAULT_SESSION_NAME
+
+
+def _infer_session_name(
+    session_name: str | None,
+    prompt: str,
+    *,
+    request_id: str | None = None,
+) -> str:
+    explicit = str(session_name or "").strip()
+    if explicit and explicit.lower() not in {"auto", "inferred", "new"}:
+        return _session_key(explicit)
+
+    normalized = re.sub(r"\s+", " ", str(prompt or "")).strip().lower()
+    words = re.findall(r"[a-z0-9]+", normalized)
+    ignored = {
+        "a", "an", "and", "are", "be", "by", "for", "from", "in", "is", "it",
+        "of", "on", "or", "please", "the", "this", "to", "with", "you",
+    }
+    meaningful = [word for word in words if word not in ignored][:8]
+    base = "-".join(meaningful)[:56].strip("-") or "chat"
+    stable_request_id = str(request_id or "").strip()
+    digest = (
+        uuid.uuid5(uuid.NAMESPACE_URL, f"{normalized}|{stable_request_id}").hex[:8]
+        if stable_request_id
+        else uuid.uuid4().hex[:8]
+    )
+    return _session_key(f"{base}-{digest}")
+
+
+def _prompt_text_from_messages(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if not isinstance(message, dict) or str(message.get("role") or "").lower() != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    value = item.get("text") or item.get("content")
+                    if isinstance(value, str):
+                        parts.append(value)
+            if parts:
+                return "\n".join(parts)
+    return ""
 
 
 def _valid_chat_job_state(data: Any) -> dict[str, Any] | None:
@@ -593,11 +763,106 @@ def _job_response_text(response: dict[str, Any] | None) -> str:
     return ""
 
 
+_CHECKLIST_RE = re.compile(r"(?m)^\s*(?:[-*]\s*)?\[([ xX])\]\s+(.+?)\s*$")
+_PUBLIC_ACTIVITY_RE = re.compile(
+    r"^(?:now\s+)?(?:i(?:'m| am|’m)\s+)?"
+    r"(?:reviewing|reading|searching|checking|mapping|updating|creating|executing|"
+    r"applying|merging|writing|verifying|polling|waiting|uploading|downloading|"
+    r"extracting|running|preparing|finalizing|completed|finished)\b",
+    re.I,
+)
+
+
+def _progress_snapshot(reasoning: str, content: str, event_count: int, complete: bool) -> dict[str, Any]:
+    checklist = [
+        {"completed": mark.lower() == "x", "text": re.sub(r"\s+", " ", text).strip()[:300]}
+        for mark, text in _CHECKLIST_RE.findall(reasoning)
+    ][-20:]
+    latest = ""
+    for candidate in reversed([part.strip() for part in re.split(r"[\r\n]+", reasoning) if part.strip()]):
+        normalized = re.sub(r"\s+", " ", candidate)
+        if _PUBLIC_ACTIVITY_RE.match(normalized):
+            latest = normalized[:500]
+            break
+    if not latest and checklist:
+        last = checklist[-1]
+        latest = f"{last['text']} ({'completed' if last['completed'] else 'pending'})"
+    return {
+        "phase": "completed" if complete else "working",
+        "event_count": event_count,
+        "latest_update": latest,
+        "checklist": checklist,
+        "visible_output_chars": len(content),
+        "activity_chars": len(reasoning),
+        "updated_at": _now_ms(),
+    }
+
+
 def _persist_chat_job(job: dict[str, Any]) -> None:
     with _CHAT_JOB_STATE_MUTEX:
         state = _load_chat_job_state()
         jobs = state.setdefault("jobs", {})
         jobs[str(job["request_id"])] = job
+        _save_chat_job_state(state)
+
+
+def _progress_fingerprint(snapshot: dict[str, Any]) -> str:
+    public_state = {
+        "phase": snapshot.get("phase"),
+        "latest_update": snapshot.get("latest_update"),
+        "checklist": snapshot.get("checklist"),
+        "visible_output_chars": snapshot.get("visible_output_chars"),
+    }
+    return json.dumps(public_state, ensure_ascii=False, sort_keys=True)
+
+
+def _refresh_chat_job_health(job: dict[str, Any], *, increment_poll: bool = False) -> dict[str, Any]:
+    updated = dict(job)
+    now = _now_ms()
+    if increment_poll:
+        updated["poll_count"] = int(updated.get("poll_count") or 0) + 1
+    active = str(updated.get("status") or "") in {"running", "pending"}
+    last_progress_at = int(
+        updated.get("last_progress_at")
+        or updated.get("created_at")
+        or updated.get("updated_at")
+        or now
+    )
+    stalled_for_seconds = max(0.0, (now - last_progress_at) / 1000.0) if active else 0.0
+    dead_loop_suspected = active and stalled_for_seconds >= _configured_chat_stall_seconds()
+    updated["stalled_for_seconds"] = round(stalled_for_seconds, 3)
+    updated["dead_loop_suspected"] = dead_loop_suspected
+    updated["cancel_recommended"] = dead_loop_suspected
+    progress = updated.get("progress") if isinstance(updated.get("progress"), dict) else None
+    if progress is not None:
+        progress = dict(progress)
+        progress["monitoring"] = {
+            "stalled_for_seconds": updated["stalled_for_seconds"],
+            "dead_loop_suspected": dead_loop_suspected,
+            "cancel_recommended": dead_loop_suspected,
+        }
+        updated["progress"] = progress
+    return updated
+
+
+def _persist_chat_progress(request_id: str, reasoning: str, content: str, event_count: int, complete: bool) -> None:
+    with _CHAT_JOB_STATE_MUTEX:
+        state = _load_chat_job_state()
+        jobs = state.setdefault("jobs", {})
+        current = jobs.get(request_id)
+        if not isinstance(current, dict):
+            return
+        now = _now_ms()
+        job = dict(current)
+        snapshot = _progress_snapshot(reasoning, content, event_count, complete)
+        fingerprint = _progress_fingerprint(snapshot)
+        if fingerprint != str(job.get("progress_fingerprint") or "") or complete:
+            job["last_progress_at"] = now
+        job["progress_fingerprint"] = fingerprint
+        job["progress"] = snapshot
+        job["updated_at"] = now
+        job = _refresh_chat_job_health(job)
+        jobs[request_id] = job
         _save_chat_job_state(state)
 
 
@@ -613,8 +878,40 @@ def _mark_chat_job_stale(job: dict[str, Any]) -> dict[str, Any]:
     updated["status"] = "stale"
     updated["updated_at"] = _now_ms()
     updated["error"] = "The MCP wrapper restarted or lost the in-memory task before this job completed. Check the local conversation by conversation_id before retrying."
+    updated = _refresh_chat_job_health(updated)
     _persist_chat_job(updated)
     return updated
+
+
+def _cancel_chat_job(request_id: str, reason: str = "Cancelled by caller.") -> ChatJobOutput:
+    normalized_id = _normalize_request_id(request_id)
+    task = _CHAT_JOB_TASKS.get(normalized_id)
+    with _CHAT_JOB_STATE_MUTEX:
+        state = _load_chat_job_state()
+        jobs = state.setdefault("jobs", {})
+        current = jobs.get(normalized_id)
+        if not isinstance(current, dict) and task is None:
+            return ChatJobOutput(
+                ok=True,
+                found=False,
+                request_id=normalized_id,
+                job_id=normalized_id,
+            )
+        job = dict(current) if isinstance(current, dict) else {
+            "request_id": normalized_id,
+            "job_id": normalized_id,
+        }
+        job["status"] = "cancelled"
+        job["updated_at"] = _now_ms()
+        job["error"] = str(reason or "Cancelled by caller.")[:1000]
+        job["dead_loop_suspected"] = False
+        job["cancel_recommended"] = False
+        jobs[normalized_id] = job
+        _save_chat_job_state(state)
+    if task is not None and not task.done():
+        task.cancel()
+    _CHAT_JOB_TASKS.pop(normalized_id, None)
+    return _chat_job_output(normalized_id, increment_poll=False)
 
 
 def _chat_output_from_backend(
@@ -630,6 +927,7 @@ def _chat_output_from_backend(
 ) -> dict[str, Any]:
     ok = bool(data.get("ok", False))
     status = "completed" if ok else "error"
+    remote_chat_id = _extract_remote_chat_id(data)
     return {
         "ok": ok,
         "status_code": data.get("status_code"),
@@ -648,6 +946,8 @@ def _chat_output_from_backend(
         "poll_hint": "" if status == "completed" else f"Retry with request_id={request_id} or call notion2api_get_chat_job.",
         "error": _error_summary(data),
         "response_text": _extract_chat_content(data),
+        "remote_chat_id": remote_chat_id,
+        "notion_thread_id": remote_chat_id,
         "raw": data,
     }
 
@@ -663,6 +963,8 @@ def _chat_pending_output(
     request_id: str,
     wait_seconds: float,
 ) -> dict[str, Any]:
+    job = _refresh_chat_job_health(job)
+    remote_chat_id = str(job.get("remote_chat_id") or job.get("notion_thread_id") or "")
     return {
         "ok": False,
         "status_code": None,
@@ -676,11 +978,18 @@ def _chat_pending_output(
         "status": str(job.get("status") or "pending"),
         "request_id": request_id,
         "job_id": request_id,
-        "retry_safe": True,
+        "retry_safe": str(job.get("status") or "") in {"running", "pending", "stale"},
         "wait_seconds": wait_seconds,
-        "poll_hint": f"Call notion2api_get_chat_job(request_id='{request_id}') or retry the same chat tool with the same request_id.",
+        "poll_hint": (
+            f"Call notion2api_get_chat_job(request_id='{request_id}') or retry the same chat tool with the same request_id."
+            if str(job.get("status") or "") in {"running", "pending", "stale"}
+            else "This request id is terminal; use a new request_id for new work."
+        ),
         "error": job.get("error") if isinstance(job.get("error"), str) else None,
         "response_text": _job_response_text(job.get("response") if isinstance(job.get("response"), dict) else None),
+        "progress": job.get("progress") if isinstance(job.get("progress"), dict) else None,
+        "remote_chat_id": remote_chat_id,
+        "notion_thread_id": remote_chat_id,
         "raw": {"job": job, "job_state_path": str(DEFAULT_CHAT_JOB_STATE_PATH)},
     }
 
@@ -729,7 +1038,13 @@ async def _run_chat_completion_job(
     request_id: str,
     wait_seconds: float,
 ) -> dict[str, Any]:
-    data = await client.post(path, payload)
+    data = await client.post_chat_stream(
+        path,
+        payload,
+        lambda reasoning, content, event_count, complete: _persist_chat_progress(
+            request_id, reasoning, content, event_count, complete
+        ),
+    )
     return _chat_output_from_backend(
         data=data,
         client=client,
@@ -747,6 +1062,10 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
         response = task.result()
         status = str(response.get("status") or ("completed" if response.get("ok") else "error"))
         error = response.get("error") if isinstance(response.get("error"), str) else None
+    except asyncio.CancelledError:
+        response = None
+        status = "cancelled"
+        error = "Cancelled by caller."
     except Exception as exc:
         response = None
         status = "error"
@@ -756,15 +1075,29 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
         jobs = state.setdefault("jobs", {})
         job = jobs.get(request_id) if isinstance(jobs.get(request_id), dict) else {"request_id": request_id, "job_id": request_id}
         job = dict(job)
+        if str(job.get("status") or "") == "cancelled":
+            status = "cancelled"
         job["status"] = status
         job["updated_at"] = _now_ms()
         if response is not None:
             job["response"] = response
             job["response_text"] = _job_response_text(response)
+            remote_chat_id = str(response.get("remote_chat_id") or response.get("notion_thread_id") or "")
+            if remote_chat_id:
+                job["remote_chat_id"] = remote_chat_id
+                job["notion_thread_id"] = remote_chat_id
         if error:
             job["error"] = error
+        job = _refresh_chat_job_health(job)
         jobs[request_id] = job
         _save_chat_job_state(state)
+    _update_session_record(
+        str(job.get("session_name") or DEFAULT_SESSION_NAME),
+        conversation_id=str(job.get("conversation_id") or ""),
+        remote_chat_id=str(job.get("remote_chat_id") or ""),
+        model=str(job.get("model") or ""),
+        request_id=request_id,
+    )
     _CHAT_JOB_TASKS.pop(request_id, None)
 
 
@@ -794,8 +1127,19 @@ async def _submit_or_resume_chat_job(
     if existing:
         status = str(existing.get("status") or "")
         response = existing.get("response") if isinstance(existing.get("response"), dict) else None
-        if response and status in {"completed", "error"}:
-            return response
+        if status in {"completed", "error", "cancelled"}:
+            if response:
+                return response
+            return _chat_pending_output(
+                job=existing,
+                client=client,
+                model=model,
+                session_key=str(existing.get("session_name") or session_key),
+                conversation_id=str(existing.get("conversation_id") or conversation_id),
+                session_created=False,
+                request_id=normalized_id,
+                wait_seconds=bounded_wait,
+            )
         if status == "running" and (task is None or task.done()):
             if task and task.done():
                 _finalize_chat_job(normalized_id, task)
@@ -842,11 +1186,19 @@ async def _submit_or_resume_chat_job(
             "session_created": session_created,
             "created_at": now,
             "updated_at": now,
+            "last_progress_at": now,
+            "poll_count": 0,
             "wait_seconds": bounded_wait,
         }
         if attachment_manifest:
             job["attachment_manifest"] = attachment_manifest
         _persist_chat_job(job)
+        _update_session_record(
+            session_key,
+            conversation_id=conversation_id,
+            model=model,
+            request_id=normalized_id,
+        )
         task = asyncio.create_task(
             _run_chat_completion_job(
                 client=client,
@@ -894,7 +1246,12 @@ async def _submit_or_resume_chat_job(
     )
 
 
-def _chat_job_output(request_id: str, include_last_response: bool = False) -> ChatJobOutput:
+def _chat_job_output(
+    request_id: str,
+    include_last_response: bool = False,
+    *,
+    increment_poll: bool = True,
+) -> ChatJobOutput:
     normalized_id = _normalize_request_id(request_id)
     task = _CHAT_JOB_TASKS.get(normalized_id)
     if task and task.done():
@@ -903,9 +1260,14 @@ def _chat_job_output(request_id: str, include_last_response: bool = False) -> Ch
     if not job:
         return ChatJobOutput(ok=True, found=False, request_id=normalized_id, job_id=normalized_id)
 
-    if str(job.get("status") or "") == "running" and normalized_id not in _CHAT_JOB_TASKS:
+    if (
+        str(job.get("status") or "") in {"running", "pending"}
+        and normalized_id not in _CHAT_JOB_TASKS
+    ):
         job = _mark_chat_job_stale(job)
 
+    job = _refresh_chat_job_health(job, increment_poll=increment_poll)
+    _persist_chat_job(job)
     response = job.get("response") if isinstance(job.get("response"), dict) else None
     last_response = None
     if include_last_response:
@@ -928,6 +1290,13 @@ def _chat_job_output(request_id: str, include_last_response: bool = False) -> Ch
         created_at=int(job.get("created_at") or 0),
         updated_at=int(job.get("updated_at") or 0),
         response_text=str(job.get("response_text") or _job_response_text(response)),
+        progress=job.get("progress") if isinstance(job.get("progress"), dict) else None,
+        remote_chat_id=str(job.get("remote_chat_id") or job.get("notion_thread_id") or ""),
+        notion_thread_id=str(job.get("notion_thread_id") or job.get("remote_chat_id") or ""),
+        poll_count=int(job.get("poll_count") or 0),
+        stalled_for_seconds=float(job.get("stalled_for_seconds") or 0.0),
+        dead_loop_suspected=bool(job.get("dead_loop_suspected")),
+        cancel_recommended=bool(job.get("cancel_recommended")),
         response=response,
         error=job.get("error") if isinstance(job.get("error"), str) else None,
         raw_job=job,
@@ -935,38 +1304,165 @@ def _chat_job_output(request_id: str, include_last_response: bool = False) -> Ch
     )
 
 
-def _load_session_state(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, str]:
+def _load_session_records(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, dict[str, Any]]:
     try:
         if not path.exists():
             return {}
         data = json.loads(path.read_text(encoding="utf-8"))
         sessions = data.get("sessions") if isinstance(data, dict) else None
-        if isinstance(sessions, dict):
-            return {str(k): str(v) for k, v in sessions.items() if str(v).strip()}
+        if not isinstance(sessions, dict):
+            return {}
+        records: dict[str, dict[str, Any]] = {}
+        for raw_name, raw_value in sessions.items():
+            name = _session_key(str(raw_name))
+            if isinstance(raw_value, str):
+                conversation_id = raw_value.strip()
+                if conversation_id:
+                    records[name] = {"conversation_id": conversation_id}
+                continue
+            if not isinstance(raw_value, dict):
+                continue
+            conversation_id = str(raw_value.get("conversation_id") or "").strip()
+            if not conversation_id:
+                continue
+            record = {str(key): value for key, value in raw_value.items()}
+            record["conversation_id"] = conversation_id
+            records[name] = record
+        return records
     except Exception:
         return {}
-    return {}
 
 
-def _save_session_state(sessions: dict[str, str], path: Path = DEFAULT_SESSION_STATE_PATH) -> None:
+def _save_session_records(
+    records: dict[str, dict[str, Any]],
+    path: Path = DEFAULT_SESSION_STATE_PATH,
+) -> None:
+    clean: dict[str, dict[str, Any]] = {}
+    for raw_name, raw_record in records.items():
+        if not isinstance(raw_record, dict):
+            continue
+        conversation_id = str(raw_record.get("conversation_id") or "").strip()
+        if not conversation_id:
+            continue
+        record = {str(key): value for key, value in raw_record.items() if value not in (None, "")}
+        record["conversation_id"] = conversation_id
+        clean[_session_key(raw_name)] = record
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"sessions": sessions}, indent=2, sort_keys=True), encoding="utf-8")
+        _atomic_write_json(path, {"version": SESSION_STATE_VERSION, "sessions": clean})
     except Exception:
         # Session continuity is helpful but should not break model calls.
         return
 
 
-def _conversation_id_for_session(session_name: str | None = None, *, start_new_chat: bool = False) -> tuple[str, str, bool]:
-    key = _session_key(session_name)
-    sessions = _load_session_state()
-    created = False
-    if start_new_chat or not sessions.get(key):
-        sessions[key] = f"mcp-{key}-{uuid.uuid4().hex}"
-        _save_session_state(sessions)
-        created = True
-    return sessions[key], key, created
+def _load_session_state(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, str]:
+    return {
+        name: str(record.get("conversation_id") or "")
+        for name, record in _load_session_records(path).items()
+        if str(record.get("conversation_id") or "").strip()
+    }
 
+
+def _save_session_state(sessions: dict[str, str], path: Path = DEFAULT_SESSION_STATE_PATH) -> None:
+    existing = _load_session_records(path)
+    updated: dict[str, dict[str, Any]] = {}
+    for raw_name, raw_conversation_id in sessions.items():
+        name = _session_key(raw_name)
+        conversation_id = str(raw_conversation_id or "").strip()
+        if not conversation_id:
+            continue
+        record = dict(existing.get(name) or {})
+        record["conversation_id"] = conversation_id
+        record["updated_at"] = _now_ms()
+        updated[name] = record
+    _save_session_records(updated, path)
+
+
+def _update_session_record(
+    session_name: str,
+    *,
+    conversation_id: str | None = None,
+    remote_chat_id: str | None = None,
+    model: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    key = _session_key(session_name)
+    records = _load_session_records()
+    record = dict(records.get(key) or {})
+    clean_conversation_id = str(conversation_id or record.get("conversation_id") or "").strip()
+    if not clean_conversation_id:
+        return
+    record["conversation_id"] = clean_conversation_id
+    clean_remote_id = str(remote_chat_id or "").strip()
+    if clean_remote_id:
+        record["remote_chat_id"] = clean_remote_id
+        record["notion_thread_id"] = clean_remote_id
+    clean_model = str(model or "").strip()
+    if clean_model:
+        record["last_model"] = clean_model
+    clean_request_id = str(request_id or "").strip()
+    if clean_request_id:
+        record["last_request_id"] = clean_request_id
+    record["updated_at"] = _now_ms()
+    records[key] = record
+    _save_session_records(records)
+
+
+def _conversation_id_for_session(
+    session_name: str | None = None,
+    *,
+    start_new_chat: bool = False,
+    conversation_id: str | None = None,
+    continue_from_request_id: str | None = None,
+) -> tuple[str, str, bool]:
+    requested_key = _session_key(session_name)
+    records = _load_session_records()
+
+    continuation_id = str(continue_from_request_id or "").strip()
+    if continuation_id and not start_new_chat:
+        prior_job = _load_chat_job(_normalize_request_id(continuation_id))
+        if isinstance(prior_job, dict):
+            prior_conversation_id = str(prior_job.get("conversation_id") or "").strip()
+            prior_session_name = str(prior_job.get("session_name") or requested_key).strip()
+            if prior_conversation_id:
+                key = _session_key(prior_session_name)
+                record = dict(records.get(key) or {})
+                record["conversation_id"] = prior_conversation_id
+                record["continued_from_request_id"] = continuation_id
+                record["updated_at"] = _now_ms()
+                records[key] = record
+                _save_session_records(records)
+                return prior_conversation_id, key, False
+
+    explicit_conversation_id = str(conversation_id or "").strip()
+    if explicit_conversation_id and not start_new_chat:
+        matching_key = next(
+            (
+                name
+                for name, record in records.items()
+                if str(record.get("conversation_id") or "").strip() == explicit_conversation_id
+            ),
+            requested_key,
+        )
+        record = dict(records.get(matching_key) or {})
+        record["conversation_id"] = explicit_conversation_id
+        record["updated_at"] = _now_ms()
+        records[matching_key] = record
+        _save_session_records(records)
+        return explicit_conversation_id, matching_key, False
+
+    current = records.get(requested_key) or {}
+    current_conversation_id = str(current.get("conversation_id") or "").strip()
+    created = False
+    if start_new_chat or not current_conversation_id:
+        current_conversation_id = f"mcp-{requested_key}-{uuid.uuid4().hex}"
+        current = {
+            "conversation_id": current_conversation_id,
+            "created_at": _now_ms(),
+        }
+        records[requested_key] = current
+        _save_session_records(records)
+        created = True
+    return current_conversation_id, requested_key, created
 
 def _extract_conversation_id(data: dict[str, Any]) -> str:
     for key in ("conversation_id", "conversationId"):
@@ -1190,6 +1686,8 @@ def create_server(
         instructions=(
             "Use these tools to call the user's private local Notion2API service. "
             "Start with notion2api_health or notion2api_list_models if service status or model IDs are uncertain. "
+            "Omit session_name to generate a descriptive unique session for new work; use explicit 'op' only when the legacy shared session is intended. "
+            "For pending jobs, poll notion2api_get_chat_job and report its progress snapshot without exposing raw private reasoning. "
             "Do not claim Notion2API completed a model response unless a tool result includes ok=true and response_text/content."
         ),
         host=host,
@@ -1233,21 +1731,30 @@ def create_server(
             error=_error_summary(data),
         )
 
-    @server.tool(description="Send a single prompt to Notion2API through /v1/chat/completions and return the assistant text. Uses a persistent MCP session unless start_new_chat=true.", structured_output=True)
+    @server.tool(description="Send a prompt to Notion2API using a durable session. Continue by session_name, conversation_id, or continue_from_request_id; the model may change between turns.", structured_output=True)
     async def notion2api_chat(
         prompt: str,
         model: str = DEFAULT_MODEL,
         system_prompt: str | None = None,
         persist_remote_chat: bool = True,
-        session_name: str = DEFAULT_SESSION_NAME,
+        session_name: str | None = None,
+        conversation_id: str | None = None,
+        continue_from_request_id: str | None = None,
         start_new_chat: bool = False,
         request_id: str | None = None,
         wait_seconds: float | None = None,
         attachments: FileAttachments = None,
     ) -> ChatOutput:
-        conversation_id, session_key, session_created = _conversation_id_for_session(
+        resolved_session_name = _infer_session_name(
             session_name,
+            prompt,
+            request_id=request_id or continue_from_request_id,
+        )
+        resolved_conversation_id, session_key, session_created = _conversation_id_for_session(
+            resolved_session_name,
             start_new_chat=start_new_chat,
+            conversation_id=conversation_id,
+            continue_from_request_id=continue_from_request_id,
         )
         messages: list[dict[str, str]] = []
         if system_prompt:
@@ -1258,10 +1765,12 @@ def create_server(
             "model": model,
             "messages": messages,
             "stream": False,
-            "conversation_id": conversation_id,
+            "conversation_id": resolved_conversation_id,
+            "session_name": session_key,
             "metadata": {
                 "persist_remote_chat": persist_remote_chat,
                 "mcp_session_name": session_key,
+                "continue_from_request_id": continue_from_request_id,
             },
         }
         if prepared:
@@ -1272,36 +1781,48 @@ def create_server(
             payload=payload,
             model=model,
             session_key=session_key,
-            conversation_id=conversation_id,
+            conversation_id=resolved_conversation_id,
             session_created=session_created,
             request_id=request_id,
             wait_seconds=wait_seconds,
         )
 
-    @server.tool(description="Call Notion2API /v1/chat/completions with an explicit OpenAI-style messages array. Uses a persistent MCP session unless start_new_chat=true.", structured_output=True)
+    @server.tool(description="Call Notion2API with explicit messages using a durable session. Continue by session_name, conversation_id, or continue_from_request_id; the model may change between turns.", structured_output=True)
     async def notion2api_chat_completion(
         messages: list[dict[str, Any]],
         model: str = DEFAULT_MODEL,
         persist_remote_chat: bool = True,
-        session_name: str = DEFAULT_SESSION_NAME,
+        session_name: str | None = None,
+        conversation_id: str | None = None,
+        continue_from_request_id: str | None = None,
         start_new_chat: bool = False,
         request_id: str | None = None,
         wait_seconds: float | None = None,
         attachments: FileAttachments = None,
     ) -> ChatOutput:
-        conversation_id, session_key, session_created = _conversation_id_for_session(
+        inferred_prompt = _prompt_text_from_messages(messages)
+        resolved_session_name = _infer_session_name(
             session_name,
+            inferred_prompt,
+            request_id=request_id or continue_from_request_id,
+        )
+        resolved_conversation_id, session_key, session_created = _conversation_id_for_session(
+            resolved_session_name,
             start_new_chat=start_new_chat,
+            conversation_id=conversation_id,
+            continue_from_request_id=continue_from_request_id,
         )
         prepared = prepare_mcp_file_attachments(attachments)
         payload = {
             "model": model,
             "messages": messages,
             "stream": False,
-            "conversation_id": conversation_id,
+            "conversation_id": resolved_conversation_id,
+            "session_name": session_key,
             "metadata": {
                 "persist_remote_chat": persist_remote_chat,
                 "mcp_session_name": session_key,
+                "continue_from_request_id": continue_from_request_id,
             },
         }
         if prepared:
@@ -1312,7 +1833,7 @@ def create_server(
             payload=payload,
             model=model,
             session_key=session_key,
-            conversation_id=conversation_id,
+            conversation_id=resolved_conversation_id,
             session_created=session_created,
             request_id=request_id,
             wait_seconds=wait_seconds,
@@ -1348,17 +1869,17 @@ def create_server(
             "raw": data,
         }
 
-    @server.tool(description="List named persistent Notion2API MCP chat sessions.", structured_output=True)
+    @server.tool(description="List named persistent Notion2API MCP chat sessions with local and remote identifiers.", structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:
-        sessions = _load_session_state()
+        records = _load_session_records()
         items = [
-            {"session_name": name, "conversation_id": conversation_id}
-            for name, conversation_id in sorted(sessions.items())
+            {"session_name": name, **record}
+            for name, record in sorted(records.items())
         ]
         return ListSessionsOutput(
             ok=True,
             count=len(items),
-            default_session=DEFAULT_SESSION_NAME,
+            default_session=AUTO_SESSION_LABEL,
             state_path=str(DEFAULT_SESSION_STATE_PATH),
             sessions=items,
         )
@@ -1378,12 +1899,31 @@ def create_server(
     ) -> LastResponseOutput:
         return _read_last_local_response(session_name=session_name, conversation_id=conversation_id)
 
-    @server.tool(description="Inspect a retry-safe Notion2API MCP chat job by request_id. Use this after notion2api_chat returns status=pending or after a connector timeout.", structured_output=True)
+    @server.tool(description="Inspect a retry-safe Notion2API MCP chat job. Returns bounded activity/tasks, remote chat id, and stall detection without exposing raw private reasoning.", structured_output=True)
     async def notion2api_get_chat_job(
         request_id: str,
         include_last_response: bool = False,
+        cancel_if_stalled: bool = False,
     ) -> ChatJobOutput:
-        return _chat_job_output(request_id=request_id, include_last_response=include_last_response)
+        result = _chat_job_output(request_id=request_id, include_last_response=include_last_response)
+        if (
+            cancel_if_stalled
+            and result.found
+            and result.dead_loop_suspected
+            and result.status in {"running", "pending"}
+        ):
+            return _cancel_chat_job(
+                request_id,
+                reason="Cancelled after polling detected no meaningful public progress.",
+            )
+        return result
+
+    @server.tool(description="Cancel a pending or running Notion2API MCP chat job to stop a suspected dead loop or obsolete request.", structured_output=True)
+    async def notion2api_cancel_chat_job(
+        request_id: str,
+        reason: str = "Cancelled by caller.",
+    ) -> ChatJobOutput:
+        return _cancel_chat_job(request_id=request_id, reason=reason)
 
     @server.tool(description="Start a fresh persistent Notion2API MCP chat for a named session.", structured_output=True)
     async def notion2api_reset_session(session_name: str = DEFAULT_SESSION_NAME) -> SessionActionOutput:
@@ -1408,8 +1948,8 @@ def create_server(
     ) -> SessionActionOutput:
         old_key = _session_key(old_session_name)
         new_key = _session_key(new_session_name)
-        sessions = _load_session_state()
-        if old_key not in sessions:
+        records = _load_session_records()
+        if old_key not in records:
             return SessionActionOutput(
                 ok=False,
                 action="rename",
@@ -1418,23 +1958,26 @@ def create_server(
                 previous_session_name=old_key,
                 state_path=str(DEFAULT_SESSION_STATE_PATH),
             )
-        if new_key in sessions and not overwrite and new_key != old_key:
+        if new_key in records and not overwrite and new_key != old_key:
             return SessionActionOutput(
                 ok=False,
                 action="rename",
                 session_name=new_key,
-                conversation_id=sessions[new_key],
+                conversation_id=str(records[new_key].get("conversation_id") or ""),
                 previous_session_name=old_key,
-                previous_conversation_id=sessions[old_key],
+                previous_conversation_id=str(records[old_key].get("conversation_id") or ""),
                 overwritten=False,
                 state_path=str(DEFAULT_SESSION_STATE_PATH),
             )
-        conversation_id = sessions[old_key]
-        previous_target = sessions.get(new_key)
+        source_record = dict(records[old_key])
+        conversation_id = str(source_record.get("conversation_id") or "")
+        previous_record = records.get(new_key) or {}
+        previous_target = str(previous_record.get("conversation_id") or "") or None
         if old_key != new_key:
-            sessions[new_key] = conversation_id
-            sessions.pop(old_key, None)
-            _save_session_state(sessions)
+            source_record["updated_at"] = _now_ms()
+            records[new_key] = source_record
+            records.pop(old_key, None)
+            _save_session_records(records)
         return SessionActionOutput(
             ok=True,
             action="rename",
