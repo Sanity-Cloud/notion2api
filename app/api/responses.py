@@ -12,7 +12,7 @@ from app.attachments.errors import AttachmentError
 from app.core.errors import openai_error
 from app.core.models import normalize_model_id
 from app.schemas import ChatCompletionRequest, ChatMessage
-from app.attachments.normalizer import normalize_responses_input
+from app.attachments.normalizer import PromptValidationError, normalize_responses_input
 from app.attachments.security import AttachmentPolicy, validate_content_type
 
 router = APIRouter()
@@ -142,7 +142,7 @@ async def create_response(
         openai_error("The 'model' field is required.", "model_required")
     try:
         cleaned_msgs, attachments = normalize_responses_input(payload.get("input"), payload.get("attachments"))
-    except AttachmentError as exc:
+    except (AttachmentError, PromptValidationError) as exc:
         openai_error(
             str(exc),
             exc.code or "invalid_attachment",
@@ -158,7 +158,7 @@ async def create_response(
         for att in attachments:
             if att.content_type:
                 validate_content_type(att.content_type, policy)
-    except AttachmentError as exc:
+    except (AttachmentError, PromptValidationError) as exc:
         openai_error(
             str(exc),
             exc.code or "invalid_attachment",

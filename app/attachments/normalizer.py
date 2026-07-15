@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from urllib.parse import urlparse
 
@@ -9,6 +10,109 @@ from app.attachments.models import DEFAULT_ATTACHMENT_PROMPT, InputAttachment
 
 TEXT_PART_TYPES = {"text", "input_text", "output_text"}
 ATTACHMENT_PART_TYPES = {"image_url", "input_image", "file", "input_file", "attachment"}
+
+DEFAULT_MAX_PROMPT_FIELD_CHARS = 200_000
+DEFAULT_MAX_PROMPT_TOTAL_CHARS = 400_000
+_ALLOWED_CONTROL_CHARS = {"\t", "\n", "\r"}
+
+
+class PromptValidationError(ValueError):
+    """Bounded invalid-request error that never echoes prompt content."""
+
+    def __init__(self, message: str, *, code: str, param: str, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.code = code
+        self.param = param
+        self.status_code = status_code
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def validate_prompt_text(
+    value: Any,
+    *,
+    param: str,
+    allow_none: bool = False,
+    max_chars: int | None = None,
+) -> str | None:
+    """Validate caller-provided prompt text without coercing or logging its value."""
+
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, str):
+        raise PromptValidationError(
+            f"{param} must be a string.",
+            code="invalid_prompt_type",
+            param=param,
+        )
+
+    limit = max_chars or _positive_env_int(
+        "MAX_PROMPT_FIELD_CHARS", DEFAULT_MAX_PROMPT_FIELD_CHARS
+    )
+    if len(value) > limit:
+        raise PromptValidationError(
+            f"{param} exceeds the maximum length of {limit} characters.",
+            code="prompt_too_large",
+            param=param,
+        )
+
+    for index, character in enumerate(value):
+        ordinal = ord(character)
+        if (ordinal < 32 and character not in _ALLOWED_CONTROL_CHARS) or ordinal == 127:
+            raise PromptValidationError(
+                f"{param} contains an unsupported control character at offset {index}.",
+                code="invalid_prompt_control_character",
+                param=param,
+            )
+    return value
+
+
+def _validated_text_part(value: Any, *, param: str) -> str:
+    if value is None:
+        return ""
+    validated = validate_prompt_text(value, param=param)
+    return str(validated or "")
+
+
+def validate_chat_messages(messages: Any) -> int:
+    """Validate text-bearing message fields and return their aggregate character count."""
+
+    if not isinstance(messages, list):
+        raise PromptValidationError(
+            "messages must be a list.",
+            code="invalid_messages_type",
+            param="messages",
+        )
+
+    total = 0
+    for message_index, raw_message in enumerate(messages):
+        if not isinstance(raw_message, dict):
+            raise PromptValidationError(
+                f"messages[{message_index}] must be an object.",
+                code="invalid_message_type",
+                param=f"messages[{message_index}]",
+            )
+        content = raw_message.get("content")
+        param = f"messages[{message_index}].content"
+        text, _attachments = _extract_text_and_attachments(content, param=param)
+        total += len(text)
+
+    total_limit = _positive_env_int(
+        "MAX_PROMPT_TOTAL_CHARS", DEFAULT_MAX_PROMPT_TOTAL_CHARS
+    )
+    if total > total_limit:
+        raise PromptValidationError(
+            f"messages contain more than {total_limit} prompt characters in total.",
+            code="prompt_total_too_large",
+            param="messages",
+        )
+    return total
 
 
 def _string(value: Any) -> str:
@@ -145,28 +249,40 @@ def _attachment_signature(attachment: InputAttachment) -> tuple[Any, ...]:
     )
 
 
-def _extract_text_and_attachments(content: Any) -> tuple[str, list[InputAttachment]]:
+def _extract_text_and_attachments(
+    content: Any, *, param: str = "content"
+) -> tuple[str, list[InputAttachment]]:
     if content is None:
         return "", []
     if isinstance(content, str):
-        return content, []
+        return _validated_text_part(content, param=param), []
     if not isinstance(content, list):
-        return str(content), []
+        raise PromptValidationError(
+            f"{param} must be a string or a list of structured content parts.",
+            code="invalid_prompt_type",
+            param=param,
+        )
 
     text_parts: list[str] = []
     attachments: list[InputAttachment] = []
 
-    for item in content:
+    for item_index, item in enumerate(content):
+        item_param = f"{param}[{item_index}]"
         if isinstance(item, str):
-            if item:
-                text_parts.append(item)
+            text = _validated_text_part(item, param=item_param)
+            if text:
+                text_parts.append(text)
             continue
         if not isinstance(item, dict):
-            continue
+            raise PromptValidationError(
+                f"{item_param} must be a string or an object.",
+                code="invalid_prompt_part_type",
+                param=item_param,
+            )
 
         item_type = _string(item.get("type")).lower()
         if item_type in TEXT_PART_TYPES or (not item_type and "text" in item):
-            text = _string(item.get("text"))
+            text = _validated_text_part(item.get("text"), param=f"{item_param}.text")
             if text:
                 text_parts.append(text)
             continue
@@ -177,7 +293,7 @@ def _extract_text_and_attachments(content: Any) -> tuple[str, list[InputAttachme
             continue
 
         if "text" in item:
-            text = _string(item.get("text"))
+            text = _validated_text_part(item.get("text"), param=f"{item_param}.text")
             if text:
                 text_parts.append(text)
 
@@ -201,14 +317,15 @@ def normalize_chat_messages(
 ) -> tuple[list[dict[str, Any]], list[InputAttachment]]:
     """Return text-clean messages and normalized attachments."""
 
+    validate_chat_messages(messages or [])
     normalized_messages: list[dict[str, Any]] = []
     attachments: list[InputAttachment] = []
 
-    for raw_message in messages or []:
-        if not isinstance(raw_message, dict):
-            continue
+    for message_index, raw_message in enumerate(messages or []):
         msg = dict(raw_message)
-        text, message_attachments = _extract_text_and_attachments(msg.get("content"))
+        text, message_attachments = _extract_text_and_attachments(
+            msg.get("content"), param=f"messages[{message_index}].content"
+        )
         msg["content"] = text
         normalized_messages.append(msg)
         attachments.extend(message_attachments)
@@ -239,13 +356,24 @@ def normalize_responses_input(
     messages: list[dict[str, Any]] = []
     attachments: list[InputAttachment] = []
 
+    if input_value is not None and not isinstance(input_value, list):
+        raise PromptValidationError(
+            "input must be a string or a list.",
+            code="invalid_prompt_type",
+            param="input",
+        )
+
     if isinstance(input_value, list):
         for item in input_value:
             if isinstance(item, str):
                 messages.append({"role": "user", "content": item})
                 continue
             if not isinstance(item, dict):
-                continue
+                raise PromptValidationError(
+                    f"input[{len(messages)}] must be a string or an object.",
+                    code="invalid_prompt_part_type",
+                    param="input",
+                )
 
             role = _string(item.get("role") or "user").lower()
             if role == "developer":

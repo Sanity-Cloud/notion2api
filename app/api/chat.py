@@ -18,7 +18,11 @@ from app.config import is_lite_mode
 from app.logger import logger
 from app.model_registry import is_supported_model, list_available_models
 from app.notion_client import NotionUpstreamError
-from app.attachments.normalizer import normalize_chat_messages
+from app.attachments.normalizer import (
+    PromptValidationError,
+    normalize_chat_messages,
+    validate_chat_messages,
+)
 from app.attachments.security import AttachmentPolicy
 from app.attachments.errors import AttachmentError
 from app.output_hygiene import (
@@ -1315,7 +1319,9 @@ def _attachments_enabled_for_request(request: Request, policy: AttachmentPolicy)
     return policy.enabled or is_repo_ai_internal_request(request)
 
 
-def _attachment_error_response(exc: AttachmentError) -> JSONResponse:
+def _attachment_error_response(
+    exc: AttachmentError | PromptValidationError,
+) -> JSONResponse:
     return _build_error_response(
         getattr(exc, "status_code", 400) or 400,
         code=getattr(exc, "code", "invalid_attachment") or "invalid_attachment",
@@ -1881,6 +1887,14 @@ async def create_chat_completion(
     - Heavy text20/text
     """
     from app.config import is_standard_mode
+
+    try:
+        validate_chat_messages([
+            message.model_dump() if hasattr(message, "model_dump") else message.dict()
+            for message in req_body.messages
+        ])
+    except PromptValidationError as exc:
+        return _attachment_error_response(exc)
 
     # Check if this is an OpenCode call
     user_agent = request.headers.get("user-agent", "").lower()

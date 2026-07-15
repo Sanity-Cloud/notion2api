@@ -363,3 +363,200 @@ def test_omitted_session_name_is_descriptive_and_not_shared_op():
     assert first.startswith("add-durable-notion2api-session-continuation-polling-")
     assert mcp_server._infer_session_name("op", "unrelated prompt") == "op"
     assert mcp_server._infer_session_name("RepoAI Review", "unrelated prompt") == "repoai-review"
+
+
+def test_explicit_prompt_messages_contain_only_caller_fields():
+    system_prompt = "Act as skeptical appellate counsel."
+    user_prompt = "Review the attached records."
+
+    messages = mcp_server._explicit_prompt_messages(user_prompt, system_prompt)
+    progress = mcp_server._progress_snapshot(
+        "Considering file options\n/home/oai/skills/pdfs/SKILL.md\n---FILES---",
+        "",
+        3,
+        False,
+    )
+
+    assert messages == [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    assert "Considering file options" not in repr(messages)
+    assert progress["activity_chars"] > 0
+
+
+def test_explicit_contamination_markers_are_allowed_only_when_caller_supplies_them():
+    explicit = (
+        "Considering file options\n"
+        "/home/oai/skills/pdfs/SKILL.md\n"
+        "bash -lc cat /home/oai/skills/pdfs/SKILL.md\n"
+        "---FILES---\n-rw-r--r-- record.pdf"
+    )
+
+    messages = mcp_server._explicit_prompt_messages("Review records.", explicit)
+
+    assert messages[0]["content"] == explicit
+
+
+def test_explicit_messages_are_deep_copied_before_async_submission():
+    source = [{"role": "user", "content": [{"type": "text", "text": "Original"}]}]
+
+    copied = mcp_server._copy_explicit_messages(source)
+    source[0]["content"][0]["text"] = "Mutated later"
+
+    assert copied[0]["content"][0]["text"] == "Original"
+
+
+def test_explicit_session_name_is_stable_across_request_ids():
+    first = mcp_server._infer_session_name(
+        "Legal Record Review", "first prompt", request_id="operation-1"
+    )
+    second = mcp_server._infer_session_name(
+        "Legal Record Review", "second prompt", request_id="operation-2"
+    )
+
+    assert first == second == "legal-record-review"
+
+
+def _create_terminalization_db(path):
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE conversations (
+            id TEXT PRIMARY KEY, thread_id TEXT, thread_model TEXT
+        );
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT, role TEXT, content TEXT,
+            created_at INTEGER, thinking TEXT DEFAULT ''
+        );
+        INSERT INTO conversations(id, thread_id, thread_model)
+        VALUES ('conv-1', 'thread-1', 'terra-route');
+        INSERT INTO messages(conversation_id, role, content, created_at)
+        VALUES ('conv-1', 'assistant', 'old reply', 1);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_completed_turn_after_checkpoint_detects_persisted_reply(tmp_path, monkeypatch):
+    import sqlite3
+
+    db_path = tmp_path / "conversations.db"
+    _create_terminalization_db(db_path)
+    monkeypatch.setattr(mcp_server, "_local_conversation_db_path", lambda: db_path)
+    baseline = mcp_server._conversation_message_checkpoint("conv-1")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO messages(conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            ("conv-1", "user", "new request", 2),
+        )
+        conn.execute(
+            "INSERT INTO messages(conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            ("conv-1", "assistant", "completed answer", 2),
+        )
+        conn.commit()
+
+    turn = mcp_server._completed_turn_after_checkpoint("conv-1", baseline)
+
+    assert turn is not None
+    assert turn["response_text"] == "completed answer"
+    assert turn["remote_chat_id"] == "thread-1"
+    assert turn["actual_model"] == "terra-route"
+
+
+def test_completed_job_is_not_downgraded_by_cancelled_stream_callback(monkeypatch):
+    state = {
+        "jobs": {
+            "request-1": {
+                "request_id": "request-1",
+                "job_id": "request-1",
+                "status": "completed",
+                "response_text": "finished",
+            }
+        }
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+
+    class CancelledTask:
+        def result(self):
+            raise asyncio.CancelledError()
+
+    mcp_server._finalize_chat_job("request-1", CancelledTask())
+
+    assert state["jobs"]["request-1"]["status"] == "completed"
+    assert state["jobs"]["request-1"]["response_text"] == "finished"
+
+
+def test_active_job_for_conversation_prevents_parallel_turns(monkeypatch):
+    state = {
+        "jobs": {
+            "request-1": {
+                "request_id": "request-1",
+                "status": "pending",
+                "conversation_id": "conv-1",
+            }
+        }
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+
+    conflict = mcp_server._active_job_for_conversation(
+        "conv-1", exclude_request_id="request-2"
+    )
+
+    assert conflict is not None
+    assert conflict[0] == "request-1"
+
+
+def test_startup_reconciliation_closes_orphaned_jobs(monkeypatch):
+    state = {
+        "jobs": {
+            "completed-request": {
+                "request_id": "completed-request",
+                "job_id": "completed-request",
+                "status": "pending",
+                "conversation_id": "conv-complete",
+                "session_name": "complete",
+                "model": "terra",
+                "baseline_message_id": 0,
+            },
+            "stale-request": {
+                "request_id": "stale-request",
+                "job_id": "stale-request",
+                "status": "running",
+                "conversation_id": "conv-stale",
+                "session_name": "stale",
+                "model": "terra",
+            },
+        }
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+    monkeypatch.setattr(mcp_server, "_update_session_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        mcp_server,
+        "_completed_turn_after_checkpoint",
+        lambda conversation_id, baseline: (
+            {
+                "assistant_message_id": 2,
+                "response_text": "done",
+                "thinking": "",
+                "created_at": 2,
+                "remote_chat_id": "thread-1",
+                "actual_model": "terra-route",
+            }
+            if conversation_id == "conv-complete"
+            else None
+        ),
+    )
+
+    summary = mcp_server._reconcile_orphaned_chat_jobs_on_startup()
+
+    assert summary == {"completed": 1, "stale": 1}
+    assert state["jobs"]["completed-request"]["status"] == "completed"
+    assert state["jobs"]["completed-request"]["response_text"] == "done"
+    assert state["jobs"]["stale-request"]["status"] == "stale"

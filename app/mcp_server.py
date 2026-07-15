@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import contextlib
 import asyncio
 import json
 import logging
@@ -15,6 +17,8 @@ from typing import Any, Annotated
 
 import httpx
 from pydantic import BaseModel, Field
+
+from app.attachments.normalizer import validate_chat_messages, validate_prompt_text
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -656,6 +660,30 @@ def _infer_session_name(
     return _session_key(f"{base}-{digest}")
 
 
+def _explicit_prompt_messages(
+    prompt: Any, system_prompt: Any = None
+) -> list[dict[str, str]]:
+    """Build messages only from explicit caller prompt fields."""
+
+    user_text = validate_prompt_text(prompt, param="prompt")
+    system_text = validate_prompt_text(
+        system_prompt, param="system_prompt", allow_none=True
+    )
+    messages: list[dict[str, str]] = []
+    if system_text:
+        messages.append({"role": "system", "content": system_text})
+    messages.append({"role": "user", "content": str(user_text or "")})
+    validate_chat_messages(messages)
+    return messages
+
+
+def _copy_explicit_messages(messages: Any) -> list[dict[str, Any]]:
+    """Validate and isolate caller messages from later polling/job mutations."""
+
+    validate_chat_messages(messages)
+    return copy.deepcopy(messages)
+
+
 def _prompt_text_from_messages(messages: list[dict[str, Any]]) -> str:
     for message in reversed(messages):
         if not isinstance(message, dict) or str(message.get("role") or "").lower() != "user":
@@ -1026,6 +1054,175 @@ def _attachment_manifest_from_payload(payload: dict[str, Any]) -> list[dict[str,
     return manifest
 
 
+def _conversation_message_checkpoint(conversation_id: str) -> int:
+    """Return the latest persisted message id for a conversation."""
+
+    clean_id = str(conversation_id or "").strip()
+    db_path = _local_conversation_db_path()
+    if not clean_id or not db_path.exists():
+        return 0
+    try:
+        with sqlite3.connect(str(db_path), timeout=10) as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM messages WHERE conversation_id = ?",
+                (clean_id,),
+            ).fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+
+
+def _completed_turn_after_checkpoint(
+    conversation_id: str, baseline_message_id: int
+) -> dict[str, Any] | None:
+    """Return the first complete user/assistant turn persisted after a job checkpoint."""
+
+    clean_id = str(conversation_id or "").strip()
+    db_path = _local_conversation_db_path()
+    if not clean_id or not db_path.exists():
+        return None
+    try:
+        with sqlite3.connect(str(db_path), timeout=10) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT id, role, content, COALESCE(thinking, '') AS thinking, created_at
+                FROM messages
+                WHERE conversation_id = ? AND id > ?
+                ORDER BY id ASC
+                """,
+                (clean_id, max(0, int(baseline_message_id or 0))),
+            ).fetchall()
+            conversation = conn.execute(
+                "SELECT COALESCE(thread_id, ''), COALESCE(thread_model, '') "
+                "FROM conversations WHERE id = ?",
+                (clean_id,),
+            ).fetchone()
+    except Exception:
+        return None
+
+    saw_user = False
+    for row in rows:
+        role = str(row["role"] or "").strip().lower()
+        if role == "user":
+            saw_user = True
+            continue
+        if role != "assistant" or not saw_user:
+            continue
+        content = str(row["content"] or "")
+        thinking = str(row["thinking"] or "")
+        if not content.strip() and not thinking.strip():
+            continue
+        return {
+            "assistant_message_id": int(row["id"]),
+            "response_text": content,
+            "thinking": thinking,
+            "created_at": int(row["created_at"] or 0),
+            "remote_chat_id": str(conversation[0] or "") if conversation else "",
+            "actual_model": str(conversation[1] or "") if conversation else "",
+        }
+    return None
+
+
+def _chat_output_from_local_turn(
+    job: dict[str, Any], turn: dict[str, Any]
+) -> dict[str, Any]:
+    """Construct a terminal ChatOutput when local persistence beats SSE closure."""
+
+    requested_model = str(job.get("model") or "")
+    actual_model = str(turn.get("actual_model") or "")
+    remote_chat_id = str(turn.get("remote_chat_id") or "")
+    model_metadata: dict[str, Any] = {
+        "completion_source": "local_conversation_checkpoint",
+        "assistant_message_id": int(turn.get("assistant_message_id") or 0),
+    }
+    if remote_chat_id:
+        model_metadata["remote_chat_id"] = remote_chat_id
+        model_metadata["notion_thread_id"] = remote_chat_id
+    if actual_model:
+        model_metadata["actual_model"] = actual_model
+    return {
+        "ok": True,
+        "status_code": 200,
+        "model": actual_model or requested_model,
+        "actual_model": actual_model,
+        "model_metadata": model_metadata,
+        "requested_model": requested_model,
+        "backend_base_url": str(job.get("backend_base_url") or ""),
+        "timeout_seconds": job.get("timeout_seconds"),
+        "session_state_path": str(job.get("session_state_path") or DEFAULT_SESSION_STATE_PATH),
+        "local_conversations_db": str(job.get("local_conversations_db") or _local_conversation_db_path()),
+        "imported_history_db": str(job.get("imported_history_db") or ""),
+        "session_name": str(job.get("session_name") or DEFAULT_SESSION_NAME),
+        "conversation_id": str(job.get("conversation_id") or ""),
+        "session_created": bool(job.get("session_created")),
+        "status": "completed",
+        "request_id": str(job.get("request_id") or ""),
+        "job_id": str(job.get("job_id") or job.get("request_id") or ""),
+        "retry_safe": False,
+        "wait_seconds": job.get("wait_seconds"),
+        "poll_hint": "",
+        "error": None,
+        "response_text": str(turn.get("response_text") or ""),
+        "progress": job.get("progress") if isinstance(job.get("progress"), dict) else None,
+        "remote_chat_id": remote_chat_id,
+        "notion_thread_id": remote_chat_id,
+        "raw": {
+            "completion_source": "local_conversation_checkpoint",
+            "assistant_message_id": int(turn.get("assistant_message_id") or 0),
+        },
+    }
+
+
+def _complete_chat_job_from_local_turn(
+    request_id: str, job: dict[str, Any], turn: dict[str, Any]
+) -> dict[str, Any]:
+    """Persist a monotonic completed state and stop any hanging stream task."""
+
+    normalized_id = _normalize_request_id(request_id)
+    response = _chat_output_from_local_turn(job, turn)
+    completed = dict(job)
+    completed["status"] = "completed"
+    completed["updated_at"] = _now_ms()
+    completed["response"] = response
+    completed["response_text"] = str(response.get("response_text") or "")
+    completed["remote_chat_id"] = str(response.get("remote_chat_id") or "")
+    completed["notion_thread_id"] = str(response.get("notion_thread_id") or "")
+    completed["completion_source"] = "local_conversation_checkpoint"
+    completed["assistant_message_id"] = int(turn.get("assistant_message_id") or 0)
+    completed["dead_loop_suspected"] = False
+    completed["cancel_recommended"] = False
+    _persist_chat_job(completed)
+    _update_session_record(
+        str(completed.get("session_name") or DEFAULT_SESSION_NAME),
+        conversation_id=str(completed.get("conversation_id") or ""),
+        remote_chat_id=str(completed.get("remote_chat_id") or ""),
+        model=str(completed.get("model") or ""),
+        request_id=normalized_id,
+    )
+    task = _CHAT_JOB_TASKS.get(normalized_id)
+    if task is not None and not task.done():
+        task.cancel()
+    return response
+
+
+def _active_job_for_conversation(
+    conversation_id: str, *, exclude_request_id: str = ""
+) -> tuple[str, dict[str, Any]] | None:
+    state = _load_chat_job_state()
+    jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
+    if not isinstance(jobs, dict):
+        return None
+    for request_id, raw_job in jobs.items():
+        if not isinstance(raw_job, dict) or str(request_id) == exclude_request_id:
+            continue
+        if str(raw_job.get("conversation_id") or "") != conversation_id:
+            continue
+        if str(raw_job.get("status") or "") in {"running", "pending"}:
+            return str(request_id), raw_job
+    return None
+
+
 async def _run_chat_completion_job(
     *,
     client: Notion2APIClient,
@@ -1037,24 +1234,60 @@ async def _run_chat_completion_job(
     session_created: bool,
     request_id: str,
     wait_seconds: float,
+    baseline_message_id: int,
 ) -> dict[str, Any]:
-    data = await client.post_chat_stream(
-        path,
-        payload,
-        lambda reasoning, content, event_count, complete: _persist_chat_progress(
-            request_id, reasoning, content, event_count, complete
-        ),
+    stream_task = asyncio.create_task(
+        client.post_chat_stream(
+            path,
+            payload,
+            lambda reasoning, content, event_count, complete: _persist_chat_progress(
+                request_id, reasoning, content, event_count, complete
+            ),
+        )
     )
-    return _chat_output_from_backend(
-        data=data,
-        client=client,
-        model=model,
-        session_key=session_key,
-        conversation_id=conversation_id,
-        session_created=session_created,
-        request_id=request_id,
-        wait_seconds=wait_seconds,
-    )
+    try:
+        while True:
+            done, _pending = await asyncio.wait({stream_task}, timeout=0.75)
+            if done:
+                data = stream_task.result()
+                return _chat_output_from_backend(
+                    data=data,
+                    client=client,
+                    model=model,
+                    session_key=session_key,
+                    conversation_id=conversation_id,
+                    session_created=session_created,
+                    request_id=request_id,
+                    wait_seconds=wait_seconds,
+                )
+
+            turn = await asyncio.to_thread(
+                _completed_turn_after_checkpoint,
+                conversation_id,
+                baseline_message_id,
+            )
+            if turn is None:
+                continue
+            response = _chat_output_from_local_turn(
+                {
+                    **_runtime_audit(client, model),
+                    "model": model,
+                    "session_name": session_key,
+                    "conversation_id": conversation_id,
+                    "session_created": session_created,
+                    "request_id": request_id,
+                    "job_id": request_id,
+                    "wait_seconds": wait_seconds,
+                },
+                turn,
+            )
+            stream_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stream_task
+            return response
+    finally:
+        if not stream_task.done():
+            stream_task.cancel()
 
 
 def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> None:
@@ -1075,7 +1308,11 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
         jobs = state.setdefault("jobs", {})
         job = jobs.get(request_id) if isinstance(jobs.get(request_id), dict) else {"request_id": request_id, "job_id": request_id}
         job = dict(job)
-        if str(job.get("status") or "") == "cancelled":
+        existing_status = str(job.get("status") or "")
+        if existing_status in {"completed", "error", "cancelled"}:
+            _CHAT_JOB_TASKS.pop(request_id, None)
+            return
+        if existing_status == "cancelled":
             status = "cancelled"
         job["status"] = status
         job["updated_at"] = _now_ms()
@@ -1139,6 +1376,7 @@ async def _submit_or_resume_chat_job(
                 session_created=False,
                 request_id=normalized_id,
                 wait_seconds=bounded_wait,
+                baseline_message_id=baseline_message_id,
             )
         if status == "running" and (task is None or task.done()):
             if task and task.done():
@@ -1174,6 +1412,37 @@ async def _submit_or_resume_chat_job(
             )
 
     if task is None:
+        conflict = _active_job_for_conversation(
+            conversation_id, exclude_request_id=normalized_id
+        )
+        if conflict is not None:
+            conflict_id, conflict_job = conflict
+            if conflict_id not in _CHAT_JOB_TASKS:
+                _mark_chat_job_stale(conflict_job)
+            else:
+                return {
+                    "ok": False,
+                    "status_code": 409,
+                    "model": model,
+                    "actual_model": "",
+                    "model_metadata": None,
+                    **_runtime_audit(client, model),
+                    "session_name": session_key,
+                    "conversation_id": conversation_id,
+                    "session_created": session_created,
+                    "status": "error",
+                    "request_id": normalized_id,
+                    "job_id": normalized_id,
+                    "retry_safe": False,
+                    "wait_seconds": bounded_wait,
+                    "poll_hint": f"Poll active request_id={conflict_id} before sending another turn.",
+                    "error": "Another request is already active for this conversation.",
+                    "response_text": "",
+                    "remote_chat_id": "",
+                    "notion_thread_id": "",
+                    "raw": {"code": "conversation_busy", "active_request_id": conflict_id},
+                }
+        baseline_message_id = _conversation_message_checkpoint(conversation_id)
         now = _now_ms()
         job = {
             "request_id": normalized_id,
@@ -1189,6 +1458,8 @@ async def _submit_or_resume_chat_job(
             "last_progress_at": now,
             "poll_count": 0,
             "wait_seconds": bounded_wait,
+            "baseline_message_id": baseline_message_id,
+            **_runtime_audit(client, model),
         }
         if attachment_manifest:
             job["attachment_manifest"] = attachment_manifest
@@ -1260,6 +1531,16 @@ def _chat_job_output(
     if not job:
         return ChatJobOutput(ok=True, found=False, request_id=normalized_id, job_id=normalized_id)
 
+    if str(job.get("status") or "") in {"running", "pending"}:
+        baseline_message_id = int(job.get("baseline_message_id") or 0)
+        if "baseline_message_id" in job:
+            turn = _completed_turn_after_checkpoint(
+                str(job.get("conversation_id") or ""), baseline_message_id
+            )
+            if turn is not None:
+                _complete_chat_job_from_local_turn(normalized_id, job, turn)
+                job = _load_chat_job(normalized_id) or job
+
     if (
         str(job.get("status") or "") in {"running", "pending"}
         and normalized_id not in _CHAT_JOB_TASKS
@@ -1302,6 +1583,38 @@ def _chat_job_output(
         raw_job=job,
         last_response=last_response,
     )
+
+
+def _reconcile_orphaned_chat_jobs_on_startup() -> dict[str, int]:
+    """Close persisted active jobs that cannot have a live task after restart."""
+
+    state = _load_chat_job_state()
+    jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
+    summary = {"completed": 0, "stale": 0}
+    if not isinstance(jobs, dict):
+        return summary
+
+    for request_id, raw_job in list(jobs.items()):
+        if not isinstance(raw_job, dict):
+            continue
+        job = dict(raw_job)
+        if str(job.get("status") or "") not in {"running", "pending"}:
+            continue
+
+        if "baseline_message_id" in job:
+            turn = _completed_turn_after_checkpoint(
+                str(job.get("conversation_id") or ""),
+                int(job.get("baseline_message_id") or 0),
+            )
+            if turn is not None:
+                _complete_chat_job_from_local_turn(str(request_id), job, turn)
+                summary["completed"] += 1
+                continue
+
+        _mark_chat_job_stale(job)
+        summary["stale"] += 1
+
+    return summary
 
 
 def _load_session_records(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, dict[str, Any]]:
@@ -1756,10 +2069,7 @@ def create_server(
             conversation_id=conversation_id,
             continue_from_request_id=continue_from_request_id,
         )
-        messages: list[dict[str, str]] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        messages = _explicit_prompt_messages(prompt, system_prompt)
         prepared = prepare_mcp_file_attachments(attachments)
         payload = {
             "model": model,
@@ -1800,7 +2110,8 @@ def create_server(
         wait_seconds: float | None = None,
         attachments: FileAttachments = None,
     ) -> ChatOutput:
-        inferred_prompt = _prompt_text_from_messages(messages)
+        explicit_messages = _copy_explicit_messages(messages)
+        inferred_prompt = _prompt_text_from_messages(explicit_messages)
         resolved_session_name = _infer_session_name(
             session_name,
             inferred_prompt,
@@ -1815,7 +2126,7 @@ def create_server(
         prepared = prepare_mcp_file_attachments(attachments)
         payload = {
             "model": model,
-            "messages": messages,
+            "messages": explicit_messages,
             "stream": False,
             "conversation_id": resolved_conversation_id,
             "session_name": session_key,
@@ -1847,14 +2158,18 @@ def create_server(
         persist_remote_chat: bool = True,
         attachments: FileAttachments = None,
     ) -> ResponsesOutput:
+        validated_input = validate_prompt_text(input_text, param="input_text")
+        validated_instructions = validate_prompt_text(
+            instructions, param="instructions", allow_none=True
+        )
         prepared = prepare_mcp_file_attachments(attachments)
         payload: dict[str, Any] = {
             "model": model,
-            "input": input_text,
+            "input": validated_input,
             "metadata": {"persist_remote_chat": persist_remote_chat},
         }
-        if instructions:
-            payload["instructions"] = instructions
+        if validated_instructions:
+            payload["instructions"] = validated_instructions
         if prepared:
             payload["attachments"] = prepared
         data = await client.post("/v1/responses", payload)
@@ -2063,6 +2378,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=_env_int("MCP_PORT", DEFAULT_MCP_PORT))
     parser.add_argument("--mcp-path", default=os.getenv("MCP_PATH", DEFAULT_MCP_PATH))
     args = parser.parse_args(argv)
+
+    reconciliation = _reconcile_orphaned_chat_jobs_on_startup()
+    if reconciliation["completed"] or reconciliation["stale"]:
+        logger.info(
+            "Reconciled orphaned MCP chat jobs on startup",
+            extra={
+                "request_info": {
+                    "event": "mcp_job_startup_reconciliation",
+                    **reconciliation,
+                }
+            },
+        )
 
     server = create_server(
         base_url=args.base_url,

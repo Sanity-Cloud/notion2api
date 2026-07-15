@@ -296,3 +296,15 @@ MIT License
 If this project helps you, please give it a Star ⭐
 
 *Built with assistance from Claude Code.*
+
+
+## Prompt provenance and request safety
+
+Notion2API keeps prompt text and attachments on separate request paths. MCP prompt fields and OpenAI-compatible text parts must be strings, may contain only normal text controls (`TAB`, `LF`, and `CR`), and are bounded by `MAX_PROMPT_FIELD_CHARS` (default `200000`) and `MAX_PROMPT_TOTAL_CHARS` (default `400000`). Validation failures identify only the field and rule; they do not echo prompt content.
+
+Persistent `session_name` values identify a chat, while `request_id` identifies one retry-safe operation. Polling snapshots, task/checklist summaries, attachment manifests, command output, and file listings are not appended to subsequent prompts. Marker text is preserved when the caller explicitly includes it.
+
+
+### MCP job terminalization
+
+Each chat job records the conversation message checkpoint that existed before dispatch. The wrapper watches both the SSE response and the local conversation database. When a new user/assistant turn is durably persisted, the job becomes `completed` even if the upstream stream omits `[DONE]` or remains open. Terminal states are monotonic and cannot be downgraded by a late cancellation callback. Only one active request may target a conversation at a time.

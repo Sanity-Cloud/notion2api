@@ -1,7 +1,13 @@
 import unittest
 
+import pytest
+
 from app.attachments.models import DEFAULT_ATTACHMENT_PROMPT
-from app.attachments.normalizer import normalize_chat_messages, normalize_responses_input
+from app.attachments.normalizer import (
+    PromptValidationError,
+    normalize_chat_messages,
+    normalize_responses_input,
+)
 
 
 class AttachmentNormalizerTests(unittest.TestCase):
@@ -111,3 +117,52 @@ class AttachmentNormalizerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_prompt_validation_rejects_non_string_without_echoing_value():
+    secret = {"private": "do-not-echo"}
+
+    with pytest.raises(PromptValidationError) as caught:
+        normalize_chat_messages([{"role": "system", "content": secret}])
+
+    assert caught.value.code == "invalid_prompt_type"
+    assert "do-not-echo" not in str(caught.value)
+
+
+def test_prompt_validation_rejects_control_character_without_echoing_prompt():
+    prompt = "private-prefix\x00private-suffix"
+
+    with pytest.raises(PromptValidationError) as caught:
+        normalize_chat_messages([{"role": "user", "content": prompt}])
+
+    assert caught.value.code == "invalid_prompt_control_character"
+    assert "private-prefix" not in str(caught.value)
+
+
+def test_prompt_validation_rejects_oversized_field(monkeypatch):
+    monkeypatch.setenv("MAX_PROMPT_FIELD_CHARS", "8")
+
+    with pytest.raises(PromptValidationError) as caught:
+        normalize_chat_messages([{"role": "user", "content": "123456789"}])
+
+    assert caught.value.code == "prompt_too_large"
+    assert caught.value.param == "messages[0].content"
+
+
+def test_structured_attachment_data_is_not_concatenated_into_prompt_text():
+    marker = "Considering file options /home/oai/skills/pdfs/SKILL.md ---FILES---"
+    messages, attachments = normalize_chat_messages(
+        [{"role": "user", "content": "Review the attachment."}],
+        [
+            {
+                "type": "file",
+                "name": "record.txt",
+                "content_type": "text/plain",
+                "data": marker,
+            }
+        ],
+    )
+
+    assert messages[0]["content"] == "Review the attachment."
+    assert marker not in messages[0]["content"]
+    assert attachments[0].data == marker
