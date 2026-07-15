@@ -33,7 +33,7 @@ def test_captured_notion_backend_mappings_are_registered():
         "deepseek-v4pro": "baseten-deepseek-v4-pro",
         "glm-5.2": "baseten-glm-5.2",
         "grok-4.3": "xigua-mochi-medium",
-        "grok-4.5": "strawberry-whoopiepie",
+        "spacexai-4.5": "strawberry-whoopiepie",
         "grok-build0.1": "xinomavro-cake",
         "gemini-3.1pro": "galette-medium-thinking",
         "claude-haiku4.5": "anthropic-haiku-4.5",
@@ -55,8 +55,9 @@ def test_captured_display_names_are_registered():
     assert get_display_name("kimi-2.7-code") == "Kimi K2.7 Code"
     assert get_display_name("fireworks-kimi-k2.7") == "Kimi K2.7 Code"
     assert get_display_name("grok-4.3") == "Grok 4.3"
-    assert get_display_name("grok-4.5") == "Grok 4.5"
-    assert get_display_name("strawberry-whoopiepie") == "Grok 4.5"
+    assert get_display_name("grok-4.5") == "SpaceXAI 4.5"
+    assert get_display_name("spacexai-4.5") == "SpaceXAI 4.5"
+    assert get_display_name("strawberry-whoopiepie") == "SpaceXAI 4.5"
     assert get_display_name("grok-build0.1") == "Grok Build 0.1"
     assert get_display_name("minimax-m2.5") == "MiniMax M2.5"
     assert get_display_name("claude-sonnet5") == "Claude Sonnet 5"
@@ -131,7 +132,7 @@ def test_model_metadata_preserves_transport_and_underlying_family():
         "upstream_host": "notion",
         "is_disabled": False,
     }.items() <= opus.items()
-    assert opus["aliases"] == ["claude-opus4.7"]
+    assert opus["aliases"] == ["claude-opus4.7", "claude-opus-4.7", "opus-4.7", "opus4.7"]
 
     assert {
         "canonical_id": "baseten-glm-5.2",
@@ -168,3 +169,38 @@ def test_consumer_friendly_model_aliases_and_default():
     assert get_notion_model("Terra") == "orchid-muffin"
     assert get_notion_model("sol") == "orange-mousse"
     assert get_notion_model("luna") == "olive-jellyroll"
+
+def test_visible_selector_names_resolve_to_exact_backend_routes():
+    expected = {
+        "Sonnet 4.6": "almond-croissant-low",
+        "Sonnet 5": "angel-cake-high",
+        "Opus 4.7": "apricot-sorbet-high",
+        "Opus 4.8": "ambrosia-tart-high",
+        "Fable 5": "acai-budino",
+        "Gemini 3.1 Pro": "galette-medium-thinking",
+        "GPT-5.6 Sol": "orange-mousse",
+        "GPT-5.6 Terra": "orchid-muffin",
+        "GPT-5.2": "oatmeal-cookie",
+        "GPT-5.4": "oval-kumquat-medium",
+        "GPT-5.5": "opal-quince-medium",
+        "Grok 4.3": "xigua-mochi-medium",
+        "SpaceXAI 4.5": "strawberry-whoopiepie",
+        "Grok Build 0.1": "xinomavro-cake",
+        "Gemini 3.5 Flash": "vertex-gemini-3.5-flash",
+        "Kimi K2.6": "fireworks-kimi-k2.6",
+        "Kimi K2.7 Code": "fireworks-kimi-k2.7",
+        "DeepSeek V4 Pro": "baseten-deepseek-v4-pro",
+        "GLM 5.2": "baseten-glm-5.2",
+    }
+
+    for selector_name, backend_route in expected.items():
+        assert is_supported_model(selector_name), selector_name
+        assert get_notion_model(selector_name) == backend_route
+
+    assert is_static_disabled_model("Sonnet 4.6") is False
+
+
+def test_legacy_grok_4_5_alias_remains_compatible():
+    assert is_supported_model("grok-4.5")
+    assert get_notion_model("grok-4.5") == "strawberry-whoopiepie"
+    assert get_standard_model("strawberry-whoopiepie") == "spacexai-4.5"

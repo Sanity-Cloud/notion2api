@@ -1,4 +1,5 @@
 from app.core.models import normalize_model_id
+import re
 import time
 from app.logger import logger
 
@@ -7,14 +8,28 @@ from app.logger import logger
 MODEL_MAP: dict[str, str] = {
     # Anthropic
     "claude-sonnet4.6": "almond-croissant-low",
+    "claude-sonnet-4.6": "almond-croissant-low",
+    "sonnet-4.6": "almond-croissant-low",
+    "sonnet4.6": "almond-croissant-low",
     "claude-sonnet5": "angel-cake-high",
     "claude-sonnet-5": "angel-cake-high",
     "sonnet-5": "angel-cake-high",
     "sonnet5": "angel-cake-high",
     "claude-opus4.6": "avocado-froyo-medium",
+    "claude-opus-4.6": "avocado-froyo-medium",
+    "opus-4.6": "avocado-froyo-medium",
+    "opus4.6": "avocado-froyo-medium",
     "claude-opus4.7": "apricot-sorbet-high",
+    "claude-opus-4.7": "apricot-sorbet-high",
+    "opus-4.7": "apricot-sorbet-high",
+    "opus4.7": "apricot-sorbet-high",
     "claude-opus4.8": "ambrosia-tart-high",
+    "claude-opus-4.8": "ambrosia-tart-high",
+    "opus-4.8": "ambrosia-tart-high",
+    "opus4.8": "ambrosia-tart-high",
     "claude-haiku4.5": "anthropic-haiku-4.5",
+    "haiku-4.5": "anthropic-haiku-4.5",
+    "haiku4.5": "anthropic-haiku-4.5",
     "claude-fable5": "acai-budino",
     "claude-fable-5": "acai-budino",
     "fable-5": "acai-budino",
@@ -45,16 +60,21 @@ MODEL_MAP: dict[str, str] = {
     "gemini-3.1-pro": "galette-medium-thinking",
     "gemini-3.1pro": "galette-medium-thinking",
     "gemini-3.5flash": "vertex-gemini-3.5-flash",
+    "gemini-3.5-flash": "vertex-gemini-3.5-flash",
     "gemini-2.5flash": "vertex-gemini-2.5-flash",
+    "gemini-2.5-flash": "vertex-gemini-2.5-flash",
 
     # xAI
     "grok-4.3": "xigua-mochi-medium",
     "grok-4.5": "strawberry-whoopiepie",
+    "spacexai-4.5": "strawberry-whoopiepie",
+    "spacex-ai-4.5": "strawberry-whoopiepie",
     "grok-build0.1": "xinomavro-cake",
 
     # Other
     "minimax-m2.5": "fireworks-minimax-m2.5",
     "kimi-2.6": "fireworks-kimi-k2.6",
+    "kimi-k2.6": "fireworks-kimi-k2.6",
     "kimi-2.7": "fireworks-kimi-k2.7",
     "kimi-2.7-code": "fireworks-kimi-k2.7",
     "kimi-k2.7": "fireworks-kimi-k2.7",
@@ -129,7 +149,7 @@ NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
 
     # xAI
     "xigua-mochi-medium": "grok-4.3",
-    "strawberry-whoopiepie": "grok-4.5",
+    "strawberry-whoopiepie": "spacexai-4.5",
     "xinomavro-cake": "grok-build0.1",
 
     # Other
@@ -167,7 +187,9 @@ DISPLAY_NAMES: dict[str, str] = {
     "gemini-3.5flash": "Gemini 3.5 Flash",
     "gemini-2.5flash": "Gemini 2.5 Flash",
     "grok-4.3": "Grok 4.3",
-    "grok-4.5": "Grok 4.5",
+    "grok-4.5": "SpaceXAI 4.5",
+    "spacexai-4.5": "SpaceXAI 4.5",
+    "spacex-ai-4.5": "SpaceXAI 4.5",
     "grok-build0.1": "Grok Build 0.1",
     "minimax-m2.5": "MiniMax M2.5",
     "kimi-2.6": "Kimi 2.6",
@@ -200,7 +222,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "baseten-deepseek-v4-pro": "DeepSeek V4 Pro",
     "baseten-glm-5.2": "GLM 5.2",
     "xigua-mochi-medium": "Grok 4.3",
-    "strawberry-whoopiepie": "Grok 4.5",
+    "strawberry-whoopiepie": "SpaceXAI 4.5",
     "xinomavro-cake": "Grok Build 0.1",
     "galette-medium-thinking": "Gemini 3.1 Pro",
     "anthropic-haiku-4.5": "Haiku 4.5",
@@ -380,6 +402,13 @@ MODEL_ICONS: dict[str, str] = {
 DEFAULT_MODEL = "terra"
 
 
+def _normalize_registry_model_name(model_name: str) -> str:
+    normalized = normalize_model_id(model_name)
+    candidate = str(normalized or "").strip().lower()
+    candidate = re.sub(r"[\s_]+", "-", candidate)
+    return re.sub(r"-+", "-", candidate).strip("-")
+
+
 def get_notion_model(model_name: str) -> str:
     normalized_name = get_standard_model(model_name)
     return MODEL_MAP.get(normalized_name, MODEL_MAP[DEFAULT_MODEL])
@@ -414,8 +443,7 @@ def get_thread_type(model_name: str) -> str:
 
 
 def get_standard_model(model_name: str) -> str:
-    normalized = normalize_model_id(model_name)
-    model_name = str(normalized or "").strip().lower()
+    model_name = _normalize_registry_model_name(model_name)
     if not model_name:
         return DEFAULT_MODEL
     if model_name in NOTION_MODEL_REVERSE_MAP:
@@ -467,8 +495,7 @@ def get_model_metadata(model_name: str) -> dict[str, object]:
 
 
 def is_static_disabled_model(model_name: str) -> bool:
-    normalized = normalize_model_id(model_name)
-    normalized_name = str(normalized or "").strip().lower()
+    normalized_name = _normalize_registry_model_name(model_name)
     if not normalized_name:
         return False
     if normalized_name in NOTION_MODEL_REVERSE_MAP:
@@ -481,8 +508,7 @@ def is_static_disabled_model(model_name: str) -> bool:
 
 
 def is_supported_model(model_name: str) -> bool:
-    normalized = normalize_model_id(model_name)
-    normalized_name = str(normalized or "").strip().lower()
+    normalized_name = _normalize_registry_model_name(model_name)
     if not normalized_name or normalized_name not in MODEL_MAP:
         return False
     return not is_static_disabled_model(normalized_name)
@@ -490,12 +516,22 @@ def is_supported_model(model_name: str) -> bool:
 
 def get_display_name(model_name: str) -> str:
     standard_name = get_standard_model(model_name)
-    return DISPLAY_NAMES.get(standard_name, standard_name)
+    notion_model = get_notion_model(standard_name)
+    public_name = NOTION_MODEL_REVERSE_MAP.get(notion_model, standard_name)
+    return DISPLAY_NAMES.get(
+        standard_name,
+        DISPLAY_NAMES.get(notion_model, DISPLAY_NAMES.get(public_name, public_name)),
+    )
 
 
 def get_model_icon(model_name: str) -> str:
     standard_name = get_standard_model(model_name)
-    return MODEL_ICONS.get(standard_name, "")
+    notion_model = get_notion_model(standard_name)
+    public_name = NOTION_MODEL_REVERSE_MAP.get(notion_model, standard_name)
+    return MODEL_ICONS.get(
+        standard_name,
+        MODEL_ICONS.get(notion_model, MODEL_ICONS.get(public_name, "")),
+    )
 
 
 _RESTRICTED_MODELS_CACHE: dict[str, tuple[float, set[str]]] = {}
