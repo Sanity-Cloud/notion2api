@@ -335,6 +335,12 @@ def test_mcp_schema_exposes_continuation_and_cancellation():
     assert "conversation_id" in chat_schema
     assert "continue_from_request_id" in chat_schema
     assert "notion2api_cancel_chat_job" in by_name
+    assert "notion2api_chat_with_file" in by_name
+    assert "notion2api_upload_file_to_page" in by_name
+    chat_file_schema = by_name["notion2api_chat_with_file"].inputSchema["properties"]
+    page_file_schema = by_name["notion2api_upload_file_to_page"].inputSchema["properties"]
+    assert chat_file_schema["file"]["format"] == "file"
+    assert page_file_schema["file"]["format"] == "file"
 
 
 def test_omitted_session_name_is_descriptive_and_not_shared_op():

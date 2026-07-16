@@ -30,6 +30,13 @@ except ImportError:
 if load_dotenv:
     load_dotenv()
 
+# Keep standalone MCP attachment policy aligned with the FastAPI backend.
+# Without this patch, AttachmentPolicy.from_env() defaults to disabled even
+# when the local authenticated backend would safely enable attachments.
+from app.attachments.runtime_config import apply_attachment_runtime_config
+
+apply_attachment_runtime_config()
+
 DEFAULT_BASE_URL = "http://127.0.0.1:8120"
 DEFAULT_MCP_HOST = "127.0.0.1"
 DEFAULT_MCP_PORT = 8130
@@ -115,6 +122,19 @@ class ChatOutput(BaseModel):
     progress: dict[str, Any] | None = Field(default=None, description="Bounded public activity snapshot captured while the job runs.")
     remote_chat_id: str = Field(default="", description="Durable remote Notion chat/thread id, when available.")
     notion_thread_id: str = Field(default="", description="Compatibility alias for remote_chat_id.")
+    raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend response.")
+
+
+class UploadPageFileOutput(BaseModel):
+    ok: bool = Field(description="Whether the Notion page file upload succeeded.")
+    page_id: str = Field(default="", description="Target Notion page id.")
+    block_id: str = Field(default="", description="Created Notion file block id.")
+    file_url: str = Field(default="", description="Stored Notion file URL, if returned.")
+    signed_get_url: str = Field(default="", description="Signed download URL, if returned.")
+    filename: str = Field(default="", description="Uploaded filename.")
+    content_type: str = Field(default="", description="Validated upload MIME type.")
+    size: int = Field(default=0, description="Uploaded file size in bytes.")
+    error: str | None = Field(default=None, description="Error summary when the upload fails.")
     raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend response.")
 
 
@@ -261,6 +281,74 @@ def prepare_mcp_file_attachments(
         })
 
     return prepared
+
+
+TransferredFile = Annotated[
+    str,
+    Field(
+        description=(
+            "A file supplied by the MCP client. This must be a top-level file argument so "
+            "ChatGPT can transfer /mnt/data uploads into the connector runtime."
+        ),
+        json_schema_extra={"format": "file"},
+    ),
+]
+
+
+def stage_mcp_file_for_page(file_path: str, filename: str | None = None) -> tuple[Path, bool]:
+    """Stage a connector-transferred file under the backend's allowed local root."""
+
+    from app.attachments.errors import AttachmentError
+    from app.attachments.security import AttachmentPolicy, validate_size
+    import shutil
+
+    policy = AttachmentPolicy.from_env()
+    if not policy.enabled:
+        raise AttachmentError(
+            "Attachments are disabled for this server.",
+            code="attachments_disabled",
+            param="file",
+        )
+
+    source = Path(str(file_path or "")).expanduser()
+    if not source.exists() or not source.is_file():
+        raise AttachmentError(
+            f"Transferred file path does not exist: {file_path}",
+            code="attachment_not_found",
+            param="file",
+        )
+    validate_size(source.stat().st_size, policy)
+
+    requested_name = Path(str(filename or source.name)).name.strip()
+    if not requested_name or requested_name in {".", ".."}:
+        raise AttachmentError(
+            "A valid upload filename is required.",
+            code="invalid_upload_filename",
+            param="filename",
+        )
+
+    allowed_root = Path(policy.local_root).expanduser().resolve()
+    resolved_source = source.resolve()
+    try:
+        resolved_source.relative_to(allowed_root)
+        return resolved_source, False
+    except ValueError:
+        pass
+
+    staging_dir = allowed_root / "chatgpt-file-uploads" / uuid.uuid4().hex
+    staging_dir.mkdir(parents=True, exist_ok=False)
+    staged = staging_dir / requested_name
+    shutil.copy2(resolved_source, staged)
+    return staged, True
+
+
+def cleanup_staged_mcp_file(path: Path, staged: bool) -> None:
+    if not staged:
+        return
+    import shutil
+
+    with contextlib.suppress(OSError):
+        shutil.rmtree(path.parent)
 
 
 FileAttachments = Annotated[
@@ -2097,6 +2185,82 @@ def create_server(
             request_id=request_id,
             wait_seconds=wait_seconds,
         )
+
+    @server.tool(
+        description=(
+            "Send one ChatGPT-uploaded file with a prompt to Notion2API. Use this tool for "
+            "files located in ChatGPT /mnt/data; the top-level file argument triggers connector transfer."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_chat_with_file(
+        file: TransferredFile,
+        prompt: str,
+        model: str = DEFAULT_MODEL,
+        system_prompt: str | None = None,
+        persist_remote_chat: bool = True,
+        session_name: str | None = None,
+        conversation_id: str | None = None,
+        continue_from_request_id: str | None = None,
+        start_new_chat: bool = False,
+        request_id: str | None = None,
+        wait_seconds: float | None = None,
+    ) -> ChatOutput:
+        return await notion2api_chat(
+            prompt=prompt,
+            model=model,
+            system_prompt=system_prompt,
+            persist_remote_chat=persist_remote_chat,
+            session_name=session_name,
+            conversation_id=conversation_id,
+            continue_from_request_id=continue_from_request_id,
+            start_new_chat=start_new_chat,
+            request_id=request_id,
+            wait_seconds=wait_seconds,
+            attachments=[file],
+        )
+
+    @server.tool(
+        description=(
+            "Upload one ChatGPT-supplied file directly to a Notion page. The top-level file "
+            "argument supports ChatGPT /mnt/data files and stages them safely for the local backend."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_upload_file_to_page(
+        file: TransferredFile,
+        page_id: str,
+        filename: str | None = None,
+        content_type: str | None = None,
+    ) -> UploadPageFileOutput:
+        staged_path: Path | None = None
+        was_staged = False
+        try:
+            staged_path, was_staged = stage_mcp_file_for_page(file, filename)
+            data = await client.post(
+                "/notion/upload_file",
+                {
+                    "page_id": page_id,
+                    "file_path": str(staged_path),
+                    "filename": filename,
+                    "content_type": content_type,
+                },
+            )
+            return UploadPageFileOutput(
+                ok=bool(data.get("ok", False)),
+                page_id=str(data.get("page_id") or page_id),
+                block_id=str(data.get("block_id") or ""),
+                file_url=str(data.get("file_url") or ""),
+                signed_get_url=str(data.get("signed_get_url") or ""),
+                filename=str(data.get("filename") or filename or staged_path.name),
+                content_type=str(data.get("content_type") or content_type or ""),
+                size=int(data.get("size") or 0),
+                error=_error_summary(data),
+                raw=data,
+            )
+        finally:
+            if staged_path is not None:
+                cleanup_staged_mcp_file(staged_path, was_staged)
 
     @server.tool(description="Call Notion2API with explicit messages using a durable session. Continue by session_name, conversation_id, or continue_from_request_id; the model may change between turns.", structured_output=True)
     async def notion2api_chat_completion(
