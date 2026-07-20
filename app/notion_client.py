@@ -1212,10 +1212,18 @@ class NotionOpusAPI:
                 )
             if response.status_code != 200:
                 excerpt = (response.text or "").strip().replace("\n", " ")[:300]
-                # 429 text 5xx text
                 retriable = response.status_code >= 500 or response.status_code == 429
+                if uploaded_attachments:
+                    stage = "runInferenceTranscript_after_attachment_staging"
+                    excerpt = f"stage={stage}; attachment_count={len(uploaded_attachments)}; {excerpt}"
+                    message = (
+                        "Notion rejected runInferenceTranscript after attachment staging "
+                        f"with HTTP {response.status_code}."
+                    )
+                else:
+                    message = f"Notion upstream returned HTTP {response.status_code}."
                 raise NotionUpstreamError(
-                    f"Notion upstream returned HTTP {response.status_code}.",
+                    message,
                     status_code=response.status_code,
                     retriable=retriable,
                     response_excerpt=excerpt,

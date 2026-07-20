@@ -1,10 +1,12 @@
 import json
 
 import asyncio
+from pathlib import Path
 
 import httpx
 
 from app import mcp_server
+from app.attachments.security import AttachmentPolicy
 from app.mcp_server import _extract_chat_content, _extract_responses_text, create_server
 
 
@@ -335,12 +337,20 @@ def test_mcp_schema_exposes_continuation_and_cancellation():
     assert "conversation_id" in chat_schema
     assert "continue_from_request_id" in chat_schema
     assert "notion2api_cancel_chat_job" in by_name
+    assert "notion2api_stage_file" in by_name
     assert "notion2api_chat_with_file" in by_name
     assert "notion2api_upload_file_to_page" in by_name
+    stage_file_schema = by_name["notion2api_stage_file"].inputSchema["properties"]
     chat_file_schema = by_name["notion2api_chat_with_file"].inputSchema["properties"]
     page_file_schema = by_name["notion2api_upload_file_to_page"].inputSchema["properties"]
+    assert stage_file_schema["file"]["format"] == "file"
     assert chat_file_schema["file"]["format"] == "file"
     assert page_file_schema["file"]["format"] == "file"
+    assert "staged_file_ids" in chat_schema
+    assert "require_attachments" in chat_schema
+    assert "Service-host local file paths" in chat_schema["attachments"]["description"]
+    assert "/mnt/data" in chat_schema["attachments"]["description"]
+    assert "format" not in chat_schema["attachments"]
 
 
 def test_omitted_session_name_is_descriptive_and_not_shared_op():
@@ -567,6 +577,60 @@ def test_startup_reconciliation_closes_orphaned_jobs(monkeypatch):
     assert state["jobs"]["completed-request"]["response_text"] == "done"
     assert state["jobs"]["stale-request"]["status"] == "stale"
 
+
+
+def test_staged_file_round_trip_uses_opaque_id(monkeypatch, tmp_path):
+    source = tmp_path / "source.pdf"
+    content = b"%PDF-1.4\nstaged\n%EOF"
+    source.write_bytes(content)
+    policy = AttachmentPolicy(
+        enabled=True,
+        local_root=str(tmp_path),
+        allowed_mime_types={"application/pdf"},
+    )
+    monkeypatch.setattr(AttachmentPolicy, "from_env", classmethod(lambda cls: policy))
+
+    staged = mcp_server.stage_mcp_transferred_file(str(source), "evidence.pdf")
+    resolved = mcp_server.resolve_mcp_staged_files([staged["staged_file_id"]])
+    prepared = mcp_server.prepare_mcp_file_attachments(resolved)
+
+    assert staged["staged_file_id"].startswith("stage-")
+    assert staged["content_type"] == "application/pdf"
+    assert Path(resolved[0]).read_bytes() == content
+    assert prepared[0]["name"] == "evidence.pdf"
+    assert prepared[0]["size_bytes"] == len(content)
+
+
+def test_required_attachments_fail_closed_before_job_submission(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: None)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+    result = asyncio.run(
+        mcp_server._submit_or_resume_chat_job(
+            client=SimpleNamespace(base_url="http://127.0.0.1:8120", timeout=30.0),
+            path="/v1/chat/completions",
+            payload={
+                "model": "terra",
+                "messages": [{"role": "user", "content": "analyze the attached document"}],
+                "metadata": {"require_attachments": True},
+            },
+            model="terra",
+            session_key="attachment-required",
+            conversation_id="conv-attachment-required",
+            session_created=True,
+            request_id="request-attachment-required",
+            wait_seconds=0,
+        )
+    )
+
+    assert result["status"] == "error"
+    assert result["status_code"] == 422
+    assert result["raw"]["code"] == "required_attachments_missing"
+    assert result["attachment_required"] is True
+    assert result["attachment_count"] == 0
+    assert result["attachment_transfer_status"] == "missing"
+    assert result["attachment_manifest"] == []
 
 def test_submit_passes_message_checkpoint_to_worker(monkeypatch):
     from types import SimpleNamespace

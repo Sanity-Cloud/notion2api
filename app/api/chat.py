@@ -112,6 +112,13 @@ def _classify_upstream_error(exc: NotionUpstreamError) -> dict[str, Any]:
             "message": "Notion returned empty content.",
             "suggestion": "Send the message again.",
         }
+    if sc == 400 and not exc.retriable:
+        return {
+            "code": "UPSTREAM_PROTOCOL_REJECTED",
+            "type": "upstream_invalid_request",
+            "message": str(exc),
+            "suggestion": "Inspect the rejected Notion request stage and payload before retrying.",
+        }
     return {
         "code": "UPSTREAM_UNKNOWN",
         "type": "upstream_error",

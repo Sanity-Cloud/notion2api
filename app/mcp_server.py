@@ -62,6 +62,8 @@ DEFAULT_CHAT_WAIT_SECONDS = 45.0
 MAX_CHAT_WAIT_SECONDS = 50.0
 DEFAULT_CHAT_STALL_SECONDS = 180.0
 MAX_PROGRESS_REASONING_CHARS = 200_000
+DEFAULT_STAGED_FILE_TTL_SECONDS = 24 * 60 * 60
+STAGED_FILE_ID_RE = re.compile(r"^stage-[a-f0-9]{32}$")
 SESSION_STATE_VERSION = 2
 _CHAT_JOB_STATE_MUTEX = threading.RLock()
 _CHAT_JOB_TASKS: dict[str, asyncio.Task[dict[str, Any]]] = {}
@@ -119,6 +121,10 @@ class ChatOutput(BaseModel):
     poll_hint: str = Field(default="", description="Human-readable polling instruction for pending or stale jobs.")
     error: str | None = Field(default=None, description="Error summary if the backend call failed or the job became stale.")
     response_text: str = Field(default="", description="Extracted assistant response text.")
+    attachment_required: bool = Field(default=False, description="Whether this request required at least one verified attachment.")
+    attachment_count: int = Field(default=0, description="Number of attachments verified before submission.")
+    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance: verified, missing, or not_requested.")
+    attachment_manifest: list[dict[str, Any]] = Field(default_factory=list, description="Redacted manifest of attachments actually submitted.")
     progress: dict[str, Any] | None = Field(default=None, description="Bounded public activity snapshot captured while the job runs.")
     remote_chat_id: str = Field(default="", description="Durable remote Notion chat/thread id, when available.")
     notion_thread_id: str = Field(default="", description="Compatibility alias for remote_chat_id.")
@@ -138,6 +144,17 @@ class UploadPageFileOutput(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend response.")
 
 
+class StageFileOutput(BaseModel):
+    ok: bool = Field(description="Whether the connector-transferred file was staged successfully.")
+    staged_file_id: str = Field(default="", description="Opaque id accepted by later chat tools.")
+    filename: str = Field(default="", description="Sanitized staged filename.")
+    content_type: str = Field(default="", description="Validated MIME type.")
+    size_bytes: int = Field(default=0, description="Validated file size.")
+    sha256: str = Field(default="", description="SHA-256 digest of the staged bytes.")
+    expires_at: int = Field(default=0, description="Unix epoch milliseconds when the staged id expires.")
+    error: str | None = Field(default=None, description="Staging error summary.")
+
+
 class ResponsesOutput(BaseModel):
     ok: bool = Field(description="Whether the responses endpoint call succeeded.")
     status_code: int | None = Field(default=None, description="HTTP status code returned by Notion2API.")
@@ -151,6 +168,11 @@ class ResponsesOutput(BaseModel):
     local_conversations_db: str = Field(default="", description="Expected local Notion2API conversations DB path.")
     imported_history_db: str = Field(default="", description="Expected imported Notion history DB path.")
     response_text: str = Field(default="", description="Extracted response output text.")
+    error: str | None = Field(default=None, description="Error summary if the responses request failed.")
+    attachment_required: bool = Field(default=False, description="Whether at least one verified attachment was required.")
+    attachment_count: int = Field(default=0, description="Number of verified attachments submitted.")
+    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance: verified, missing, or not_requested.")
+    attachment_manifest: list[dict[str, Any]] = Field(default_factory=list, description="Redacted attachment manifest.")
     raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend response.")
 
 
@@ -208,6 +230,10 @@ class ChatJobOutput(BaseModel):
     created_at: int = Field(default=0, description="Unix epoch milliseconds when the job was created.")
     updated_at: int = Field(default=0, description="Unix epoch milliseconds when the job was last updated.")
     response_text: str = Field(default="", description="Completed assistant response text, if available.")
+    attachment_required: bool = Field(default=False, description="Whether the request required verified attachments.")
+    attachment_count: int = Field(default=0, description="Number of verified attachments submitted.")
+    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance: verified, missing, or not_requested.")
+    attachment_manifest: list[dict[str, Any]] = Field(default_factory=list, description="Redacted attachment manifest.")
     progress: dict[str, Any] | None = Field(default=None, description="Latest bounded activity/checklist snapshot.")
     remote_chat_id: str = Field(default="", description="Durable remote Notion chat/thread id, when available.")
     notion_thread_id: str = Field(default="", description="Compatibility alias for remote_chat_id.")
@@ -351,17 +377,166 @@ def cleanup_staged_mcp_file(path: Path, staged: bool) -> None:
         shutil.rmtree(path.parent)
 
 
+def _staged_file_ttl_seconds() -> int:
+    raw = os.getenv("MCP_NOTION2API_STAGED_FILE_TTL_SECONDS", "").strip()
+    try:
+        value = int(raw) if raw else DEFAULT_STAGED_FILE_TTL_SECONDS
+    except ValueError:
+        value = DEFAULT_STAGED_FILE_TTL_SECONDS
+    return max(60, min(value, 7 * 24 * 60 * 60))
+
+
+def _staged_file_root() -> Path:
+    from app.attachments.security import AttachmentPolicy
+
+    policy = AttachmentPolicy.from_env()
+    root = Path(policy.local_root).expanduser().resolve() / "chatgpt-file-uploads"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _cleanup_expired_staged_files(root: Path | None = None) -> None:
+    import shutil
+
+    root = root or _staged_file_root()
+    now = _now_ms()
+    for candidate in root.glob("stage-*"):
+        if not candidate.is_dir() or not STAGED_FILE_ID_RE.fullmatch(candidate.name):
+            continue
+        metadata_path = candidate / "stage.json"
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            expires_at = int(metadata.get("expires_at") or 0)
+        except Exception:
+            expires_at = 0
+        if expires_at and expires_at > now:
+            continue
+        with contextlib.suppress(OSError):
+            shutil.rmtree(candidate)
+
+
+def stage_mcp_transferred_file(file_path: str, filename: str | None = None) -> dict[str, Any]:
+    """Persist one connector-transferred file and return an opaque, expiring id."""
+
+    import hashlib
+    import mimetypes
+    import shutil
+    from app.attachments.errors import AttachmentError
+    from app.attachments.security import AttachmentPolicy, validate_content_type, validate_size
+
+    policy = AttachmentPolicy.from_env()
+    if not policy.enabled:
+        raise AttachmentError("Attachments are disabled for this server.", code="attachments_disabled", param="file")
+
+    source = Path(str(file_path or "")).expanduser().resolve()
+    if not source.exists() or not source.is_file():
+        raise AttachmentError(
+            f"Transferred file path does not exist: {file_path}",
+            code="attachment_not_found",
+            param="file",
+        )
+    validate_size(source.stat().st_size, policy)
+    safe_name = Path(str(filename or source.name)).name.strip()
+    if not safe_name or safe_name in {".", ".."}:
+        raise AttachmentError("A valid staged filename is required.", code="invalid_upload_filename", param="filename")
+
+    guessed_type, _ = mimetypes.guess_type(safe_name)
+    if Path(safe_name).suffix.lower() == ".zip":
+        guessed_type = "application/zip"
+    elif Path(safe_name).suffix.lower() == ".csv":
+        guessed_type = "text/csv"
+    content_type = validate_content_type(guessed_type or "application/octet-stream", policy)
+
+    root = _staged_file_root()
+    _cleanup_expired_staged_files(root)
+    staged_file_id = f"stage-{uuid.uuid4().hex}"
+    stage_dir = root / staged_file_id
+    stage_dir.mkdir(parents=False, exist_ok=False)
+    staged_path = stage_dir / safe_name
+    shutil.copy2(source, staged_path)
+    data = staged_path.read_bytes()
+    now = _now_ms()
+    metadata = {
+        "staged_file_id": staged_file_id,
+        "filename": safe_name,
+        "content_type": content_type,
+        "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "created_at": now,
+        "expires_at": now + (_staged_file_ttl_seconds() * 1000),
+    }
+    (stage_dir / "stage.json").write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+    return {**metadata, "path": str(staged_path)}
+
+
+def resolve_mcp_staged_files(staged_file_ids: list[str] | None) -> list[str]:
+    """Resolve opaque staged ids to validated service-host paths."""
+
+    import shutil
+    from app.attachments.errors import AttachmentError
+    from app.attachments.security import AttachmentPolicy, validate_attachment_count, validate_size
+
+    if not staged_file_ids:
+        return []
+    policy = AttachmentPolicy.from_env()
+    if not policy.enabled:
+        raise AttachmentError("Attachments are disabled for this server.", code="attachments_disabled", param="staged_file_ids")
+    validate_attachment_count(len(staged_file_ids), policy)
+    root = _staged_file_root()
+    _cleanup_expired_staged_files(root)
+    resolved: list[str] = []
+    now = _now_ms()
+    for raw_id in staged_file_ids:
+        staged_file_id = str(raw_id or "").strip().lower()
+        if not STAGED_FILE_ID_RE.fullmatch(staged_file_id):
+            raise AttachmentError("Invalid staged file id.", code="invalid_staged_file_id", param="staged_file_ids")
+        stage_dir = (root / staged_file_id).resolve()
+        try:
+            stage_dir.relative_to(root)
+        except ValueError as exc:
+            raise AttachmentError("Invalid staged file path.", code="invalid_staged_file_id", param="staged_file_ids") from exc
+        metadata_path = stage_dir / "stage.json"
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise AttachmentError("Staged file metadata was not found.", code="staged_file_not_found", param="staged_file_ids") from exc
+        if int(metadata.get("expires_at") or 0) <= now:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(stage_dir)
+            raise AttachmentError("Staged file id has expired.", code="staged_file_expired", param="staged_file_ids")
+        safe_name = Path(str(metadata.get("filename") or "")).name
+        staged_path = (stage_dir / safe_name).resolve()
+        try:
+            staged_path.relative_to(stage_dir)
+        except ValueError as exc:
+            raise AttachmentError("Invalid staged file metadata.", code="invalid_staged_file_id", param="staged_file_ids") from exc
+        if not staged_path.exists() or not staged_path.is_file():
+            raise AttachmentError("Staged file bytes were not found.", code="staged_file_not_found", param="staged_file_ids")
+        validate_size(staged_path.stat().st_size, policy)
+        resolved.append(str(staged_path))
+    return resolved
+
+
 FileAttachments = Annotated[
     list[str] | None,
     Field(
         default=None,
-        description="Files to attach to this request.",
-        json_schema_extra={
-            "items": {
-                "type": "string",
-                "format": "file",
-            }
-        },
+        description=(
+            "Service-host local file paths visible to the Notion2API process. Do not pass "
+            "ChatGPT /mnt/data paths here; stage each ChatGPT upload with notion2api_stage_file "
+            "or use notion2api_chat_with_file for one file."
+        ),
+    ),
+]
+
+StagedFileIds = Annotated[
+    list[str] | None,
+    Field(
+        default=None,
+        description=(
+            "Opaque ids returned by notion2api_stage_file. Use one staging call per ChatGPT "
+            "upload, then pass all returned ids here for a multi-file request."
+        ),
     ),
 ]
 
@@ -1103,6 +1278,7 @@ def _chat_pending_output(
         ),
         "error": job.get("error") if isinstance(job.get("error"), str) else None,
         "response_text": _job_response_text(job.get("response") if isinstance(job.get("response"), dict) else None),
+        **_attachment_provenance_from_job(job),
         "progress": job.get("progress") if isinstance(job.get("progress"), dict) else None,
         "remote_chat_id": remote_chat_id,
         "notion_thread_id": remote_chat_id,
@@ -1116,6 +1292,59 @@ def _manifest_int(value: Any) -> int | None:
     if isinstance(value, int) and value >= 0:
         return value
     return None
+
+
+def _attachment_provenance(required: bool, manifest: list[dict[str, Any]] | None) -> dict[str, Any]:
+    clean_manifest = list(manifest or [])
+    count = len(clean_manifest)
+    status = "verified" if count else ("missing" if required else "not_requested")
+    return {
+        "attachment_required": bool(required),
+        "attachment_count": count,
+        "attachment_transfer_status": status,
+        "attachment_manifest": clean_manifest,
+    }
+
+
+def _attachment_provenance_from_job(job: dict[str, Any]) -> dict[str, Any]:
+    manifest = job.get("attachment_manifest") if isinstance(job.get("attachment_manifest"), list) else []
+    return _attachment_provenance(bool(job.get("attachment_required")), manifest)
+
+
+def _required_attachment_error(
+    *,
+    client: Notion2APIClient,
+    model: str,
+    session_key: str,
+    conversation_id: str,
+    session_created: bool,
+    request_id: str,
+    wait_seconds: float,
+) -> dict[str, Any]:
+    provenance = _attachment_provenance(True, [])
+    return {
+        "ok": False,
+        "status_code": 422,
+        "model": model,
+        "actual_model": "",
+        "model_metadata": None,
+        **_runtime_audit(client, model),
+        "session_name": session_key,
+        "conversation_id": conversation_id,
+        "session_created": session_created,
+        "status": "error",
+        "request_id": request_id,
+        "job_id": request_id,
+        "retry_safe": False,
+        "wait_seconds": wait_seconds,
+        "poll_hint": "Stage or attach at least one file, then submit with a new request_id.",
+        "error": "This request required attachments, but no file bytes were verified before submission.",
+        "response_text": "",
+        **provenance,
+        "remote_chat_id": "",
+        "notion_thread_id": "",
+        "raw": {"code": "required_attachments_missing", "attachment_provenance": provenance},
+    }
 
 
 def _attachment_manifest_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1217,7 +1446,8 @@ def _chat_output_from_local_turn(
 ) -> dict[str, Any]:
     """Construct a terminal ChatOutput when local persistence beats SSE closure."""
 
-    requested_model = str(job.get("model") or "")
+    persisted_job = _load_chat_job(str(job.get("request_id") or "")) or job
+    requested_model = str(job.get("model") or persisted_job.get("model") or "")
     actual_model = str(turn.get("actual_model") or "")
     remote_chat_id = str(turn.get("remote_chat_id") or "")
     model_metadata: dict[str, Any] = {
@@ -1252,7 +1482,8 @@ def _chat_output_from_local_turn(
         "poll_hint": "",
         "error": None,
         "response_text": str(turn.get("response_text") or ""),
-        "progress": job.get("progress") if isinstance(job.get("progress"), dict) else None,
+        **_attachment_provenance_from_job(persisted_job),
+        "progress": persisted_job.get("progress") if isinstance(persisted_job.get("progress"), dict) else None,
         "remote_chat_id": remote_chat_id,
         "notion_thread_id": remote_chat_id,
         "raw": {
@@ -1405,6 +1636,11 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
         job["status"] = status
         job["updated_at"] = _now_ms()
         if response is not None:
+            provenance = _attachment_provenance_from_job(job)
+            response = {**response, **provenance}
+            raw_response = dict(response.get("raw") or {}) if isinstance(response.get("raw"), dict) else {}
+            raw_response["attachment_provenance"] = provenance
+            response["raw"] = raw_response
             job["response"] = response
             job["response_text"] = _job_response_text(response)
             remote_chat_id = str(response.get("remote_chat_id") or response.get("notion_thread_id") or "")
@@ -1446,6 +1682,7 @@ async def _submit_or_resume_chat_job(
         payload["metadata"] = metadata
     metadata.setdefault("mcp_request_id", normalized_id)
     attachment_manifest = _attachment_manifest_from_payload(payload)
+    attachment_required = bool(metadata.get("require_attachments"))
 
     existing = _load_chat_job(normalized_id)
     task = _CHAT_JOB_TASKS.get(normalized_id)
@@ -1464,7 +1701,6 @@ async def _submit_or_resume_chat_job(
                 session_created=False,
                 request_id=normalized_id,
                 wait_seconds=bounded_wait,
-                baseline_message_id=baseline_message_id,
             )
         if status == "running" and (task is None or task.done()):
             if task and task.done():
@@ -1498,6 +1734,17 @@ async def _submit_or_resume_chat_job(
                 request_id=normalized_id,
                 wait_seconds=bounded_wait,
             )
+
+    if task is None and attachment_required and not attachment_manifest:
+        return _required_attachment_error(
+            client=client,
+            model=model,
+            session_key=session_key,
+            conversation_id=conversation_id,
+            session_created=session_created,
+            request_id=normalized_id,
+            wait_seconds=bounded_wait,
+        )
 
     if task is None:
         conflict = _active_job_for_conversation(
@@ -1548,9 +1795,8 @@ async def _submit_or_resume_chat_job(
             "wait_seconds": bounded_wait,
             "baseline_message_id": baseline_message_id,
             **_runtime_audit(client, model),
+            **_attachment_provenance(attachment_required, attachment_manifest),
         }
-        if attachment_manifest:
-            job["attachment_manifest"] = attachment_manifest
         _persist_chat_job(job)
         _update_session_record(
             session_key,
@@ -1580,7 +1826,10 @@ async def _submit_or_resume_chat_job(
         if done:
             result = task.result()
             _finalize_chat_job(normalized_id, task)
-            return result
+            finalized = _load_chat_job(normalized_id)
+            if isinstance(finalized, dict) and isinstance(finalized.get("response"), dict):
+                return finalized["response"]
+            return {**result, **_attachment_provenance(attachment_required, attachment_manifest)}
 
     current = _load_chat_job(normalized_id) or {
         "request_id": normalized_id,
@@ -1660,6 +1909,7 @@ def _chat_job_output(
         created_at=int(job.get("created_at") or 0),
         updated_at=int(job.get("updated_at") or 0),
         response_text=str(job.get("response_text") or _job_response_text(response)),
+        **_attachment_provenance_from_job(job),
         progress=job.get("progress") if isinstance(job.get("progress"), dict) else None,
         remote_chat_id=str(job.get("remote_chat_id") or job.get("notion_thread_id") or ""),
         notion_thread_id=str(job.get("notion_thread_id") or job.get("remote_chat_id") or ""),
@@ -2090,7 +2340,8 @@ def create_server(
             "Start with notion2api_health or notion2api_list_models if service status or model IDs are uncertain. "
             "Omit session_name to generate a descriptive unique session for new work; use explicit 'op' only when the legacy shared session is intended. "
             "For pending jobs, poll notion2api_get_chat_job and report its progress snapshot without exposing raw private reasoning. "
-            "Do not claim Notion2API completed a model response unless a tool result includes ok=true and response_text/content."
+            "For ChatGPT uploads, stage one top-level file at a time with notion2api_stage_file; never pass /mnt/data paths through attachments. "
+            "Do not claim document-grounded completion unless attachment_transfer_status is verified and attachment_count is nonzero."
         ),
         host=host,
         port=port,
@@ -2146,6 +2397,8 @@ def create_server(
         request_id: str | None = None,
         wait_seconds: float | None = None,
         attachments: FileAttachments = None,
+        staged_file_ids: StagedFileIds = None,
+        require_attachments: bool = False,
     ) -> ChatOutput:
         resolved_session_name = _infer_session_name(
             session_name,
@@ -2159,7 +2412,8 @@ def create_server(
             continue_from_request_id=continue_from_request_id,
         )
         messages = _explicit_prompt_messages(prompt, system_prompt)
-        prepared = prepare_mcp_file_attachments(attachments)
+        local_paths = [*(attachments or []), *resolve_mcp_staged_files(staged_file_ids)]
+        prepared = prepare_mcp_file_attachments(local_paths)
         payload = {
             "model": model,
             "messages": messages,
@@ -2170,6 +2424,7 @@ def create_server(
                 "persist_remote_chat": persist_remote_chat,
                 "mcp_session_name": session_key,
                 "continue_from_request_id": continue_from_request_id,
+                "require_attachments": require_attachments,
             },
         }
         if prepared:
@@ -2185,6 +2440,31 @@ def create_server(
             request_id=request_id,
             wait_seconds=wait_seconds,
         )
+
+    @server.tool(
+        description=(
+            "Stage one ChatGPT-uploaded file and return an opaque staged_file_id. Call this once "
+            "per uploaded file, then pass all ids to notion2api_chat or notion2api_chat_completion."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_stage_file(
+        file: TransferredFile,
+        filename: str | None = None,
+    ) -> StageFileOutput:
+        try:
+            staged = stage_mcp_transferred_file(file, filename)
+            return StageFileOutput(
+                ok=True,
+                staged_file_id=str(staged.get("staged_file_id") or ""),
+                filename=str(staged.get("filename") or ""),
+                content_type=str(staged.get("content_type") or ""),
+                size_bytes=int(staged.get("size_bytes") or 0),
+                sha256=str(staged.get("sha256") or ""),
+                expires_at=int(staged.get("expires_at") or 0),
+            )
+        except Exception as exc:
+            return StageFileOutput(ok=False, error=f"{type(exc).__name__}: {exc}")
 
     @server.tool(
         description=(
@@ -2218,6 +2498,7 @@ def create_server(
             request_id=request_id,
             wait_seconds=wait_seconds,
             attachments=[file],
+            require_attachments=True,
         )
 
     @server.tool(
@@ -2274,6 +2555,8 @@ def create_server(
         request_id: str | None = None,
         wait_seconds: float | None = None,
         attachments: FileAttachments = None,
+        staged_file_ids: StagedFileIds = None,
+        require_attachments: bool = False,
     ) -> ChatOutput:
         explicit_messages = _copy_explicit_messages(messages)
         inferred_prompt = _prompt_text_from_messages(explicit_messages)
@@ -2288,7 +2571,8 @@ def create_server(
             conversation_id=conversation_id,
             continue_from_request_id=continue_from_request_id,
         )
-        prepared = prepare_mcp_file_attachments(attachments)
+        local_paths = [*(attachments or []), *resolve_mcp_staged_files(staged_file_ids)]
+        prepared = prepare_mcp_file_attachments(local_paths)
         payload = {
             "model": model,
             "messages": explicit_messages,
@@ -2299,6 +2583,7 @@ def create_server(
                 "persist_remote_chat": persist_remote_chat,
                 "mcp_session_name": session_key,
                 "continue_from_request_id": continue_from_request_id,
+                "require_attachments": require_attachments,
             },
         }
         if prepared:
@@ -2322,16 +2607,35 @@ def create_server(
         instructions: str | None = None,
         persist_remote_chat: bool = True,
         attachments: FileAttachments = None,
+        staged_file_ids: StagedFileIds = None,
+        require_attachments: bool = False,
     ) -> ResponsesOutput:
         validated_input = validate_prompt_text(input_text, param="input_text")
         validated_instructions = validate_prompt_text(
             instructions, param="instructions", allow_none=True
         )
-        prepared = prepare_mcp_file_attachments(attachments)
+        local_paths = [*(attachments or []), *resolve_mcp_staged_files(staged_file_ids)]
+        prepared = prepare_mcp_file_attachments(local_paths)
+        manifest = _attachment_manifest_from_payload({"attachments": prepared})
+        provenance = _attachment_provenance(require_attachments, manifest)
+        if require_attachments and not manifest:
+            return ResponsesOutput(
+                ok=False,
+                status_code=422,
+                model=model,
+                requested_model=model,
+                **_runtime_audit(client, model),
+                error="This request required attachments, but no file bytes were verified before submission.",
+                **provenance,
+                raw={"code": "required_attachments_missing", "attachment_provenance": provenance},
+            )
         payload: dict[str, Any] = {
             "model": model,
             "input": validated_input,
-            "metadata": {"persist_remote_chat": persist_remote_chat},
+            "metadata": {
+                "persist_remote_chat": persist_remote_chat,
+                "require_attachments": require_attachments,
+            },
         }
         if validated_instructions:
             payload["instructions"] = validated_instructions
@@ -2346,7 +2650,9 @@ def create_server(
             "model_metadata": data.get("model_metadata") if isinstance(data.get("model_metadata"), dict) else None,
             **_runtime_audit(client, model),
             "response_text": _extract_responses_text(data),
-            "raw": data,
+            "error": _error_summary(data),
+            **provenance,
+            "raw": {**data, "attachment_provenance": provenance},
         }
 
     @server.tool(description="List named persistent Notion2API MCP chat sessions with local and remote identifiers.", structured_output=True)

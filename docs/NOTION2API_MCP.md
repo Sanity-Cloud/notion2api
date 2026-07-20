@@ -76,25 +76,48 @@ Long requests return `pending` after the bounded wait. Poll `notion2api_get_chat
 
 ## File attachments and ZIP uploads
 
-The chat tools support file attachments through their `attachments` argument:
+Notion2API distinguishes **service-host paths** from **ChatGPT-uploaded files**. These are separate transport boundaries.
 
-- `notion2api_chat(..., attachments=[...])`
-- `notion2api_chat_completion(..., attachments=[...])`
-- `notion2api_responses(..., attachments=[...])`
+### Service-host local paths
 
-Each attachment is converted into the OpenAI-compatible Notion2API HTTP shape and forwarded to `/v1/chat/completions` or `/v1/responses`:
+The `attachments` argument accepts only paths that already exist on the machine running Notion2API:
 
 ```json
-[
-  {
-    "name": "source.zip",
-    "content_type": "application/x-zip-compressed",
-    "path": "X:\\Code\\.ai-runs\\<run-id>\\source.zip"
-  }
-]
+{
+  "prompt": "Review this source package.",
+  "attachments": ["X:\\Code\\.ai-runs\\<run-id>\\source.zip"],
+  "require_attachments": true
+}
 ```
 
-For local-path attachments, the backend must be started with attachment support enabled and a restricted local root:
+Do not place ChatGPT `/mnt/data/...` paths in `attachments`. Those paths exist in ChatGPT's sandbox, not on the Windows service host.
+
+### ChatGPT-uploaded files
+
+For one file, call `notion2api_chat_with_file`. This route requires a verified attachment and fails closed when no file bytes arrive.
+
+For multiple files:
+
+1. Call `notion2api_stage_file(file=...)` once for each uploaded file.
+2. Collect the returned opaque `staged_file_id` values.
+3. Call `notion2api_chat(..., staged_file_ids=[...], require_attachments=true)` or `notion2api_chat_completion(...)`.
+
+Staged ids expire after 24 hours by default. `MCP_NOTION2API_STAGED_FILE_TTL_SECONDS` may set a lifetime from 60 seconds through 7 days.
+
+### Attachment provenance and fail-closed behavior
+
+Every chat job and poll result exposes:
+
+- `attachment_required`
+- `attachment_count`
+- `attachment_transfer_status`: `verified`, `missing`, or `not_requested`
+- `attachment_manifest`: redacted names, MIME types, sizes, and sources
+
+A document-grounded workflow must set `require_attachments=true`. The wrapper returns status `422` with `required_attachments_missing` instead of submitting a text-only request when no attachment was verified. Do not describe a result as document-grounded unless `attachment_transfer_status` is `verified` and `attachment_count` is greater than zero.
+
+### Backend policy
+
+The backend must be started with attachment support enabled and a restricted local root:
 
 ```powershell
 $env:ENABLE_ATTACHMENTS = 'true'
@@ -103,17 +126,9 @@ $env:ATTACHMENT_LOCAL_ROOT = 'X:\Code\.ai-runs'
 $env:ATTACHMENT_ALLOWED_MIME_TYPES = 'application/pdf,application/zip,application/x-zip-compressed,text/csv,image/png,image/jpeg,image/gif,image/webp,image/heic'
 ```
 
-ZIP files require a Notion-specific upload descriptor override. Even if a caller supplies `application/zip`, Notion2API normalizes ZIP descriptors to `application/x-zip-compressed` and includes `allowUnsupportedTypes: true` when calling `getUploadFileUrlForAssistantChatTranscriptUpload`. Without both fields, Notion rejects the descriptor with `ValidationError: File type not allowed`.
+Each validated file is converted into the OpenAI-compatible attachment shape and forwarded to `/v1/chat/completions` or `/v1/responses`. ZIP descriptors are normalized to `application/x-zip-compressed` and include `allowUnsupportedTypes: true`.
 
-MCP proof flow:
-
-1. Call `notion2api_chat` or `notion2api_chat_completion` with `persist_remote_chat=true`.
-2. Pass the ZIP under `attachments`.
-3. Notion2API stages the bytes with the assistant-chat upload endpoint.
-4. The chat request is sent to `runInferenceTranscript` and the remote thread is preserved.
-5. Verify via Notion chat history sync or the visible Notion AI sidebar.
-
-Important limitation: this proves that Notion accepts and persists the ZIP attachment workflow. Current Notion AI models may still answer that they cannot inspect ZIP contents. Treat ZIP upload success and model-level ZIP comprehension as separate behaviors.
+Successful local staging does not prove successful Notion ingestion. The upstream sequence is descriptor creation, multipart upload, processing, signed URL resolution, and `runInferenceTranscript`. If Notion rejects the final inference after staging, Notion2API reports `runInferenceTranscript_after_attachment_staging` and classifies deterministic HTTP 400 responses as `UPSTREAM_PROTOCOL_REJECTED` rather than reporting document analysis as successful.
 
 ## Security note
 
