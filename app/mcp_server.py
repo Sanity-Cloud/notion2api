@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Annotated
+from typing import Any, Annotated, Literal
 
 import httpx
 from pydantic import BaseModel, Field
@@ -58,10 +58,9 @@ DEFAULT_CHAT_JOB_STATE_PATH = Path(
         str(DEFAULT_SESSION_STATE_PATH.with_name(".notion2api_mcp_chat_jobs.json")),
     )
 )
-DEFAULT_CHAT_WAIT_SECONDS = 45.0
-MAX_CHAT_WAIT_SECONDS = 50.0
 DEFAULT_CHAT_STALL_SECONDS = 180.0
 MAX_PROGRESS_REASONING_CHARS = 200_000
+MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS = 4_000
 DEFAULT_STAGED_FILE_TTL_SECONDS = 24 * 60 * 60
 STAGED_FILE_ID_RE = re.compile(r"^stage-[a-f0-9]{32}$")
 SESSION_STATE_VERSION = 2
@@ -110,20 +109,20 @@ class ChatOutput(BaseModel):
     session_state_path: str = Field(default="", description="Path to the MCP session state file.")
     local_conversations_db: str = Field(default="", description="Expected local Notion2API conversations DB path.")
     imported_history_db: str = Field(default="", description="Expected imported Notion history DB path.")
-    session_name: str | None = Field(default=None, description="Normalized MCP session name. Omitted names are generated; explicit 'op' is the legacy shared session.")
+    session_name: str | None = Field(default=None, description="Normalized MCP session name. Omitted and legacy 'op' names are generated.")
     conversation_id: str | None = Field(default=None, description="Stable Notion2API conversation id used for the request.")
     session_created: bool | None = Field(default=None, description="True when the wrapper created a new MCP conversation binding.")
     status: str = Field(default="completed", description="MCP wrapper job status: completed, pending, running, error, stale, or cancelled.")
     request_id: str | None = Field(default=None, description="Idempotency key used to deduplicate or poll this MCP chat request.")
     job_id: str | None = Field(default=None, description="Pollable job id. Currently identical to request_id.")
     retry_safe: bool = Field(default=False, description="True when retrying with the same request_id is safe and will not resubmit.")
-    wait_seconds: float | None = Field(default=None, description="Bounded wait used before returning pending.")
+    wait_seconds: float | None = Field(default=None, description="Compatibility field. MCP chat submissions always return immediately for polling.")
     poll_hint: str = Field(default="", description="Human-readable polling instruction for pending or stale jobs.")
     error: str | None = Field(default=None, description="Error summary if the backend call failed or the job became stale.")
     response_text: str = Field(default="", description="Extracted assistant response text.")
-    attachment_required: bool = Field(default=False, description="Whether this request required at least one verified attachment.")
+    attachment_required: bool = Field(default=False, description="Whether this request was required to include at least one verified attachment.")
     attachment_count: int = Field(default=0, description="Number of attachments verified before submission.")
-    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance: verified, missing, or not_requested.")
+    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance state: verified, missing, or not_requested.")
     attachment_manifest: list[dict[str, Any]] = Field(default_factory=list, description="Redacted manifest of attachments actually submitted.")
     progress: dict[str, Any] | None = Field(default=None, description="Bounded public activity snapshot captured while the job runs.")
     remote_chat_id: str = Field(default="", description="Durable remote Notion chat/thread id, when available.")
@@ -146,7 +145,7 @@ class UploadPageFileOutput(BaseModel):
 
 class StageFileOutput(BaseModel):
     ok: bool = Field(description="Whether the connector-transferred file was staged successfully.")
-    staged_file_id: str = Field(default="", description="Opaque id accepted by later chat tools.")
+    staged_file_id: str = Field(default="", description="Opaque id used by later chat calls.")
     filename: str = Field(default="", description="Sanitized staged filename.")
     content_type: str = Field(default="", description="Validated MIME type.")
     size_bytes: int = Field(default=0, description="Validated file size.")
@@ -169,10 +168,10 @@ class ResponsesOutput(BaseModel):
     imported_history_db: str = Field(default="", description="Expected imported Notion history DB path.")
     response_text: str = Field(default="", description="Extracted response output text.")
     error: str | None = Field(default=None, description="Error summary if the responses request failed.")
-    attachment_required: bool = Field(default=False, description="Whether at least one verified attachment was required.")
+    attachment_required: bool = Field(default=False, description="Whether at least one attachment was required.")
     attachment_count: int = Field(default=0, description="Number of verified attachments submitted.")
-    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance: verified, missing, or not_requested.")
-    attachment_manifest: list[dict[str, Any]] = Field(default_factory=list, description="Redacted attachment manifest.")
+    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance state: verified, missing, or not_requested.")
+    attachment_manifest: list[dict[str, Any]] = Field(default_factory=list, description="Redacted manifest of submitted attachments.")
     raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend response.")
 
 
@@ -182,6 +181,24 @@ class ListSessionsOutput(BaseModel):
     default_session: str = Field(description="Default session policy. New chats are auto-named; explicit op remains a shared legacy alias.")
     state_path: str = Field(description="Path to the MCP session state file.")
     sessions: list[dict[str, Any]] = Field(default_factory=list, description="Known named MCP session bindings and remote thread metadata.")
+
+
+class UnsafeUrlContinuationOutput(BaseModel):
+    ok: bool = Field(description="Whether Notion accepted and applied the allow-once continuation request.")
+    continued: bool = Field(default=False, description="Whether a pending inference was resumed.")
+    approved: bool = Field(default=False, description="Whether the requested tool-step confirmation was actually applied.")
+    session_name: str = Field(default="", description="Resolved MCP session name, when used.")
+    thread_id: str = Field(default="", description="Remote Notion thread id.")
+    tool_step_ids: list[str] = Field(default_factory=list, description="Confirmed Notion agent tool-result step ids.")
+    urls: list[str] = Field(default_factory=list, description="Pending URLs discovered from Notion sync records.")
+    trace_id: str = Field(default="", description="Trace id of the resumed inference.")
+    stream_completed: bool = Field(default=False, description="Whether the resumed inference stream completed.")
+    event_count: int = Field(default=0, description="Number of resumed inference events received.")
+    event_types: list[str] = Field(default_factory=list, description="Distinct resumed inference event types.")
+    applied_tool_step_ids: list[str] = Field(default_factory=list, description="Requested step ids observed in an applied state after continuation.")
+    unresolved_tool_step_ids: list[str] = Field(default_factory=list, description="Requested step ids that remained confirmation-gated after continuation.")
+    reason: str = Field(default="", description="Approval outcome or reason no continuation occurred.")
+    raw: dict[str, Any] = Field(default_factory=dict, description="Raw Notion2API endpoint response.")
 
 
 class SessionActionOutput(BaseModel):
@@ -229,11 +246,13 @@ class ChatJobOutput(BaseModel):
     endpoint: str = Field(default="", description="Backend endpoint used by the job.")
     created_at: int = Field(default=0, description="Unix epoch milliseconds when the job was created.")
     updated_at: int = Field(default=0, description="Unix epoch milliseconds when the job was last updated.")
-    response_text: str = Field(default="", description="Completed assistant response text, if available.")
-    attachment_required: bool = Field(default=False, description="Whether the request required verified attachments.")
+    response_text: str = Field(default="", description="Bounded completed-response preview unless include_response is true.")
+    response_chars: int = Field(default=0, description="Full completed-response character count.")
+    response_truncated: bool = Field(default=False, description="Whether response_text is a bounded preview.")
+    attachment_required: bool = Field(default=False, description="Whether the request required one or more verified attachments.")
     attachment_count: int = Field(default=0, description="Number of verified attachments submitted.")
-    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance: verified, missing, or not_requested.")
-    attachment_manifest: list[dict[str, Any]] = Field(default_factory=list, description="Redacted attachment manifest.")
+    attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance state: verified, missing, or not_requested.")
+    attachment_manifest: list[dict[str, Any]] = Field(default_factory=list, description="Redacted manifest of submitted attachments.")
     progress: dict[str, Any] | None = Field(default=None, description="Latest bounded activity/checklist snapshot.")
     remote_chat_id: str = Field(default="", description="Durable remote Notion chat/thread id, when available.")
     notion_thread_id: str = Field(default="", description="Compatibility alias for remote_chat_id.")
@@ -538,6 +557,66 @@ StagedFileIds = Annotated[
             "upload, then pass all returned ids here for a multi-file request."
         ),
     ),
+]
+
+MCPModel = Annotated[
+    str,
+    Field(
+        description=(
+            "Model id. Omit this argument to use Terra. Only pass another model when the "
+            "user explicitly requests that model."
+        )
+    ),
+]
+
+MCPSessionName = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Session name. Omit this argument to generate a task-specific session. The legacy "
+            "name 'op' is also normalized to a generated session."
+        )
+    ),
+]
+
+MCPWaitSeconds = Annotated[
+    float | None,
+    Field(
+        description=(
+            "Deprecated compatibility argument; it is ignored. Chat submissions return "
+            "immediately with a request_id to poll via notion2api_get_chat_job."
+        )
+    ),
+]
+
+MCPNotionMode = Annotated[
+    Literal["default", "ask", "research"],
+    Field(description="Notion AI mode: default can search and edit; ask is read-only; research enables deeper research."),
+]
+MCPNotionTask = Annotated[
+    Literal["visualize", "create_slides", "spreadsheet", "deep_research"] | None,
+    Field(description="Optional Notion AI task preset for visualizations, slide decks, spreadsheets, or deep research."),
+]
+MCPNotionSources = Annotated[
+    list[str] | None,
+    Field(
+        description=(
+            "Notion AI source scopes. Common values: all, notion, web, notion-help-center, github, "
+            "gmail, google-calendar, and google-drive. Omit to use Notion's defaults."
+        )
+    ),
+]
+MCPWebAccess = Annotated[
+    bool | None,
+    Field(description="Explicitly enable or disable Notion AI web search. Omit to use the mode/source default."),
+]
+MCPNotionPersona = Annotated[
+    Literal["sidekick", "minimalist", "analyst"] | None,
+    Field(description="Optional response-style preset: warm, concise, or structured and logical."),
+]
+MCPNotionInstructions = Annotated[
+    str | None,
+    Field(description="Optional per-request Notion AI instructions, applied in addition to the selected task/persona."),
 ]
 
 
@@ -860,16 +939,6 @@ def _safe_float(value: Any, default: float) -> float:
         return default
 
 
-def _configured_chat_wait_seconds() -> float:
-    raw = os.getenv("MCP_NOTION2API_CALL_WAIT_SECONDS", "")
-    return _safe_float(raw, DEFAULT_CHAT_WAIT_SECONDS) if raw.strip() else DEFAULT_CHAT_WAIT_SECONDS
-
-
-def _configured_chat_max_wait_seconds() -> float:
-    raw = os.getenv("MCP_NOTION2API_MAX_CALL_WAIT_SECONDS", "")
-    return _safe_float(raw, MAX_CHAT_WAIT_SECONDS) if raw.strip() else MAX_CHAT_WAIT_SECONDS
-
-
 def _configured_chat_stall_seconds() -> float:
     raw = os.getenv("MCP_NOTION2API_STALL_SECONDS", "")
     configured = _safe_float(raw, DEFAULT_CHAT_STALL_SECONDS) if raw.strip() else DEFAULT_CHAT_STALL_SECONDS
@@ -877,9 +946,9 @@ def _configured_chat_stall_seconds() -> float:
 
 
 def _bounded_chat_wait_seconds(wait_seconds: float | None) -> float:
-    requested = _configured_chat_wait_seconds() if wait_seconds is None else _safe_float(wait_seconds, DEFAULT_CHAT_WAIT_SECONDS)
-    maximum = max(0.0, min(_configured_chat_max_wait_seconds(), 55.0))
-    return max(0.0, min(requested, maximum))
+    # Retain the argument for compatibility with older MCP clients, but never
+    # hold an MCP request open while the backend job runs.
+    return 0.0
 
 
 def _normalize_request_id(request_id: str | None = None) -> str:
@@ -903,7 +972,12 @@ def _infer_session_name(
     request_id: str | None = None,
 ) -> str:
     explicit = str(session_name or "").strip()
-    if explicit and explicit.lower() not in {"auto", "inferred", "new"}:
+    if explicit and explicit.lower() not in {
+        "auto",
+        "inferred",
+        "new",
+        LEGACY_SHARED_SESSION_NAME,
+    }:
         return _session_key(explicit)
 
     normalized = re.sub(r"\s+", " ", str(prompt or "")).strip().lower()
@@ -1343,7 +1417,10 @@ def _required_attachment_error(
         **provenance,
         "remote_chat_id": "",
         "notion_thread_id": "",
-        "raw": {"code": "required_attachments_missing", "attachment_provenance": provenance},
+        "raw": {
+            "code": "required_attachments_missing",
+            "attachment_provenance": provenance,
+        },
     }
 
 
@@ -1568,7 +1645,49 @@ async def _run_chat_completion_job(
         while True:
             done, _pending = await asyncio.wait({stream_task}, timeout=0.75)
             if done:
-                data = stream_task.result()
+                try:
+                    data = stream_task.result()
+                except Exception:
+                    turn = await asyncio.to_thread(
+                        _completed_turn_after_checkpoint,
+                        conversation_id,
+                        baseline_message_id,
+                    )
+                    if turn is not None:
+                        return _chat_output_from_local_turn(
+                            {
+                                **_runtime_audit(client, model),
+                                "model": model,
+                                "session_name": session_key,
+                                "conversation_id": conversation_id,
+                                "session_created": session_created,
+                                "request_id": request_id,
+                                "job_id": request_id,
+                                "wait_seconds": wait_seconds,
+                            },
+                            turn,
+                        )
+                    raise
+                if not data.get("ok", False):
+                    turn = await asyncio.to_thread(
+                        _completed_turn_after_checkpoint,
+                        conversation_id,
+                        baseline_message_id,
+                    )
+                    if turn is not None:
+                        return _chat_output_from_local_turn(
+                            {
+                                **_runtime_audit(client, model),
+                                "model": model,
+                                "session_name": session_key,
+                                "conversation_id": conversation_id,
+                                "session_created": session_created,
+                                "request_id": request_id,
+                                "job_id": request_id,
+                                "wait_seconds": wait_seconds,
+                            },
+                            turn,
+                        )
                 return _chat_output_from_backend(
                     data=data,
                     client=client,
@@ -1687,6 +1806,7 @@ async def _submit_or_resume_chat_job(
     existing = _load_chat_job(normalized_id)
     task = _CHAT_JOB_TASKS.get(normalized_id)
     if existing:
+        baseline_message_id = int(existing.get("baseline_message_id") or 0)
         status = str(existing.get("status") or "")
         response = existing.get("response") if isinstance(existing.get("response"), dict) else None
         if status in {"completed", "error", "cancelled"}:
@@ -1701,6 +1821,7 @@ async def _submit_or_resume_chat_job(
                 session_created=False,
                 request_id=normalized_id,
                 wait_seconds=bounded_wait,
+                baseline_message_id=int(existing.get("baseline_message_id") or 0),
             )
         if status == "running" and (task is None or task.done()):
             if task and task.done():
@@ -1858,6 +1979,7 @@ async def _submit_or_resume_chat_job(
 def _chat_job_output(
     request_id: str,
     include_last_response: bool = False,
+    include_response: bool = False,
     *,
     increment_poll: bool = True,
 ) -> ChatJobOutput:
@@ -1888,6 +2010,17 @@ def _chat_job_output(
     job = _refresh_chat_job_health(job, increment_poll=increment_poll)
     _persist_chat_job(job)
     response = job.get("response") if isinstance(job.get("response"), dict) else None
+    full_response_text = str(job.get("response_text") or _job_response_text(response))
+    response_text = (
+        full_response_text
+        if include_response
+        else full_response_text[:MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS]
+    )
+    raw_job = {
+        key: value
+        for key, value in job.items()
+        if key not in {"response", "response_text"}
+    }
     last_response = None
     if include_last_response:
         last = _read_last_local_response(
@@ -1908,7 +2041,9 @@ def _chat_job_output(
         endpoint=str(job.get("endpoint") or ""),
         created_at=int(job.get("created_at") or 0),
         updated_at=int(job.get("updated_at") or 0),
-        response_text=str(job.get("response_text") or _job_response_text(response)),
+        response_text=response_text,
+        response_chars=len(full_response_text),
+        response_truncated=len(response_text) < len(full_response_text),
         **_attachment_provenance_from_job(job),
         progress=job.get("progress") if isinstance(job.get("progress"), dict) else None,
         remote_chat_id=str(job.get("remote_chat_id") or job.get("notion_thread_id") or ""),
@@ -1917,9 +2052,9 @@ def _chat_job_output(
         stalled_for_seconds=float(job.get("stalled_for_seconds") or 0.0),
         dead_loop_suspected=bool(job.get("dead_loop_suspected")),
         cancel_recommended=bool(job.get("cancel_recommended")),
-        response=response,
+        response=response if include_response else None,
         error=job.get("error") if isinstance(job.get("error"), str) else None,
-        raw_job=job,
+        raw_job=raw_job,
         last_response=last_response,
     )
 
@@ -2338,8 +2473,8 @@ def create_server(
         instructions=(
             "Use these tools to call the user's private local Notion2API service. "
             "Start with notion2api_health or notion2api_list_models if service status or model IDs are uncertain. "
-            "Omit session_name to generate a descriptive unique session for new work; use explicit 'op' only when the legacy shared session is intended. "
-            "For pending jobs, poll notion2api_get_chat_job and report its progress snapshot without exposing raw private reasoning. "
+            "Omit session_name to generate a descriptive unique session for new work; legacy 'op' values are also auto-generated. "
+            "Chat submissions return immediately. Poll notion2api_get_chat_job and report its progress snapshot without exposing raw private reasoning. "
             "For ChatGPT uploads, stage one top-level file at a time with notion2api_stage_file; never pass /mnt/data paths through attachments. "
             "Do not claim document-grounded completion unless attachment_transfer_status is verified and attachment_count is nonzero."
         ),
@@ -2384,21 +2519,27 @@ def create_server(
             error=_error_summary(data),
         )
 
-    @server.tool(description="Send a prompt to Notion2API using a durable session. Continue by session_name, conversation_id, or continue_from_request_id; the model may change between turns.", structured_output=True)
+    @server.tool(description="Submit a prompt to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id.", structured_output=True)
     async def notion2api_chat(
         prompt: str,
-        model: str = DEFAULT_MODEL,
+        model: MCPModel = DEFAULT_MODEL,
         system_prompt: str | None = None,
         persist_remote_chat: bool = True,
-        session_name: str | None = None,
+        session_name: MCPSessionName = None,
         conversation_id: str | None = None,
         continue_from_request_id: str | None = None,
         start_new_chat: bool = False,
         request_id: str | None = None,
-        wait_seconds: float | None = None,
+        wait_seconds: MCPWaitSeconds = None,
         attachments: FileAttachments = None,
         staged_file_ids: StagedFileIds = None,
         require_attachments: bool = False,
+        mode: MCPNotionMode = "default",
+        task: MCPNotionTask = None,
+        sources: MCPNotionSources = None,
+        web_access: MCPWebAccess = None,
+        persona: MCPNotionPersona = None,
+        notion_instructions: MCPNotionInstructions = None,
     ) -> ChatOutput:
         resolved_session_name = _infer_session_name(
             session_name,
@@ -2420,6 +2561,12 @@ def create_server(
             "stream": False,
             "conversation_id": resolved_conversation_id,
             "session_name": session_key,
+            "notion_mode": mode,
+            "notion_task": task,
+            "notion_sources": sources,
+            "web_access": web_access,
+            "notion_persona": persona,
+            "notion_instructions": notion_instructions,
             "metadata": {
                 "persist_remote_chat": persist_remote_chat,
                 "mcp_session_name": session_key,
@@ -2469,22 +2616,29 @@ def create_server(
     @server.tool(
         description=(
             "Send one ChatGPT-uploaded file with a prompt to Notion2API. Use this tool for "
-            "files located in ChatGPT /mnt/data; the top-level file argument triggers connector transfer."
+            "files located in ChatGPT /mnt/data; the top-level file argument triggers connector transfer. "
+            "Terra is the default; omit model unless the user explicitly requests another."
         ),
         structured_output=True,
     )
     async def notion2api_chat_with_file(
         file: TransferredFile,
         prompt: str,
-        model: str = DEFAULT_MODEL,
+        model: MCPModel = DEFAULT_MODEL,
         system_prompt: str | None = None,
         persist_remote_chat: bool = True,
-        session_name: str | None = None,
+        session_name: MCPSessionName = None,
         conversation_id: str | None = None,
         continue_from_request_id: str | None = None,
         start_new_chat: bool = False,
         request_id: str | None = None,
-        wait_seconds: float | None = None,
+        wait_seconds: MCPWaitSeconds = None,
+        mode: MCPNotionMode = "default",
+        task: MCPNotionTask = None,
+        sources: MCPNotionSources = None,
+        web_access: MCPWebAccess = None,
+        persona: MCPNotionPersona = None,
+        notion_instructions: MCPNotionInstructions = None,
     ) -> ChatOutput:
         return await notion2api_chat(
             prompt=prompt,
@@ -2499,6 +2653,12 @@ def create_server(
             wait_seconds=wait_seconds,
             attachments=[file],
             require_attachments=True,
+            mode=mode,
+            task=task,
+            sources=sources,
+            web_access=web_access,
+            persona=persona,
+            notion_instructions=notion_instructions,
         )
 
     @server.tool(
@@ -2543,20 +2703,26 @@ def create_server(
             if staged_path is not None:
                 cleanup_staged_mcp_file(staged_path, was_staged)
 
-    @server.tool(description="Call Notion2API with explicit messages using a durable session. Continue by session_name, conversation_id, or continue_from_request_id; the model may change between turns.", structured_output=True)
+    @server.tool(description="Submit explicit messages to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id.", structured_output=True)
     async def notion2api_chat_completion(
         messages: list[dict[str, Any]],
-        model: str = DEFAULT_MODEL,
+        model: MCPModel = DEFAULT_MODEL,
         persist_remote_chat: bool = True,
-        session_name: str | None = None,
+        session_name: MCPSessionName = None,
         conversation_id: str | None = None,
         continue_from_request_id: str | None = None,
         start_new_chat: bool = False,
         request_id: str | None = None,
-        wait_seconds: float | None = None,
+        wait_seconds: MCPWaitSeconds = None,
         attachments: FileAttachments = None,
         staged_file_ids: StagedFileIds = None,
         require_attachments: bool = False,
+        mode: MCPNotionMode = "default",
+        task: MCPNotionTask = None,
+        sources: MCPNotionSources = None,
+        web_access: MCPWebAccess = None,
+        persona: MCPNotionPersona = None,
+        notion_instructions: MCPNotionInstructions = None,
     ) -> ChatOutput:
         explicit_messages = _copy_explicit_messages(messages)
         inferred_prompt = _prompt_text_from_messages(explicit_messages)
@@ -2579,6 +2745,12 @@ def create_server(
             "stream": False,
             "conversation_id": resolved_conversation_id,
             "session_name": session_key,
+            "notion_mode": mode,
+            "notion_task": task,
+            "notion_sources": sources,
+            "web_access": web_access,
+            "notion_persona": persona,
+            "notion_instructions": notion_instructions,
             "metadata": {
                 "persist_remote_chat": persist_remote_chat,
                 "mcp_session_name": session_key,
@@ -2600,10 +2772,10 @@ def create_server(
             wait_seconds=wait_seconds,
         )
 
-    @server.tool(description="Call Notion2API /v1/responses and return extracted output text plus the raw response.", structured_output=True)
+    @server.tool(description="Call Notion2API /v1/responses and return extracted output text plus the raw response. Terra is the default; omit model unless the user explicitly requests another.", structured_output=True)
     async def notion2api_responses(
         input_text: str,
-        model: str = DEFAULT_MODEL,
+        model: MCPModel = DEFAULT_MODEL,
         instructions: str | None = None,
         persist_remote_chat: bool = True,
         attachments: FileAttachments = None,
@@ -2650,7 +2822,6 @@ def create_server(
             "model_metadata": data.get("model_metadata") if isinstance(data.get("model_metadata"), dict) else None,
             **_runtime_audit(client, model),
             "response_text": _extract_responses_text(data),
-            "error": _error_summary(data),
             **provenance,
             "raw": {**data, "attachment_provenance": provenance},
         }
@@ -2668,6 +2839,51 @@ def create_server(
             default_session=AUTO_SESSION_LABEL,
             state_path=str(DEFAULT_SESSION_STATE_PATH),
             sessions=items,
+        )
+
+    @server.tool(description="Grant Notion's Allow once confirmation for pending connections.web.loadPage calls and resume the interrupted inference through runInferenceTranscript. Resolves the remote thread from a named MCP session unless notion_thread_id is provided.", structured_output=True)
+    async def notion2api_allow_unsafe_url_once(
+        session_name: str = DEFAULT_SESSION_NAME,
+        notion_thread_id: str | None = None,
+        tool_step_ids: list[str] | None = None,
+    ) -> UnsafeUrlContinuationOutput:
+        key = _session_key(session_name)
+        record = _load_session_records().get(key) or {}
+        thread_id = str(
+            notion_thread_id
+            or record.get("remote_chat_id")
+            or record.get("notion_thread_id")
+            or ""
+        ).strip()
+        if not thread_id:
+            return UnsafeUrlContinuationOutput(
+                ok=False,
+                session_name=key,
+                reason="session_has_no_remote_notion_thread",
+            )
+        data = await client.post(
+            "/v1/notion/unsafe_url/allow_once",
+            {
+                "thread_id": thread_id,
+                "tool_step_ids": list(tool_step_ids or []),
+            },
+        )
+        return UnsafeUrlContinuationOutput(
+            ok=bool(data.get("ok")),
+            continued=bool(data.get("continued")),
+            approved=bool(data.get("approved")),
+            session_name=key,
+            thread_id=str(data.get("thread_id") or thread_id),
+            tool_step_ids=list(data.get("tool_step_ids") or []),
+            urls=list(data.get("urls") or []),
+            trace_id=str(data.get("trace_id") or ""),
+            stream_completed=bool(data.get("stream_completed")),
+            event_count=int(data.get("event_count") or 0),
+            event_types=list(data.get("event_types") or []),
+            applied_tool_step_ids=list(data.get("applied_tool_step_ids") or []),
+            unresolved_tool_step_ids=list(data.get("unresolved_tool_step_ids") or []),
+            reason=str(data.get("reason") or ""),
+            raw=data,
         )
 
     @server.tool(description="Read recent locally persisted messages for a persistent Notion2API MCP session without sending a new chat message. Useful after a client-side timeout.", structured_output=True)
@@ -2689,9 +2905,14 @@ def create_server(
     async def notion2api_get_chat_job(
         request_id: str,
         include_last_response: bool = False,
+        include_response: bool = False,
         cancel_if_stalled: bool = False,
     ) -> ChatJobOutput:
-        result = _chat_job_output(request_id=request_id, include_last_response=include_last_response)
+        result = _chat_job_output(
+            request_id=request_id,
+            include_last_response=include_last_response,
+            include_response=include_response,
+        )
         if (
             cancel_if_stalled
             and result.found

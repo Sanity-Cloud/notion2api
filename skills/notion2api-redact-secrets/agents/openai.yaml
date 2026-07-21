@@ -1,0 +1,4 @@
+interface:
+  display_name: "Redact Notion2API Secrets"
+  short_description: "Sanitize Notion2API logs and reports"
+  default_prompt: "Use $notion2api-redact-secrets to sanitize this Notion2API diagnostic text."

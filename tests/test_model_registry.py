@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.model_registry import (
     get_display_name,
     get_model_metadata,
@@ -169,6 +171,18 @@ def test_consumer_friendly_model_aliases_and_default():
     assert get_notion_model("Terra") == "orchid-muffin"
     assert get_notion_model("sol") == "orange-mousse"
     assert get_notion_model("luna") == "olive-jellyroll"
+
+
+def test_frontend_defaults_to_selectable_terra_model():
+    root = Path(__file__).resolve().parents[1]
+    for path in (root / "frontend/index.html", root / "frontend/js/core/constants.js"):
+        source = path.read_text(encoding="utf-8")
+        assert 'DEFAULT_MODEL:"terra"' in source.replace(" ", "")
+        assert 'id:"terra"' in source.replace(" ", "")
+
+    served_page = (root / "frontend/index.html").read_text(encoding="utf-8")
+    assert 'id="modelTriggerProvider" class="model-provider">OpenAI</span>' in served_page
+    assert 'id="modelTriggerText" class="model-name">GPT-5.6 Terra</span>' in served_page
 
 def test_visible_selector_names_resolve_to_exact_backend_routes():
     expected = {

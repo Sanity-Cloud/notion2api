@@ -2057,6 +2057,78 @@ def build_lite_transcript(user_prompt: str, model_name: str) -> list[dict[str, A
     ]
 
 
+_NOTION_TASK_INSTRUCTIONS = {
+    "visualize": "Create the requested interactive HTML visualization or visual artifact.",
+    "create_slides": "Create the requested presentation or slide deck artifact.",
+    "spreadsheet": "Use spreadsheet and data-analysis capabilities for this request.",
+    "deep_research": "Conduct broad, thorough research across the selected sources and produce a sourced result.",
+}
+
+_NOTION_PERSONA_INSTRUCTIONS = {
+    "sidekick": "Use a warm, friendly, collaborative style.",
+    "minimalist": "Be simple, concise, and efficient.",
+    "analyst": "Use a structured, logical, evidence-focused style.",
+}
+
+
+def apply_notion_ai_options(
+    transcript: list[dict[str, Any]],
+    *,
+    mode: str = "default",
+    task: str | None = None,
+    sources: list[str] | None = None,
+    web_access: bool | None = None,
+    persona: str | None = None,
+    instructions: str | None = None,
+) -> list[dict[str, Any]]:
+    """Apply Notion AI home controls to transcript config blocks."""
+    source_aliases = {"all": "everything", "notion-help-center": "helpdocs"}
+    clean_sources = [source_aliases.get(str(item).strip(), str(item).strip()) for item in (sources or []) if str(item).strip()]
+    if "everything" in clean_sources:
+        clean_sources = ["everything"]
+
+    instruction_parts = [
+        text
+        for text in (
+            _NOTION_TASK_INSTRUCTIONS.get(str(task or "")),
+            _NOTION_PERSONA_INSTRUCTIONS.get(str(persona or "")),
+            str(instructions or "").strip() or None,
+        )
+        if text
+    ]
+
+    for block in transcript:
+        if block.get("type") not in {"config", "updated-config"} or not isinstance(block.get("value"), dict):
+            continue
+        value = block["value"]
+        research = mode == "research" or task == "deep_research"
+        value["useReadOnlyMode"] = mode == "ask"
+        value["isAgentResearchRequest"] = research
+        if research:
+            value["enableScriptAgent"] = True
+        if task in {"visualize", "create_slides", "spreadsheet"}:
+            value["enableScriptAgent"] = True
+            value["enableComputer"] = True
+        if task == "create_slides":
+            value["enableAgentGenerateImage"] = True
+        if task == "spreadsheet":
+            value["enableCsvAttachmentSupport"] = True
+        if clean_sources:
+            value["searchScopes"] = [{"type": source} for source in clean_sources]
+            value["availableConnectors"] = [
+                source for source in clean_sources if source not in {"everything", "notion", "web", "helpdocs"}
+            ]
+            value["useWebSearch"] = "everything" in clean_sources or "web" in clean_sources
+        if web_access is not None:
+            value["useWebSearch"] = web_access
+        elif research:
+            value["useWebSearch"] = True
+        if instruction_parts:
+            existing = str(value.get("ephemeralInstructions") or "").strip()
+            value["ephemeralInstructions"] = "\n".join(([existing] if existing else []) + instruction_parts)
+    return transcript
+
+
 def build_standard_transcript(
     messages: list[dict[str, Any]],
     model_name: str,

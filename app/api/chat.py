@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.core.errors import openai_error
 from app.core.internal_callers import is_repo_ai_internal_request
 from app.core.models import normalize_model_id
-from app.conversation import compress_round_if_needed, compress_sliding_window_round, build_lite_transcript
+from app.conversation import apply_notion_ai_options, compress_round_if_needed, compress_sliding_window_round, build_lite_transcript
 from app.config import is_lite_mode
 from app.logger import logger
 from app.model_registry import is_supported_model, list_available_models
@@ -40,6 +40,18 @@ from app.thread_title import resolve_requested_thread_title
 from app.api.chat_resume_thread_binding import _resolve_persistent_thread_id
 
 router = APIRouter()
+
+
+def _apply_notion_request_options(transcript: list[dict[str, Any]], req_body: ChatCompletionRequest) -> list[dict[str, Any]]:
+    return apply_notion_ai_options(
+        transcript,
+        mode=req_body.notion_mode,
+        task=req_body.notion_task,
+        sources=req_body.notion_sources,
+        web_access=req_body.web_access,
+        persona=req_body.notion_persona,
+        instructions=req_body.notion_instructions,
+    )
 
 
 def _requested_thread_title(req_body: ChatCompletionRequest) -> str | None:
@@ -1387,7 +1399,7 @@ def _handle_lite_request(
                     pass
 
             # text Lite transcripttext
-            transcript = build_lite_transcript(user_prompt, req_body.model)
+            transcript = _apply_notion_request_options(build_lite_transcript(user_prompt, req_body.model), req_body)
 
             # text Notion APItext thread_idtext
             persist_remote_chat = None
@@ -1644,7 +1656,7 @@ def _handle_standard_request(
                 "context_page_id": _request_context_page_id(req_body, client),
             }
             messages = cleaned_msgs
-            transcript = build_standard_transcript(messages, req_body.model, account)
+            transcript = _apply_notion_request_options(build_standard_transcript(messages, req_body.model, account), req_body)
 
             # text Notion APItext thread_idtext Notion text
             persist_remote_chat = None
@@ -2083,6 +2095,7 @@ async def create_chat_completion(
                 context_page_id=_request_context_page_id(req_body, client),
             )
             transcript = transcript_payload["transcript"]
+            transcript = _apply_notion_request_options(transcript, req_body)
             memory_degraded = bool(transcript_payload.get("memory_degraded"))
             memory_headers = {"X-Memory-Status": "degraded"} if memory_degraded else {}
 
@@ -2091,7 +2104,7 @@ async def create_chat_completion(
 
             # Pass attachments when present
             _cleaned_msgs, attachments = normalize_chat_messages(
-                [m.dict() for m in req_body.messages],
+            [m.model_dump() for m in req_body.messages],
                 getattr(req_body, "attachments", None),
             )
             state_attachments = _request_state_attachments(request)

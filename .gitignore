@@ -90,3 +90,6 @@ response/
 /scripts/run_remote_history_patch.ps1
 /scripts/start_mcp_wrapper_once.ps1
 /scripts/verify_*.py
+
+# Local generated media and workflow artifacts
+/tmp/

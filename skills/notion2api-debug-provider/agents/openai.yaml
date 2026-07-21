@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debug Notion2API"
+  short_description: "Diagnose provider and streaming failures"
+  default_prompt: "Use $notion2api-debug-provider to diagnose this Notion2API failure."

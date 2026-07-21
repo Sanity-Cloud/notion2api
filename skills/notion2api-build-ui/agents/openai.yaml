@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Notion2API UI"
+  short_description: "Create native Notion2API interface controls"
+  default_prompt: "Use $notion2api-build-ui to add this control to the Notion2API frontend."

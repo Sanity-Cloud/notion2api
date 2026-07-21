@@ -37,8 +37,8 @@ ChatGPT custom connectors expect an MCP endpoint. For local development, expose 
 | `MCP_PORT` | MCP listen port | `8130` |
 | `MCP_PATH` | Streamable HTTP MCP path | `/mcp` |
 | `MCP_TRANSPORT` | `streamable-http`, `stdio`, or `sse` | `streamable-http` |
-| `MCP_NOTION2API_CALL_WAIT_SECONDS` | Initial bounded wait before a chat job returns pending | `45` |
-| `MCP_NOTION2API_MAX_CALL_WAIT_SECONDS` | Maximum bounded wait for one MCP call | `50` |
+| `MCP_NOTION2API_CALL_WAIT_SECONDS` | Deprecated compatibility setting; chat submissions return immediately | Ignored |
+| `MCP_NOTION2API_MAX_CALL_WAIT_SECONDS` | Deprecated compatibility setting; chat submissions return immediately | Ignored |
 | `MCP_NOTION2API_STALL_SECONDS` | No-progress interval before dead-loop suspicion | `180` |
 | `MCP_NOTION2API_SESSION_STATE` | Durable named-session state file | `.notion2api_mcp_sessions.json` |
 | `MCP_NOTION2API_CHAT_JOB_STATE` | Durable request/job state file | `.notion2api_mcp_chat_jobs.json` |
@@ -62,7 +62,7 @@ ChatGPT custom connectors expect an MCP endpoint. For local development, expose 
 
 The default requested model is the consumer-facing `terra` alias, which resolves to the current Terra backend route. `sol`, `terra`, and `luna` are accepted alongside the longer public model names and canonical Notion route IDs.
 
-Omitting `session_name` creates a descriptive generated session name for new work. The literal `op` remains available only as an explicit legacy shared session; it is not used as the inferred title for ordinary new requests.
+Omitting `session_name` creates a descriptive generated session name for new work. The legacy literal `op` is normalized the same way, preventing stale clients from adding new work to the old shared session.
 
 Continue an existing chat with any authoritative identifier:
 
@@ -72,11 +72,50 @@ Continue an existing chat with any authoritative identifier:
 
 The model may change on a later turn without changing the local conversation or remote Notion chat. Results expose the local `conversation_id`, the durable `remote_chat_id`/`notion_thread_id`, and the pollable `request_id`.
 
-Long requests return `pending` after the bounded wait. Poll `notion2api_get_chat_job` for the visible response, bounded activity summary, checklist/task state, poll count, and stall indicators. Raw private reasoning is not persisted. A stalled job reports `dead_loop_suspected` and `cancel_recommended`; cancel it explicitly with `notion2api_cancel_chat_job` or set `cancel_if_stalled=true` while polling.
+Chat requests return `pending` immediately. Poll `notion2api_get_chat_job` for the visible response, bounded activity summary, checklist/task state, poll count, and stall indicators. Raw private reasoning is not persisted. A stalled job reports `dead_loop_suspected` and `cancel_recommended`; cancel it explicitly with `notion2api_cancel_chat_job` or set `cancel_if_stalled=true` while polling.
+
+## Notion AI modes, tasks, sources, and personalization
+
+`notion2api_chat`, `notion2api_chat_with_file`, and `notion2api_chat_completion` expose the Notion AI home controls as optional arguments:
+
+| Argument | Values | Behavior |
+| --- | --- | --- |
+| `mode` | `default`, `ask`, `research` | `default` can search and edit; `ask` is read-only; `research` enables deeper research and web search by default. |
+| `task` | `visualize`, `create_slides`, `spreadsheet`, `deep_research` | Selects the matching Notion task preset and enables its artifact capabilities. |
+| `sources` | list of source-scope strings | Restricts retrieval to selected sources. Common values are `all`, `notion`, `web`, `notion-help-center`, `github`, `gmail`, `google-calendar`, and `google-drive`. |
+| `web_access` | `true`, `false`, or omitted | Explicitly enables/disables web search; omitted uses the selected mode/source default. |
+| `persona` | `sidekick`, `minimalist`, `analyst` | Applies Notion's warm, concise, or structured response style for the request. |
+| `notion_instructions` | string | Adds per-request operating instructions alongside the task/persona. |
+
+The four task cards contain example prompts, not additional protocol modes. Send those examples as the normal `prompt` while selecting the appropriate `task`.
+
+Example MCP arguments for web-backed legal research:
+
+```json
+{
+  "prompt": "Compare the current Minnesota statutes governing service of process.",
+  "mode": "research",
+  "task": "deep_research",
+  "sources": ["web"],
+  "web_access": true,
+  "persona": "analyst"
+}
+```
+
+Example MCP arguments for a slide deck:
+
+```json
+{
+  "prompt": "Turn these meeting notes into an executive update deck.",
+  "task": "create_slides",
+  "sources": ["notion"],
+  "notion_instructions": "Use a concise six-slide structure."
+}
+```
 
 ## File attachments and ZIP uploads
 
-Notion2API distinguishes **service-host paths** from **ChatGPT-uploaded files**. These are separate transport boundaries.
+Notion2API distinguishes **service-host paths** from **ChatGPT-uploaded files**. These are different trust and transport boundaries.
 
 ### Service-host local paths
 
@@ -94,15 +133,15 @@ Do not place ChatGPT `/mnt/data/...` paths in `attachments`. Those paths exist i
 
 ### ChatGPT-uploaded files
 
-For one file, call `notion2api_chat_with_file`. This route requires a verified attachment and fails closed when no file bytes arrive.
+For one file, call `notion2api_chat_with_file`. This route automatically requires a verified attachment and fails closed when no file bytes arrive.
 
-For multiple files:
+For multiple files, use the staged workflow:
 
 1. Call `notion2api_stage_file(file=...)` once for each uploaded file.
 2. Collect the returned opaque `staged_file_id` values.
 3. Call `notion2api_chat(..., staged_file_ids=[...], require_attachments=true)` or `notion2api_chat_completion(...)`.
 
-Staged ids expire after 24 hours by default. `MCP_NOTION2API_STAGED_FILE_TTL_SECONDS` may set a lifetime from 60 seconds through 7 days.
+Staged ids expire after 24 hours by default. Configure `MCP_NOTION2API_STAGED_FILE_TTL_SECONDS` to change the lifetime within the enforced 60-second to 7-day range.
 
 ### Attachment provenance and fail-closed behavior
 
@@ -113,7 +152,7 @@ Every chat job and poll result exposes:
 - `attachment_transfer_status`: `verified`, `missing`, or `not_requested`
 - `attachment_manifest`: redacted names, MIME types, sizes, and sources
 
-A document-grounded workflow must set `require_attachments=true`. The wrapper returns status `422` with `required_attachments_missing` instead of submitting a text-only request when no attachment was verified. Do not describe a result as document-grounded unless `attachment_transfer_status` is `verified` and `attachment_count` is greater than zero.
+A document-grounded workflow must set `require_attachments=true`. The wrapper returns HTTP-style status `422` with `required_attachments_missing` instead of submitting a text-only request when no attachment was verified. A model response must not be described as document-grounded unless `attachment_transfer_status` is `verified` and `attachment_count` is greater than zero.
 
 ### Backend policy
 
@@ -126,9 +165,9 @@ $env:ATTACHMENT_LOCAL_ROOT = 'X:\Code\.ai-runs'
 $env:ATTACHMENT_ALLOWED_MIME_TYPES = 'application/pdf,application/zip,application/x-zip-compressed,text/csv,image/png,image/jpeg,image/gif,image/webp,image/heic'
 ```
 
-Each validated file is converted into the OpenAI-compatible attachment shape and forwarded to `/v1/chat/completions` or `/v1/responses`. ZIP descriptors are normalized to `application/x-zip-compressed` and include `allowUnsupportedTypes: true`.
+Each validated file is converted into the OpenAI-compatible Notion2API attachment shape and forwarded to `/v1/chat/completions` or `/v1/responses`. ZIP descriptors are normalized to `application/x-zip-compressed` and include `allowUnsupportedTypes: true`.
 
-Successful local staging does not prove successful Notion ingestion. The upstream sequence is descriptor creation, multipart upload, processing, signed URL resolution, and `runInferenceTranscript`. If Notion rejects the final inference after staging, Notion2API reports `runInferenceTranscript_after_attachment_staging` and classifies deterministic HTTP 400 responses as `UPSTREAM_PROTOCOL_REJECTED` rather than reporting document analysis as successful.
+Successful local staging does not prove successful Notion ingestion. The upstream sequence is descriptor creation, multipart upload, processing, signed URL resolution, and `runInferenceTranscript`. If Notion rejects the final inference after staging, Notion2API reports the stage as `runInferenceTranscript_after_attachment_staging` and classifies deterministic HTTP 400 responses as `UPSTREAM_PROTOCOL_REJECTED`; it does not report document analysis as successful.
 
 ## Security note
 

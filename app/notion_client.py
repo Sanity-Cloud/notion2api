@@ -304,6 +304,114 @@ class NotionOpusAPI:
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
         }
 
+    def continue_confirmed_tool_steps(
+        self,
+        *,
+        thread_id: str,
+        tool_step_ids: list[str],
+    ) -> dict[str, Any]:
+        """Resume an existing inference after its tool confirmations were granted."""
+        clean_thread_id = str(thread_id or "").strip()
+        clean_ids = list(dict.fromkeys(str(item).strip() for item in tool_step_ids if str(item).strip()))
+        if not clean_thread_id:
+            raise ValueError("thread_id is required")
+        if not clean_ids:
+            raise ValueError("tool_step_ids must contain at least one id")
+
+        trace_id = str(uuid.uuid4())
+        payload = {
+            "traceId": trace_id,
+            "spaceId": self.space_id,
+            "transcript": [],
+            "threadId": clean_thread_id,
+            "createThread": False,
+            "debugOverrides": {
+                "cachedInferences": {},
+                "annotationInferences": {},
+                "emitInferences": False,
+            },
+            "generateTitle": False,
+            "saveAllThreadOperations": True,
+            "setUnreadState": True,
+            "confirmToolStepIds": clean_ids,
+            "createdSource": "workflows",
+            "threadType": "workflow",
+            "isPartialTranscript": True,
+            "asPatchResponse": True,
+            "patchResponseVersion": 2,
+            "isUserInAnySalesAssistedSpace": False,
+            "isSpaceSalesAssisted": False,
+            "supportsCustomAgentNudgeTranscriptStep": True,
+        }
+        headers = self._build_chat_history_headers()
+        headers["accept"] = "application/x-ndjson"
+        try:
+            response = self._scraper.post(
+                self.url,
+                headers=headers,
+                json=payload,
+                stream=True,
+                timeout=(NOTION_UPSTREAM_CONNECT_TIMEOUT, NOTION_UPSTREAM_READ_TIMEOUT),
+            )
+        except requests.exceptions.RequestException as exc:
+            raise NotionUpstreamError(
+                "Request to Notion upstream failed while continuing confirmed tool steps.",
+                retriable=True,
+                response_excerpt=str(exc),
+            ) from exc
+        if response.status_code != 200:
+            excerpt = _redact_response_excerpt(response.text or "")
+            raise NotionUpstreamError(
+                f"Notion allow-once continuation returned HTTP {response.status_code}.",
+                status_code=response.status_code,
+                retriable=response.status_code >= 500 or response.status_code == 429,
+                response_excerpt=excerpt,
+            )
+
+        event_count = 0
+        event_types: list[str] = []
+        stream_completed = False
+        unresolved_ids: set[str] = set()
+        applied_ids: set[str] = set()
+        requested_ids = set(clean_ids)
+        for chunk in parse_stream(response):
+            if not isinstance(chunk, dict):
+                continue
+            chunk_type = str(chunk.get("type") or "").strip()
+            if chunk_type == "stream_complete":
+                stream_completed = True
+                continue
+            if chunk_type == "tool_confirmation":
+                for step_id in chunk.get("tool_step_ids") or []:
+                    clean_step_id = str(step_id or "").strip()
+                    if clean_step_id in requested_ids:
+                        unresolved_ids.add(clean_step_id)
+            elif chunk_type == "tool_result_status":
+                clean_step_id = str(chunk.get("tool_step_id") or "").strip()
+                state = str(chunk.get("state") or "").strip().lower()
+                if clean_step_id in requested_ids and (
+                    state in {"applied", "confirmation:confirmed"}
+                    or bool(chunk.get("has_result"))
+                ):
+                    applied_ids.add(clean_step_id)
+                    unresolved_ids.discard(clean_step_id)
+            event_count += 1
+            if chunk_type and chunk_type not in event_types:
+                event_types.append(chunk_type)
+        missing_applied_ids = requested_ids - applied_ids
+        unresolved_ids.update(missing_applied_ids)
+        approved = stream_completed and not unresolved_ids and applied_ids == requested_ids
+        return {
+            "trace_id": trace_id,
+            "approved": approved,
+            "stream_completed": stream_completed,
+            "event_count": event_count,
+            "event_types": event_types[:30],
+            "applied_tool_step_ids": sorted(applied_ids),
+            "unresolved_tool_step_ids": sorted(unresolved_ids),
+            "reason": "approved" if approved else "confirmation_not_applied",
+        }
+
     def _normalize_upload_descriptor(self, body: Any) -> dict[str, Any]:
         if not isinstance(body, dict):
             raise NotionUpstreamError("Upload descriptor response malformed", retriable=False, response_excerpt=str(body)[:300])
@@ -1241,6 +1349,28 @@ class NotionOpusAPI:
                 if isinstance(chunk, dict) and chunk.get("type") == "stream_complete":
                     stream_completed = True
                     continue
+                if isinstance(chunk, dict) and chunk.get("type") == "tool_confirmation":
+                    from app.unsafe_url_continuation import remember_pending_unsafe_url_steps
+
+                    remember_pending_unsafe_url_steps(
+                        self,
+                        thread_id,
+                        [{
+                            "tool_step_id": chunk.get("tool_step_id"),
+                            "urls": chunk.get("urls") or [],
+                        }],
+                    )
+                    logger.info(
+                        "Captured transient unsafe URL confirmation from live stream",
+                        extra={
+                            "request_info": {
+                                "event": "unsafe_url_confirmation_captured",
+                                "thread_id": thread_id,
+                                "tool_step_id": chunk.get("tool_step_id"),
+                                "urls": chunk.get("urls") or [],
+                            }
+                        },
+                    )
                 emitted = True
                 yield chunk
 

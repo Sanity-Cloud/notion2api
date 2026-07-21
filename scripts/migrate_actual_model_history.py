@@ -8,7 +8,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from app.chat_history.store import ChatHistoryStore, MODEL_METADATA_COLUMNS
+from app.chat_history.store import ChatHistoryStore, MODEL_METADATA_COLUMNS  # noqa: E402
 
 ENV_FILE = REPO / ".env"
 DEFAULT_DB = REPO / "data" / "chat_history.db"

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import time
-import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.attachments.loader import load_attachment_data

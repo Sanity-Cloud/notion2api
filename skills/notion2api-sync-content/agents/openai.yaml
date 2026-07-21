@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync Notion Content"
+  short_description: "Create and update Notion content safely"
+  default_prompt: "Use $notion2api-sync-content to sync this content into Notion safely."

@@ -8,7 +8,7 @@ import os
 import sqlite3
 from typing import Any
 
-from app.chat_history.extractor import describe_thread_record, message_model_metadata, visible_message_role, visible_message_text
+from app.chat_history.extractor import describe_thread_record, visible_message_role, visible_message_text
 from app.model_registry import NOTION_MODEL_REVERSE_MAP
 
 DDL = """

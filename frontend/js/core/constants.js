@@ -34,6 +34,7 @@ window.NotionAI.Core.Constants = {
         {
             label: 'OpenAI',
             models: [
+                { id: "terra", label: "GPT-5.6 Terra", icon: "⚙", badge: "Default" },
                 { id: "gpt-5.2", label: "GPT-5.2", icon: "⚙" },
                 { id: "gpt-5.4", label: "GPT-5.4", icon: "⚙" },
                 { id: "gpt-5.4mini", label: "GPT-5.4 Mini", icon: "⚙", desc: "Fast & lightweight" },
@@ -86,6 +87,7 @@ window.NotionAI.Core.Constants = {
         { id: "claude-opus4.8", label: "Opus 4.8" },
         { id: "claude-haiku4.5", label: "Haiku 4.5" },
         { id: "claude-fable5", label: "Fable 5" },
+        { id: "terra", label: "GPT-5.6 Terra" },
         { id: "gpt-5.2", label: "GPT-5.2" },
         { id: "gpt-5.4", label: "GPT-5.4" },
         { id: "gpt-5.4mini", label: "GPT-5.4 Mini" },
@@ -102,7 +104,7 @@ window.NotionAI.Core.Constants = {
         { id: "deepseek-v4pro", label: "DeepSeek V4 Pro" },
     ],
 
-    DEFAULT_MODEL: "claude-opus4.8",
+    DEFAULT_MODEL: "terra",
 
     MODEL_DISPLAY_NAMES: {
         "claude-sonnet4.6": "Sonnet 4.6",
@@ -112,6 +114,7 @@ window.NotionAI.Core.Constants = {
         "claude-opus4.8": "Opus 4.8",
         "claude-haiku4.5": "Haiku 4.5",
         "claude-fable5": "Fable 5",
+        "terra": "GPT-5.6 Terra",
         "gpt-5.2": "GPT-5.2",
         "gpt-5.4": "GPT-5.4",
         "gpt-5.4mini": "GPT-5.4 Mini",
@@ -136,6 +139,7 @@ window.NotionAI.Core.Constants = {
         "claude-opus4.8": "✳️",
         "claude-haiku4.5": "✳️",
         "claude-fable5": "✳️",
+        "terra": "⚙",
         "gpt-5.2": "⚙",
         "gpt-5.4": "⚙",
         "gpt-5.4mini": "⚙",

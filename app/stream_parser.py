@@ -816,6 +816,134 @@ def _bind_pending_segment(
     )
 
 
+def _extract_tool_result_status(step: Any) -> dict[str, Any] | None:
+    """Expose structural tool-result state without leaking tool output as content."""
+    if not isinstance(step, dict):
+        return None
+    if str(step.get("type") or "").lower() != "agent-tool-result":
+        return None
+    step_id = str(step.get("id") or "").strip()
+    if not step_id:
+        return None
+    state = str(step.get("state") or "").strip().lower()
+    result = step.get("result")
+    return {
+        "type": "tool_result_status",
+        "tool_step_id": step_id,
+        "state": state,
+        "requested_confirmation": bool(step.get("requestedConfirmation")),
+        "has_result": result not in (None, "", {}, []),
+    }
+
+
+def _extract_tool_confirmation(step: Any) -> dict[str, Any] | None:
+    """Extract a live tool-confirmation request from a streamed tool-result step.
+
+    Confirmation-requested steps are temporary client transcript entries and may
+    not be available through thread hydration until after the user confirms them.
+    Capture the step ID while it is present in the NDJSON stream.
+    """
+    if not isinstance(step, dict):
+        return None
+    if str(step.get("type") or "").lower() != "agent-tool-result":
+        return None
+
+    state = str(step.get("state") or "").strip().lower()
+    requested = bool(step.get("requestedConfirmation")) or state == "confirmation:requested"
+    confirmations = step.get("pendingConfirmations")
+    if not requested or not isinstance(confirmations, list):
+        return None
+
+    urls: list[str] = []
+    for confirmation in confirmations:
+        if not isinstance(confirmation, dict):
+            continue
+        if str(confirmation.get("type") or "").lower() != "urlsafety":
+            continue
+        for url in confirmation.get("urls") or []:
+            clean_url = str(url or "").strip()
+            if clean_url and clean_url not in urls:
+                urls.append(clean_url)
+
+    tool_input = step.get("input") if isinstance(step.get("input"), dict) else {}
+    function_name = str(tool_input.get("function") or "").strip()
+    if function_name != "connections.web.loadPage":
+        return None
+
+    step_id = str(step.get("id") or "").strip()
+    if not step_id:
+        return None
+    if not urls:
+        args = tool_input.get("args") if isinstance(tool_input.get("args"), dict) else {}
+        candidate = str(args.get("url") or "").strip()
+        if candidate:
+            urls.append(candidate)
+
+    return {
+        "type": "tool_confirmation",
+        "confirmation_type": "potentially_unsafe_url",
+        "tool_step_id": step_id,
+        "tool_step_ids": [step_id],
+        "urls": urls,
+        "function": function_name,
+        "state": state or "confirmation:requested",
+    }
+
+
+def _extract_tool_confirmation(step: Any) -> dict[str, Any] | None:
+    """Extract a live tool-confirmation request from a streamed tool-result step.
+
+    Confirmation-requested steps are temporary client transcript entries and may
+    not be available through thread hydration until after confirmation. Capture
+    the step ID while it is present in the NDJSON stream.
+    """
+    if not isinstance(step, dict):
+        return None
+    if str(step.get("type") or "").lower() != "agent-tool-result":
+        return None
+
+    state = str(step.get("state") or "").strip().lower()
+    requested = bool(step.get("requestedConfirmation")) or state == "confirmation:requested"
+    confirmations = step.get("pendingConfirmations")
+    if not requested or not isinstance(confirmations, list):
+        return None
+
+    urls: list[str] = []
+    for confirmation in confirmations:
+        if not isinstance(confirmation, dict):
+            continue
+        if str(confirmation.get("type") or "").lower() != "urlsafety":
+            continue
+        for url in confirmation.get("urls") or []:
+            clean_url = str(url or "").strip()
+            if clean_url and clean_url not in urls:
+                urls.append(clean_url)
+
+    tool_input = step.get("input") if isinstance(step.get("input"), dict) else {}
+    function_name = str(tool_input.get("function") or "").strip()
+    if function_name != "connections.web.loadPage":
+        return None
+
+    step_id = str(step.get("id") or "").strip()
+    if not step_id:
+        return None
+    if not urls:
+        args = tool_input.get("args") if isinstance(tool_input.get("args"), dict) else {}
+        candidate = str(args.get("url") or "").strip()
+        if candidate:
+            urls.append(candidate)
+
+    return {
+        "type": "tool_confirmation",
+        "confirmation_type": "potentially_unsafe_url",
+        "tool_step_id": step_id,
+        "tool_step_ids": [step_id],
+        "urls": urls,
+        "function": function_name,
+        "state": state or "confirmation:requested",
+    }
+
+
 def _stream_completion_event(patch: dict[str, Any]) -> dict[str, Any] | None:
     """Return an explicit completion event for Notion's terminal metadata patch."""
     patch_path = _normalize_path(patch)
@@ -1012,6 +1140,14 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                     _seg_meta = _extract_model_metadata_from_step(patch_v, message_id="")
                     if isinstance(_seg_meta, dict) and _seg_meta:
                         yield {"type": "model_metadata", "data": _seg_meta}
+
+                tool_status_event = _extract_tool_result_status(patch_v)
+                if tool_status_event is not None:
+                    yield tool_status_event
+
+                confirmation_event = _extract_tool_confirmation(patch_v)
+                if confirmation_event is not None:
+                    yield confirmation_event
 
                 logger.debug(
                     "Segment registered (pending)",

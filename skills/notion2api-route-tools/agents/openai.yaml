@@ -1,0 +1,4 @@
+interface:
+  display_name: "Route Notion2API Tools"
+  short_description: "Choose the right Notion2API MCP action"
+  default_prompt: "Use $notion2api-route-tools to classify and route this Notion2API request."

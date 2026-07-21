@@ -1,0 +1,4 @@
+interface:
+  display_name: "Validate Notion2API Changes"
+  short_description: "Run focused Notion2API regression checks"
+  default_prompt: "Use $notion2api-validate-regression to verify this Notion2API change."

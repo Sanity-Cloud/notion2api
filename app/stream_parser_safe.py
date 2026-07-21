@@ -44,7 +44,6 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
     """
     buffered_thinking: list[str] = []
     yielded_content_parts: list[str] = []
-    visible_content_seen = False
 
     for item in _parse_stream(response):
         if not isinstance(item, dict):
@@ -61,7 +60,6 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
         if item_type in {"content", "final_content"}:
             text = str(item.get("text", "") or "")
             if text.strip():
-                visible_content_seen = True
                 yielded_content_parts.append(text)
 
         yield item

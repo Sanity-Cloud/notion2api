@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 # ================================
@@ -15,6 +15,12 @@ class ChatMessage(BaseModel):
     content: Any
     thinking: Optional[str] = None
     reasoning_content: Optional[str] = None
+
+
+NotionSource = Annotated[
+    str,
+    Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$"),
+]
 
 
 class ChatCompletionRequest(BaseModel):
@@ -45,6 +51,32 @@ class ChatCompletionRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional caller metadata for per-request behavior such as remote chat persistence.",
+    )
+    notion_mode: Literal["default", "ask", "research"] = Field(
+        default="default",
+        description="Notion AI execution mode.",
+    )
+    notion_task: Optional[Literal["visualize", "create_slides", "spreadsheet", "deep_research"]] = Field(
+        default=None,
+        description="Notion AI full-page prompt category.",
+    )
+    notion_sources: Optional[List[NotionSource]] = Field(
+        default=None,
+        max_length=32,
+        description="Notion AI search-scope types, such as notion, web, github, or google-drive.",
+    )
+    web_access: Optional[bool] = Field(
+        default=None,
+        description="Explicitly enable or disable Notion AI web access.",
+    )
+    notion_persona: Optional[Literal["sidekick", "minimalist", "analyst"]] = Field(
+        default=None,
+        description="Per-request Notion AI personalization preset.",
+    )
+    notion_instructions: Optional[str] = Field(
+        default=None,
+        max_length=20_000,
+        description="Per-request Notion AI operating instructions.",
     )
 
 # ================================

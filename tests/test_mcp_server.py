@@ -95,9 +95,14 @@ def test_load_chat_job_state_recovers_valid_tmp_file(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["jobs"]["new"]["updated_at"] == 3
 
 
-def test_default_op_session_is_shared_not_unique():
+def test_legacy_session_key_remains_readable_for_existing_state():
     assert mcp_server._session_key(None) == "op"
     assert mcp_server._session_key("OP") == "op"
+
+
+def test_chat_wait_is_always_immediate_for_polling():
+    assert mcp_server._bounded_chat_wait_seconds(None) == 0
+    assert mcp_server._bounded_chat_wait_seconds(60) == 0
 
 
 def test_persist_chat_progress_updates_pollable_job(monkeypatch):
@@ -164,6 +169,46 @@ def test_chat_stream_updates_progress_and_returns_final_content(monkeypatch):
     assert result["model_metadata"]["conversation_id"] == "conversation-123"
     assert result["model_metadata"]["notion_thread_id"] == "thread-123"
     assert updates[-1] == ("Reviewing records.\n- [ ] Apply edits", "Done", 2, True)
+
+
+def test_chat_job_recovers_persisted_completion_after_backend_503(monkeypatch):
+    class FailedBackend:
+        base_url = "http://test"
+        timeout = 1
+
+        async def post_chat_stream(self, *_args):
+            return {"ok": False, "status_code": 503, "error": {"message": "upstream failed"}}
+
+    monkeypatch.setattr(
+        mcp_server,
+        "_completed_turn_after_checkpoint",
+        lambda *_args: {
+            "assistant_message_id": 9,
+            "response_text": "Recovered answer",
+            "thinking": "",
+            "remote_chat_id": "thread-9",
+            "actual_model": "terra",
+        },
+    )
+
+    result = asyncio.run(
+        mcp_server._run_chat_completion_job(
+            client=FailedBackend(),
+            path="/v1/chat/completions",
+            payload={"model": "terra"},
+            model="terra",
+            session_key="legal-research",
+            conversation_id="conversation-9",
+            session_created=False,
+            request_id="request-9",
+            wait_seconds=0,
+            baseline_message_id=8,
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["response_text"] == "Recovered answer"
+    assert result["raw"]["completion_source"] == "local_conversation_checkpoint"
 
 
 def test_session_records_migrate_legacy_and_preserve_remote_ids(tmp_path):
@@ -337,6 +382,16 @@ def test_mcp_schema_exposes_continuation_and_cancellation():
     assert "conversation_id" in chat_schema
     assert "continue_from_request_id" in chat_schema
     assert "notion2api_cancel_chat_job" in by_name
+
+    for tool_name in (
+        "notion2api_chat",
+        "notion2api_chat_with_file",
+        "notion2api_chat_completion",
+        "notion2api_responses",
+    ):
+        model_schema = by_name[tool_name].inputSchema["properties"]["model"]
+        assert model_schema["default"] == "terra"
+        assert "Omit this argument to use Terra" in model_schema["description"]
     assert "notion2api_stage_file" in by_name
     assert "notion2api_chat_with_file" in by_name
     assert "notion2api_upload_file_to_page" in by_name
@@ -349,8 +404,20 @@ def test_mcp_schema_exposes_continuation_and_cancellation():
     assert "staged_file_ids" in chat_schema
     assert "require_attachments" in chat_schema
     assert "Service-host local file paths" in chat_schema["attachments"]["description"]
-    assert "/mnt/data" in chat_schema["attachments"]["description"]
-    assert "format" not in chat_schema["attachments"]
+    for tool_name in (
+        "notion2api_chat",
+        "notion2api_chat_with_file",
+        "notion2api_chat_completion",
+    ):
+        properties = by_name[tool_name].inputSchema["properties"]
+        assert "legacy name 'op'" in properties["session_name"]["description"]
+        assert "ignored" in properties["wait_seconds"]["description"]
+        assert properties["mode"]["enum"] == ["default", "ask", "research"]
+        assert "read-only" in properties["mode"]["description"]
+        assert properties["task"]["anyOf"][0]["enum"] == ["visualize", "create_slides", "spreadsheet", "deep_research"]
+        assert "google-drive" in properties["sources"]["description"]
+        assert "web search" in properties["web_access"]["description"]
+        assert properties["persona"]["anyOf"][0]["enum"] == ["sidekick", "minimalist", "analyst"]
 
 
 def test_omitted_session_name_is_descriptive_and_not_shared_op():
@@ -377,7 +444,9 @@ def test_omitted_session_name_is_descriptive_and_not_shared_op():
     assert first != "op"
     assert stable_first == stable_second
     assert first.startswith("add-durable-notion2api-session-continuation-polling-")
-    assert mcp_server._infer_session_name("op", "unrelated prompt") == "op"
+    legacy = mcp_server._infer_session_name("op", "unrelated prompt", request_id="legacy-op")
+    assert legacy != "op"
+    assert legacy == mcp_server._infer_session_name("op", "unrelated prompt", request_id="legacy-op")
     assert mcp_server._infer_session_name("RepoAI Review", "unrelated prompt") == "repoai-review"
 
 
@@ -579,6 +648,7 @@ def test_startup_reconciliation_closes_orphaned_jobs(monkeypatch):
 
 
 
+
 def test_staged_file_round_trip_uses_opaque_id(monkeypatch, tmp_path):
     source = tmp_path / "source.pdf"
     content = b"%PDF-1.4\nstaged\n%EOF"
@@ -599,7 +669,6 @@ def test_staged_file_round_trip_uses_opaque_id(monkeypatch, tmp_path):
     assert Path(resolved[0]).read_bytes() == content
     assert prepared[0]["name"] == "evidence.pdf"
     assert prepared[0]["size_bytes"] == len(content)
-
 
 def test_required_attachments_fail_closed_before_job_submission(monkeypatch):
     from types import SimpleNamespace
@@ -674,5 +743,76 @@ def test_submit_passes_message_checkpoint_to_worker(monkeypatch):
         )
     )
 
+    assert result["status"] == "pending"
+    assert result["wait_seconds"] == 0
+    assert captured["baseline_message_id"] == 17
+
+
+def test_terminal_job_without_response_uses_persisted_checkpoint(monkeypatch):
+    from types import SimpleNamespace
+
+    captured = {}
+    existing = {
+        "status": "completed",
+        "session_name": "checkpoint-test",
+        "conversation_id": "conv-checkpoint",
+        "baseline_message_id": 17,
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: existing)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+    monkeypatch.setattr(
+        mcp_server,
+        "_chat_pending_output",
+        lambda **kwargs: captured.update(kwargs) or {"status": "completed"},
+    )
+
+    result = asyncio.run(
+        mcp_server._submit_or_resume_chat_job(
+            client=SimpleNamespace(base_url="http://127.0.0.1:8120", timeout=30.0),
+            path="/v1/chat/completions",
+            payload={"model": "terra", "messages": [{"role": "user", "content": "hello"}]},
+            model="terra",
+            session_key="checkpoint-test",
+            conversation_id="conv-checkpoint",
+            session_created=False,
+            request_id="request-checkpoint",
+            wait_seconds=0,
+        )
+    )
+
     assert result["status"] == "completed"
     assert captured["baseline_message_id"] == 17
+
+
+def test_chat_job_poll_is_bounded_unless_full_response_is_requested(monkeypatch):
+    response_text = "x" * 100_000
+    job = {
+        "request_id": "large-request",
+        "job_id": "large-request",
+        "status": "completed",
+        "response_text": response_text,
+        "response": {
+            "status": "completed",
+            "response_text": response_text,
+            "raw": {"content": response_text},
+        },
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: job)
+    monkeypatch.setattr(mcp_server, "_persist_chat_job", lambda _job: None)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    bounded = mcp_server._chat_job_output("large-request")
+
+    assert bounded.status == "completed"
+    assert bounded.response_chars == len(response_text)
+    assert bounded.response_truncated is True
+    assert len(bounded.response_text) == mcp_server.MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS
+    assert bounded.response is None
+    assert "response" not in bounded.raw_job
+    assert "response_text" not in bounded.raw_job
+    assert len(bounded.model_dump_json()) < 10_000
+
+    complete = mcp_server._chat_job_output("large-request", include_response=True)
+    assert complete.response_text == response_text
+    assert complete.response_truncated is False
+    assert complete.response == job["response"]

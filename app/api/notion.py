@@ -9,6 +9,10 @@ from starlette.concurrency import run_in_threadpool
 from app.attachments.errors import AttachmentError
 from app.logger import logger
 from app.notion_client import NotionUpstreamError
+from app.unsafe_url_continuation import (
+    allow_pending_unsafe_urls_once,
+    get_remembered_unsafe_url_steps,
+)
 
 router = APIRouter(tags=["notion"])
 
@@ -86,6 +90,27 @@ class AccountInfoResponse(BaseModel):
     repo_ai_parent_page_id: str
     parent_page_accessible: bool
     context_page_id: str
+
+
+class AllowUnsafeUrlOnceRequest(BaseModel):
+    thread_id: str = Field(min_length=1)
+    tool_step_ids: list[str] = Field(default_factory=list)
+
+
+class AllowUnsafeUrlOnceResponse(BaseModel):
+    ok: bool
+    continued: bool
+    approved: bool = False
+    thread_id: str
+    tool_step_ids: list[str] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    trace_id: str = ""
+    stream_completed: bool = False
+    event_count: int = 0
+    event_types: list[str] = Field(default_factory=list)
+    applied_tool_step_ids: list[str] = Field(default_factory=list)
+    unresolved_tool_step_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
 
 
 def _error_detail(*, message: str, code: str, error_type: str, param: str | None = None, detail: str = "") -> dict:
@@ -208,6 +233,53 @@ async def account_info(request: Request) -> AccountInfoResponse:
         parent_page_accessible=parent_accessible,
         context_page_id=client.context_page_id,
     )
+
+
+@router.post("/notion/unsafe_url/allow_once", response_model=AllowUnsafeUrlOnceResponse)
+async def allow_unsafe_url_once(
+    request: Request,
+    body: AllowUnsafeUrlOnceRequest,
+) -> AllowUnsafeUrlOnceResponse:
+    """Grant pending web load confirmations and resume the existing Notion inference."""
+    try:
+        pool = request.app.state.account_pool
+        thread_id = body.thread_id.strip()
+        # Confirmation step IDs are account-scoped. Prefer the exact client
+        # that captured this transient step instead of round-robin routing.
+        client = next(
+            (
+                candidate
+                for candidate in getattr(pool, "clients", [])
+                if get_remembered_unsafe_url_steps(candidate, thread_id)
+            ),
+            None,
+        ) or pool.get_client()
+        result = await run_in_threadpool(
+            allow_pending_unsafe_urls_once,
+            client,
+            thread_id=thread_id,
+            tool_step_ids=body.tool_step_ids,
+        )
+        return AllowUnsafeUrlOnceResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                message=str(exc),
+                code="invalid_unsafe_url_continuation",
+                error_type="invalid_request_error",
+            ),
+        ) from exc
+    except NotionUpstreamError as exc:
+        raise HTTPException(
+            status_code=503 if exc.retriable else 502,
+            detail=_error_detail(
+                message=str(exc),
+                code="notion_unsafe_url_continuation_failed",
+                error_type="upstream_error",
+                detail=exc.response_excerpt,
+            ),
+        ) from exc
 
 
 @router.post("/notion/create_page", response_model=CreatePageResponse)

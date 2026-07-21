@@ -1,0 +1,4 @@
+interface:
+  display_name: "Operate Notion2API"
+  short_description: "Run safe Notion2API MCP workflows"
+  default_prompt: "Use $notion2api-operate to complete this Notion2API request safely."

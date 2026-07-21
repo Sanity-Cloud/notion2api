@@ -1,0 +1,4 @@
+interface:
+  display_name: "Write Notion2API Schemas"
+  short_description: "Define stable Notion2API tool outputs"
+  default_prompt: "Use $notion2api-write-output-schema to design the output schema for this operation."
