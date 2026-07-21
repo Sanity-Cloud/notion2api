@@ -284,6 +284,49 @@ These observations do not invalidate the code correction or its 198-test receipt
 4. record staging and provider-preflight failures explicitly in the observable activity timeline; and
 5. distinguish connector timeout, admission failure, provider execution, and terminal persistence in every review receipt.
 
+## Live deployment receipt
+
+The bounded P0 implementation was fast-forwarded to Notion2API `main` and pushed to `sanity-pr/main` on July 20, 2026.
+
+- deployed code commit: `7ea9249ac5d03dd11c2920cd015125969c2f8771`;
+- rollback branch: `backup/pre-mcp-concurrency-20260720-230030` at the prior main commit;
+- backend identity: `uvicorn app.server:app` on `127.0.0.1:8120`;
+- MCP identity: `app.mcp_server` on `0.0.0.0:8130`, backed by `http://127.0.0.1:8120`;
+- MCP protocol health: `ok`, one configured account;
+- Git main and remote main: identical and clean after deployment.
+
+Startup recovery produced the following durable projection:
+
+- total jobs: 405;
+- completed: 305;
+- stale: 22;
+- error: 51;
+- cancelled: 27;
+- active `running` or `pending`: 0.
+
+The previously stranded RepoAI Terra request `mcp-chat-a2c4d9d2a4994ac98ee15ac226bb67a2` was reconciled without replay:
+
+- prior state: `pending` with no embedded response;
+- durable SQLite evidence: assistant message `1538`, 17,624 characters, after baseline message `1526`;
+- recovered state: `completed`;
+- completion source: `local_conversation_checkpoint`;
+- normal polling now returns the recovered response and advances its canonical poll count.
+
+A live non-dispatching isolation probe reused that completed request ID with a different conversation. The service returned:
+
+- status code `409`;
+- `retry_safe=false`;
+- code `request_id_conversation_mismatch`;
+- empty response text;
+- no prior remote chat ID or Notion thread ID;
+- no provider dispatch.
+
+Temporary-ledger recovery reduced 24 root temp ledgers to one retained file. The remaining file is malformed JSON (`JSONDecodeError` near character 331,026), so deletion was correctly refused. Pre-deployment copies of the canonical job and session ledgers are stored under `data/recovery/`.
+
+The MCP log recorded two atomic-replace retry failures during startup/reconciliation. A subsequent controlled poll did not increase the warning count, and canonical `poll_count` advanced from 1 to 2. The service is therefore operational, but the 28 MB global JSON rewrite remains a scaling and contention risk. The recommended SQLite/sharded append-only P1 migration remains necessary; this deployment does not claim multi-process write authority.
+
+No live parallel provider calls were launched solely for testing. Parallelism across independent conversations is established by deterministic concurrent tests, while the live multi-model RepoAI review demonstrated sequential same-conversation turns and exposed the request-ID isolation defect that was corrected before deployment.
+
 ## KISS summary
 
 - Different conversations: parallel.
