@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import copy
@@ -64,6 +64,7 @@ MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS = 4_000
 DEFAULT_STAGED_FILE_TTL_SECONDS = 24 * 60 * 60
 STAGED_FILE_ID_RE = re.compile(r"^stage-[a-f0-9]{32}$")
 SESSION_STATE_VERSION = 2
+_SESSION_STATE_MUTEX = threading.RLock()
 _CHAT_JOB_STATE_MUTEX = threading.RLock()
 _CHAT_JOB_TASKS: dict[str, asyncio.Task[dict[str, Any]]] = {}
 logger = logging.getLogger(__name__)
@@ -1079,12 +1080,14 @@ def _recover_chat_job_state(path: Path) -> dict[str, Any]:
         key=lambda item: item.stat().st_mtime if item.exists() else 0,
     )
     recovered = False
+    valid_tmp_paths: list[Path] = []
     for tmp_path in tmp_paths:
         tmp_state = _load_chat_job_state_file(tmp_path)
         if tmp_state is None:
             continue
+        valid_tmp_paths.append(tmp_path)
         recovered = _merge_chat_job_states(state, tmp_state) or recovered
-    if recovered:
+    if valid_tmp_paths:
         try:
             _atomic_write_json(path, state)
         except OSError:
@@ -1094,9 +1097,33 @@ def _recover_chat_job_state(path: Path) -> dict[str, Any]:
                     "request_info": {
                         "event": "chat_job_state_recovery_unpromoted",
                         "path": str(path),
+                        "recovered": recovered,
+                        "valid_temp_files": len(valid_tmp_paths),
                     }
                 },
             )
+        else:
+            promoted = _load_chat_job_state_file(path)
+            promotion_valid = promoted is not None
+            if promotion_valid and promoted is not None:
+                # A re-merge must be a no-op: the canonical file must contain
+                # every recovered job at an equal or newer timestamp.
+                promotion_valid = not _merge_chat_job_states(promoted, state)
+            if promotion_valid:
+                for tmp_path in valid_tmp_paths:
+                    with contextlib.suppress(OSError):
+                        tmp_path.unlink()
+            else:
+                logger.warning(
+                    "Recovered chat job state could not be verified after promotion",
+                    extra={
+                        "request_info": {
+                            "event": "chat_job_state_recovery_verification_failed",
+                            "path": str(path),
+                            "valid_temp_files": len(valid_tmp_paths),
+                        }
+                    },
+                )
     return state
 
 
@@ -1120,7 +1147,7 @@ def _job_response_text(response: dict[str, Any] | None) -> str:
 
 _CHECKLIST_RE = re.compile(r"(?m)^\s*(?:[-*]\s*)?\[([ xX])\]\s+(.+?)\s*$")
 _PUBLIC_ACTIVITY_RE = re.compile(
-    r"^(?:now\s+)?(?:i(?:'m| am|’m)\s+)?"
+    r"^(?:now\s+)?(?:i(?:'m| am|â€™m)\s+)?"
     r"(?:reviewing|reading|searching|checking|mapping|updating|creating|executing|"
     r"applying|merging|writing|verifying|polling|waiting|uploading|downloading|"
     r"extracting|running|preparing|finalizing|completed|finished)\b",
@@ -1595,6 +1622,8 @@ def _complete_chat_job_from_local_turn(
 def _active_job_for_conversation(
     conversation_id: str, *, exclude_request_id: str = ""
 ) -> tuple[str, dict[str, Any]] | None:
+    """Read-only inspection helper; never use this as admission authority."""
+
     state = _load_chat_job_state()
     jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
     if not isinstance(jobs, dict):
@@ -1607,6 +1636,103 @@ def _active_job_for_conversation(
         if str(raw_job.get("status") or "") in {"running", "pending"}:
             return str(request_id), raw_job
     return None
+
+
+def _claim_chat_job_task(
+    job: dict[str, Any],
+    task_factory: Any,
+    *,
+    path: Path = DEFAULT_CHAT_JOB_STATE_PATH,
+) -> tuple[str, dict[str, Any], Any, str]:
+    """Atomically reserve one active turn for a conversation in this MCP process.
+
+    Returns ``(status, record, task, conflict_request_id)`` where status is one
+    of ``claimed``, ``existing``, ``conflict``, or ``stale_conflict``. The
+    durable job claim is persisted before task creation, and admission remains
+    inside one process-local critical section.
+    """
+
+    request_id = _normalize_request_id(str(job.get("request_id") or ""))
+    conversation_id = str(job.get("conversation_id") or "").strip()
+    if not conversation_id:
+        raise ValueError("conversation_id is required for chat job admission")
+
+    with _CHAT_JOB_STATE_MUTEX:
+        state = _load_chat_job_state(path)
+        jobs = state.setdefault("jobs", {})
+        existing = jobs.get(request_id)
+        if isinstance(existing, dict):
+            return "existing", dict(existing), _CHAT_JOB_TASKS.get(request_id), ""
+
+        for other_request_id, raw_job in list(jobs.items()):
+            if not isinstance(raw_job, dict) or str(other_request_id) == request_id:
+                continue
+            if str(raw_job.get("conversation_id") or "") != conversation_id:
+                continue
+            if str(raw_job.get("status") or "") not in {"running", "pending"}:
+                continue
+
+            other_id = str(other_request_id)
+            other_task = _CHAT_JOB_TASKS.get(other_id)
+            if other_task is not None and not other_task.done():
+                return "conflict", dict(raw_job), other_task, other_id
+
+            stale = dict(raw_job)
+            stale["status"] = "stale"
+            stale["updated_at"] = _now_ms()
+            stale["error"] = (
+                "The MCP wrapper restarted or lost the in-memory task before this job "
+                "completed. Check the local conversation by conversation_id before retrying."
+            )
+            jobs[other_id] = _refresh_chat_job_health(stale)
+            _save_chat_job_state(state, path)
+            return "stale_conflict", dict(stale), None, other_id
+
+        durable_job = dict(job)
+        durable_job["request_id"] = request_id
+        durable_job["job_id"] = request_id
+        durable_job["status"] = "pending"
+        durable_job["updated_at"] = _now_ms()
+        jobs[request_id] = durable_job
+        _save_chat_job_state(state, path)
+
+        try:
+            task = task_factory()
+        except Exception as exc:
+            failed_job = dict(durable_job)
+            failed_job["status"] = "error"
+            failed_job["updated_at"] = _now_ms()
+            failed_job["error"] = f"Task scheduling failed: {type(exc).__name__}: {exc}"
+            jobs[request_id] = _refresh_chat_job_health(failed_job)
+            try:
+                _save_chat_job_state(state, path)
+            except OSError:
+                logger.exception(
+                    "Could not persist chat task scheduling failure",
+                    extra={
+                        "request_info": {
+                            "event": "chat_job_task_scheduling_failure_unpersisted",
+                            "request_id": request_id,
+                            "conversation_id": conversation_id,
+                        }
+                    },
+                )
+            raise
+
+        running_job = dict(durable_job)
+        running_job["status"] = "running"
+        running_job["updated_at"] = _now_ms()
+        jobs[request_id] = running_job
+        try:
+            _save_chat_job_state(state, path)
+        except Exception:
+            if task is not None and not task.done():
+                task.cancel()
+            # The prior durable pending claim remains authoritative and blocks
+            # replacement until reconciliation.
+            raise
+        _CHAT_JOB_TASKS[request_id] = task
+        return "claimed", running_job, task, ""
 
 
 async def _run_chat_completion_job(
@@ -1802,6 +1928,14 @@ async def _submit_or_resume_chat_job(
         if status in {"completed", "error", "cancelled"}:
             if response:
                 return response
+            if status == "completed" and "baseline_message_id" in existing:
+                turn = await asyncio.to_thread(
+                    _completed_turn_after_checkpoint,
+                    str(existing.get("conversation_id") or conversation_id),
+                    baseline_message_id,
+                )
+                if turn is not None:
+                    return _complete_chat_job_from_local_turn(normalized_id, existing, turn)
             return _chat_pending_output(
                 job=existing,
                 client=client,
@@ -1811,7 +1945,6 @@ async def _submit_or_resume_chat_job(
                 session_created=False,
                 request_id=normalized_id,
                 wait_seconds=bounded_wait,
-                baseline_message_id=int(existing.get("baseline_message_id") or 0),
             )
         if status == "running" and (task is None or task.done()):
             if task and task.done():
@@ -1858,36 +1991,6 @@ async def _submit_or_resume_chat_job(
         )
 
     if task is None:
-        conflict = _active_job_for_conversation(
-            conversation_id, exclude_request_id=normalized_id
-        )
-        if conflict is not None:
-            conflict_id, conflict_job = conflict
-            if conflict_id not in _CHAT_JOB_TASKS:
-                _mark_chat_job_stale(conflict_job)
-            else:
-                return {
-                    "ok": False,
-                    "status_code": 409,
-                    "model": model,
-                    "actual_model": "",
-                    "model_metadata": None,
-                    **_runtime_audit(client, model),
-                    "session_name": session_key,
-                    "conversation_id": conversation_id,
-                    "session_created": session_created,
-                    "status": "error",
-                    "request_id": normalized_id,
-                    "job_id": normalized_id,
-                    "retry_safe": False,
-                    "wait_seconds": bounded_wait,
-                    "poll_hint": f"Poll active request_id={conflict_id} before sending another turn.",
-                    "error": "Another request is already active for this conversation.",
-                    "response_text": "",
-                    "remote_chat_id": "",
-                    "notion_thread_id": "",
-                    "raw": {"code": "conversation_busy", "active_request_id": conflict_id},
-                }
         baseline_message_id = _conversation_message_checkpoint(conversation_id)
         now = _now_ms()
         job = {
@@ -1908,29 +2011,95 @@ async def _submit_or_resume_chat_job(
             **_runtime_audit(client, model),
             **_attachment_provenance(attachment_required, attachment_manifest),
         }
-        _persist_chat_job(job)
+
+        def create_task() -> asyncio.Task[dict[str, Any]]:
+            return asyncio.create_task(
+                _run_chat_completion_job(
+                    client=client,
+                    path=path,
+                    payload=payload,
+                    model=model,
+                    session_key=session_key,
+                    conversation_id=conversation_id,
+                    session_created=session_created,
+                    request_id=normalized_id,
+                    wait_seconds=bounded_wait,
+                    baseline_message_id=baseline_message_id,
+                )
+            )
+
+        claim_status, claimed_job, task, conflict_id = _claim_chat_job_task(
+            job,
+            create_task,
+        )
+        if claim_status in {"conflict", "stale_conflict"}:
+            stale_conflict = claim_status == "stale_conflict"
+            return {
+                "ok": False,
+                "status_code": 409,
+                "model": model,
+                "actual_model": "",
+                "model_metadata": None,
+                **_runtime_audit(client, model),
+                "session_name": session_key,
+                "conversation_id": conversation_id,
+                "session_created": session_created,
+                "status": "error",
+                "request_id": normalized_id,
+                "job_id": normalized_id,
+                "retry_safe": False,
+                "wait_seconds": bounded_wait,
+                "poll_hint": (
+                    f"Inspect request_id={conflict_id} and reconcile its outcome before retrying."
+                    if stale_conflict
+                    else f"Poll active request_id={conflict_id} before sending another turn."
+                ),
+                "error": (
+                    "A prior request lost its local task; reconcile its durable outcome before "
+                    "starting another turn for this conversation."
+                    if stale_conflict
+                    else "Another request is already active for this conversation."
+                ),
+                "response_text": "",
+                "remote_chat_id": "",
+                "notion_thread_id": "",
+                "raw": {
+                    "code": (
+                        "conversation_reconciliation_required"
+                        if stale_conflict
+                        else "conversation_busy"
+                    ),
+                    "active_request_id": conflict_id,
+                },
+            }
+        if claim_status == "existing":
+            existing_response = (
+                claimed_job.get("response")
+                if isinstance(claimed_job.get("response"), dict)
+                else None
+            )
+            if existing_response:
+                return existing_response
+            return _chat_pending_output(
+                job=claimed_job,
+                client=client,
+                model=model,
+                session_key=str(claimed_job.get("session_name") or session_key),
+                conversation_id=str(claimed_job.get("conversation_id") or conversation_id),
+                session_created=False,
+                request_id=normalized_id,
+                wait_seconds=bounded_wait,
+            )
+
         _update_session_record(
             session_key,
             conversation_id=conversation_id,
             model=model,
             request_id=normalized_id,
         )
-        task = asyncio.create_task(
-            _run_chat_completion_job(
-                client=client,
-                path=path,
-                payload=payload,
-                model=model,
-                session_key=session_key,
-                conversation_id=conversation_id,
-                session_created=session_created,
-                request_id=normalized_id,
-                wait_seconds=bounded_wait,
-                baseline_message_id=baseline_message_id,
-            )
+        task.add_done_callback(
+            lambda done_task, rid=normalized_id: _finalize_chat_job(rid, done_task)
         )
-        _CHAT_JOB_TASKS[normalized_id] = task
-        task.add_done_callback(lambda done_task, rid=normalized_id: _finalize_chat_job(rid, done_task))
 
     if bounded_wait > 0:
         done, _pending = await asyncio.wait({task}, timeout=bounded_wait)
@@ -2114,21 +2283,29 @@ def _save_session_records(
     records: dict[str, dict[str, Any]],
     path: Path = DEFAULT_SESSION_STATE_PATH,
 ) -> None:
-    clean: dict[str, dict[str, Any]] = {}
-    for raw_name, raw_record in records.items():
-        if not isinstance(raw_record, dict):
-            continue
-        conversation_id = str(raw_record.get("conversation_id") or "").strip()
-        if not conversation_id:
-            continue
-        record = {str(key): value for key, value in raw_record.items() if value not in (None, "")}
-        record["conversation_id"] = conversation_id
-        clean[_session_key(raw_name)] = record
-    try:
-        _atomic_write_json(path, {"version": SESSION_STATE_VERSION, "sessions": clean})
-    except Exception:
-        # Session continuity is helpful but should not break model calls.
-        return
+    with _SESSION_STATE_MUTEX:
+        clean: dict[str, dict[str, Any]] = {}
+        for raw_name, raw_record in records.items():
+            if not isinstance(raw_record, dict):
+                continue
+            conversation_id = str(raw_record.get("conversation_id") or "").strip()
+            if not conversation_id:
+                continue
+            record = {
+                str(key): value
+                for key, value in raw_record.items()
+                if value not in (None, "")
+            }
+            record["conversation_id"] = conversation_id
+            clean[_session_key(raw_name)] = record
+        try:
+            _atomic_write_json(
+                path,
+                {"version": SESSION_STATE_VERSION, "sessions": clean},
+            )
+        except Exception:
+            # Session continuity is helpful but should not break model calls.
+            return
 
 
 def _load_session_state(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, str]:
@@ -2140,18 +2317,19 @@ def _load_session_state(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, st
 
 
 def _save_session_state(sessions: dict[str, str], path: Path = DEFAULT_SESSION_STATE_PATH) -> None:
-    existing = _load_session_records(path)
-    updated: dict[str, dict[str, Any]] = {}
-    for raw_name, raw_conversation_id in sessions.items():
-        name = _session_key(raw_name)
-        conversation_id = str(raw_conversation_id or "").strip()
-        if not conversation_id:
-            continue
-        record = dict(existing.get(name) or {})
-        record["conversation_id"] = conversation_id
-        record["updated_at"] = _now_ms()
-        updated[name] = record
-    _save_session_records(updated, path)
+    with _SESSION_STATE_MUTEX:
+        existing = _load_session_records(path)
+        updated: dict[str, dict[str, Any]] = {}
+        for raw_name, raw_conversation_id in sessions.items():
+            name = _session_key(raw_name)
+            conversation_id = str(raw_conversation_id or "").strip()
+            if not conversation_id:
+                continue
+            record = dict(existing.get(name) or {})
+            record["conversation_id"] = conversation_id
+            record["updated_at"] = _now_ms()
+            updated[name] = record
+        _save_session_records(updated, path)
 
 
 def _update_session_record(
@@ -2161,27 +2339,31 @@ def _update_session_record(
     remote_chat_id: str | None = None,
     model: str | None = None,
     request_id: str | None = None,
+    path: Path = DEFAULT_SESSION_STATE_PATH,
 ) -> None:
-    key = _session_key(session_name)
-    records = _load_session_records()
-    record = dict(records.get(key) or {})
-    clean_conversation_id = str(conversation_id or record.get("conversation_id") or "").strip()
-    if not clean_conversation_id:
-        return
-    record["conversation_id"] = clean_conversation_id
-    clean_remote_id = str(remote_chat_id or "").strip()
-    if clean_remote_id:
-        record["remote_chat_id"] = clean_remote_id
-        record["notion_thread_id"] = clean_remote_id
-    clean_model = str(model or "").strip()
-    if clean_model:
-        record["last_model"] = clean_model
-    clean_request_id = str(request_id or "").strip()
-    if clean_request_id:
-        record["last_request_id"] = clean_request_id
-    record["updated_at"] = _now_ms()
-    records[key] = record
-    _save_session_records(records)
+    with _SESSION_STATE_MUTEX:
+        key = _session_key(session_name)
+        records = _load_session_records(path)
+        record = dict(records.get(key) or {})
+        clean_conversation_id = str(
+            conversation_id or record.get("conversation_id") or ""
+        ).strip()
+        if not clean_conversation_id:
+            return
+        record["conversation_id"] = clean_conversation_id
+        clean_remote_id = str(remote_chat_id or "").strip()
+        if clean_remote_id:
+            record["remote_chat_id"] = clean_remote_id
+            record["notion_thread_id"] = clean_remote_id
+        clean_model = str(model or "").strip()
+        if clean_model:
+            record["last_model"] = clean_model
+        clean_request_id = str(request_id or "").strip()
+        if clean_request_id:
+            record["last_request_id"] = clean_request_id
+        record["updated_at"] = _now_ms()
+        records[key] = record
+        _save_session_records(records, path)
 
 
 def _conversation_id_for_session(
@@ -2190,13 +2372,18 @@ def _conversation_id_for_session(
     start_new_chat: bool = False,
     conversation_id: str | None = None,
     continue_from_request_id: str | None = None,
+    path: Path = DEFAULT_SESSION_STATE_PATH,
 ) -> tuple[str, str, bool]:
     requested_key = _session_key(session_name)
-    records = _load_session_records()
-
     continuation_id = str(continue_from_request_id or "").strip()
-    if continuation_id and not start_new_chat:
-        prior_job = _load_chat_job(_normalize_request_id(continuation_id))
+    prior_job = (
+        _load_chat_job(_normalize_request_id(continuation_id))
+        if continuation_id and not start_new_chat
+        else None
+    )
+
+    with _SESSION_STATE_MUTEX:
+        records = _load_session_records(path)
         if isinstance(prior_job, dict):
             prior_conversation_id = str(prior_job.get("conversation_id") or "").strip()
             prior_session_name = str(prior_job.get("session_name") or requested_key).strip()
@@ -2207,39 +2394,41 @@ def _conversation_id_for_session(
                 record["continued_from_request_id"] = continuation_id
                 record["updated_at"] = _now_ms()
                 records[key] = record
-                _save_session_records(records)
+                _save_session_records(records, path)
                 return prior_conversation_id, key, False
 
-    explicit_conversation_id = str(conversation_id or "").strip()
-    if explicit_conversation_id and not start_new_chat:
-        matching_key = next(
-            (
-                name
-                for name, record in records.items()
-                if str(record.get("conversation_id") or "").strip() == explicit_conversation_id
-            ),
-            requested_key,
-        )
-        record = dict(records.get(matching_key) or {})
-        record["conversation_id"] = explicit_conversation_id
-        record["updated_at"] = _now_ms()
-        records[matching_key] = record
-        _save_session_records(records)
-        return explicit_conversation_id, matching_key, False
+        explicit_conversation_id = str(conversation_id or "").strip()
+        if explicit_conversation_id and not start_new_chat:
+            matching_key = next(
+                (
+                    name
+                    for name, record in records.items()
+                    if str(record.get("conversation_id") or "").strip()
+                    == explicit_conversation_id
+                ),
+                requested_key,
+            )
+            record = dict(records.get(matching_key) or {})
+            record["conversation_id"] = explicit_conversation_id
+            record["updated_at"] = _now_ms()
+            records[matching_key] = record
+            _save_session_records(records, path)
+            return explicit_conversation_id, matching_key, False
 
-    current = records.get(requested_key) or {}
-    current_conversation_id = str(current.get("conversation_id") or "").strip()
-    created = False
-    if start_new_chat or not current_conversation_id:
-        current_conversation_id = f"mcp-{requested_key}-{uuid.uuid4().hex}"
-        current = {
-            "conversation_id": current_conversation_id,
-            "created_at": _now_ms(),
-        }
-        records[requested_key] = current
-        _save_session_records(records)
-        created = True
-    return current_conversation_id, requested_key, created
+        current = records.get(requested_key) or {}
+        current_conversation_id = str(current.get("conversation_id") or "").strip()
+        created = False
+        if start_new_chat or not current_conversation_id:
+            current_conversation_id = f"mcp-{requested_key}-{uuid.uuid4().hex}"
+            current = {
+                "conversation_id": current_conversation_id,
+                "created_at": _now_ms(),
+            }
+            records[requested_key] = current
+            _save_session_records(records, path)
+            created = True
+        return current_conversation_id, requested_key, created
+
 
 def _extract_conversation_id(data: dict[str, Any]) -> str:
     for key in ("conversation_id", "conversationId"):
@@ -2924,10 +3113,13 @@ def create_server(
 
     @server.tool(description="Start a fresh persistent Notion2API MCP chat for a named session.", structured_output=True)
     async def notion2api_reset_session(session_name: str = DEFAULT_SESSION_NAME) -> SessionActionOutput:
-        key = _session_key(session_name)
-        sessions = _load_session_state()
-        previous = sessions.get(key)
-        conversation_id, session_key, _created = _conversation_id_for_session(key, start_new_chat=True)
+        with _SESSION_STATE_MUTEX:
+            key = _session_key(session_name)
+            sessions = _load_session_state()
+            previous = sessions.get(key)
+            conversation_id, session_key, _created = _conversation_id_for_session(
+                key, start_new_chat=True
+            )
         return SessionActionOutput(
             ok=True,
             action="reset",
@@ -2943,38 +3135,39 @@ def create_server(
         new_session_name: str,
         overwrite: bool = False,
     ) -> SessionActionOutput:
-        old_key = _session_key(old_session_name)
-        new_key = _session_key(new_session_name)
-        records = _load_session_records()
-        if old_key not in records:
-            return SessionActionOutput(
-                ok=False,
-                action="rename",
-                session_name=new_key,
-                conversation_id="",
-                previous_session_name=old_key,
-                state_path=str(DEFAULT_SESSION_STATE_PATH),
-            )
-        if new_key in records and not overwrite and new_key != old_key:
-            return SessionActionOutput(
-                ok=False,
-                action="rename",
-                session_name=new_key,
-                conversation_id=str(records[new_key].get("conversation_id") or ""),
-                previous_session_name=old_key,
-                previous_conversation_id=str(records[old_key].get("conversation_id") or ""),
-                overwritten=False,
-                state_path=str(DEFAULT_SESSION_STATE_PATH),
-            )
-        source_record = dict(records[old_key])
-        conversation_id = str(source_record.get("conversation_id") or "")
-        previous_record = records.get(new_key) or {}
-        previous_target = str(previous_record.get("conversation_id") or "") or None
-        if old_key != new_key:
-            source_record["updated_at"] = _now_ms()
-            records[new_key] = source_record
-            records.pop(old_key, None)
-            _save_session_records(records)
+        with _SESSION_STATE_MUTEX:
+            old_key = _session_key(old_session_name)
+            new_key = _session_key(new_session_name)
+            records = _load_session_records()
+            if old_key not in records:
+                return SessionActionOutput(
+                    ok=False,
+                    action="rename",
+                    session_name=new_key,
+                    conversation_id="",
+                    previous_session_name=old_key,
+                    state_path=str(DEFAULT_SESSION_STATE_PATH),
+                )
+            if new_key in records and not overwrite and new_key != old_key:
+                return SessionActionOutput(
+                    ok=False,
+                    action="rename",
+                    session_name=new_key,
+                    conversation_id=str(records[new_key].get("conversation_id") or ""),
+                    previous_session_name=old_key,
+                    previous_conversation_id=str(records[old_key].get("conversation_id") or ""),
+                    overwritten=False,
+                    state_path=str(DEFAULT_SESSION_STATE_PATH),
+                )
+            source_record = dict(records[old_key])
+            conversation_id = str(source_record.get("conversation_id") or "")
+            previous_record = records.get(new_key) or {}
+            previous_target = str(previous_record.get("conversation_id") or "") or None
+            if old_key != new_key:
+                source_record["updated_at"] = _now_ms()
+                records[new_key] = source_record
+                records.pop(old_key, None)
+                _save_session_records(records)
         return SessionActionOutput(
             ok=True,
             action="rename",

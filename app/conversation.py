@@ -793,6 +793,11 @@ class ConversationManager:
             int: textround_indextext
         """
         with self._get_conn() as conn:
+            # Reserve the next round index and persist the complete turn under
+            # one SQLite writer transaction. BEGIN IMMEDIATE prevents two
+            # processes from reading the same next_round_index before either
+            # increments it.
+            conn.execute("BEGIN IMMEDIATE")
             conv_row = conn.execute(
                 "SELECT id, next_round_index FROM conversations WHERE id = ?",
                 (conversation_id,),

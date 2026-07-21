@@ -1,9 +1,13 @@
 import json
 
 import asyncio
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
+import pytest
 
 from app import mcp_server
 from app.attachments.security import AttachmentPolicy
@@ -93,6 +97,7 @@ def test_load_chat_job_state_recovers_valid_tmp_file(tmp_path):
     assert sorted(state["jobs"]) == ["new", "old"]
     assert state["jobs"]["old"]["updated_at"] == 2
     assert json.loads(path.read_text(encoding="utf-8"))["jobs"]["new"]["updated_at"] == 3
+    assert not tmp.exists()
 
 
 def test_legacy_session_key_remains_readable_for_existing_state():
@@ -597,6 +602,248 @@ def test_active_job_for_conversation_prevents_parallel_turns(monkeypatch):
     assert conflict[0] == "request-1"
 
 
+class _HeldTask:
+    def __init__(self):
+        self.cancelled = False
+
+    def done(self):
+        return False
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def _claim_test_job(request_id: str, conversation_id: str) -> dict:
+    return {
+        "request_id": request_id,
+        "job_id": request_id,
+        "status": "running",
+        "conversation_id": conversation_id,
+        "created_at": 1,
+        "updated_at": 1,
+        "last_progress_at": 1,
+    }
+
+
+def test_atomic_admission_allows_only_one_simultaneous_turn_per_conversation(
+    tmp_path, monkeypatch
+):
+    state_path = tmp_path / "jobs.json"
+    barrier = threading.Barrier(2)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    def claim(request_id):
+        barrier.wait(timeout=5)
+        return mcp_server._claim_chat_job_task(
+            _claim_test_job(request_id, "shared-conversation"),
+            _HeldTask,
+            path=state_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(claim, ["request-a", "request-b"]))
+
+    assert sorted(result[0] for result in results) == ["claimed", "conflict"]
+    claimed = next(result for result in results if result[0] == "claimed")
+    conflict = next(result for result in results if result[0] == "conflict")
+    assert conflict[3] == claimed[1]["request_id"]
+    persisted = mcp_server._load_chat_job_state(state_path)
+    assert list(persisted["jobs"]) == [claimed[1]["request_id"]]
+
+
+def test_simultaneous_same_request_id_creates_only_one_task(tmp_path, monkeypatch):
+    state_path = tmp_path / "jobs.json"
+    barrier = threading.Barrier(2)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+    created_tasks = []
+    task_lock = threading.Lock()
+
+    def task_factory():
+        task = _HeldTask()
+        with task_lock:
+            created_tasks.append(task)
+        return task
+
+    def claim():
+        barrier.wait(timeout=5)
+        return mcp_server._claim_chat_job_task(
+            _claim_test_job("request-same", "conversation-same"),
+            task_factory,
+            path=state_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _item: claim(), range(2)))
+
+    assert sorted(result[0] for result in results) == ["claimed", "existing"]
+    assert len(created_tasks) == 1
+    claimed = next(result for result in results if result[0] == "claimed")
+    existing = next(result for result in results if result[0] == "existing")
+    assert existing[2] is claimed[2]
+    persisted = mcp_server._load_chat_job_state(state_path)
+    assert list(persisted["jobs"]) == ["request-same"]
+
+
+def test_atomic_admission_does_not_create_task_when_claim_write_fails(
+    tmp_path, monkeypatch
+):
+    state_path = tmp_path / "jobs.json"
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+    created = []
+
+    def task_factory():
+        task = _HeldTask()
+        created.append(task)
+        return task
+
+    def fail_save(_state, _path=state_path):
+        raise OSError("simulated durable ledger failure")
+
+    monkeypatch.setattr(mcp_server, "_save_chat_job_state", fail_save)
+
+    with pytest.raises(OSError, match="durable ledger failure"):
+        mcp_server._claim_chat_job_task(
+            _claim_test_job("request-failed", "conversation-failed"),
+            task_factory,
+            path=state_path,
+        )
+
+    assert created == []
+    assert "request-failed" not in mcp_server._CHAT_JOB_TASKS
+
+
+def test_task_creation_failure_releases_durable_claim_for_retry(tmp_path, monkeypatch):
+    state_path = tmp_path / "jobs.json"
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    def fail_task_creation():
+        raise RuntimeError("simulated scheduler failure")
+
+    with pytest.raises(RuntimeError, match="scheduler failure"):
+        mcp_server._claim_chat_job_task(
+            _claim_test_job("request-failed-task", "conversation-failed-task"),
+            fail_task_creation,
+            path=state_path,
+        )
+
+    persisted = mcp_server._load_chat_job_state(state_path)
+    failed = persisted["jobs"]["request-failed-task"]
+    assert failed["status"] == "error"
+    assert "Task scheduling failed" in failed["error"]
+    assert "request-failed-task" not in mcp_server._CHAT_JOB_TASKS
+
+    status, record, task, conflict_id = mcp_server._claim_chat_job_task(
+        _claim_test_job("request-retry", "conversation-failed-task"),
+        _HeldTask,
+        path=state_path,
+    )
+    assert status == "claimed"
+    assert record["status"] == "running"
+    assert task is not None
+    assert conflict_id == ""
+
+
+def test_orphaned_active_turn_requires_reconciliation_before_replacement(
+    tmp_path, monkeypatch
+):
+    state_path = tmp_path / "jobs.json"
+    mcp_server._save_chat_job_state(
+        {
+            "jobs": {
+                "request-old": _claim_test_job(
+                    "request-old", "shared-conversation"
+                )
+            }
+        },
+        state_path,
+    )
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    status, record, task, conflict_id = mcp_server._claim_chat_job_task(
+        _claim_test_job("request-new", "shared-conversation"),
+        _HeldTask,
+        path=state_path,
+    )
+
+    assert status == "stale_conflict"
+    assert task is None
+    assert conflict_id == "request-old"
+    assert record["status"] == "stale"
+    persisted = mcp_server._load_chat_job_state(state_path)
+    assert persisted["jobs"]["request-old"]["status"] == "stale"
+    assert "request-new" not in persisted["jobs"]
+
+
+def test_atomic_admission_preserves_parallel_different_conversations(
+    tmp_path, monkeypatch
+):
+    state_path = tmp_path / "jobs.json"
+    barrier = threading.Barrier(2)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    def claim(item):
+        request_id, conversation_id = item
+        barrier.wait(timeout=5)
+        return mcp_server._claim_chat_job_task(
+            _claim_test_job(request_id, conversation_id),
+            _HeldTask,
+            path=state_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                claim,
+                [
+                    ("request-a", "conversation-a"),
+                    ("request-b", "conversation-b"),
+                ],
+            )
+        )
+
+    assert [result[0] for result in results] == ["claimed", "claimed"]
+    persisted = mcp_server._load_chat_job_state(state_path)
+    assert sorted(persisted["jobs"]) == ["request-a", "request-b"]
+
+
+def test_concurrent_session_updates_preserve_unrelated_records(tmp_path, monkeypatch):
+    state_path = tmp_path / "sessions.json"
+    barrier = threading.Barrier(2)
+    original_load = mcp_server._load_session_records
+
+    def slow_load(path=state_path):
+        records = original_load(path)
+        time.sleep(0.05)
+        return records
+
+    monkeypatch.setattr(mcp_server, "_load_session_records", slow_load)
+
+    def update(item):
+        session_name, conversation_id = item
+        barrier.wait(timeout=5)
+        mcp_server._update_session_record(
+            session_name,
+            conversation_id=conversation_id,
+            request_id=f"request-{session_name}",
+            path=state_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(
+            pool.map(
+                update,
+                [
+                    ("session-a", "conversation-a"),
+                    ("session-b", "conversation-b"),
+                ],
+            )
+        )
+
+    records = original_load(state_path)
+    assert records["session-a"]["conversation_id"] == "conversation-a"
+    assert records["session-b"]["conversation_id"] == "conversation-b"
+
+
 def test_startup_reconciliation_closes_orphaned_jobs(monkeypatch):
     state = {
         "jobs": {
@@ -717,9 +964,15 @@ def test_submit_passes_message_checkpoint_to_worker(monkeypatch):
         }
 
     monkeypatch.setattr(mcp_server, "_conversation_message_checkpoint", lambda _cid: 17)
-    monkeypatch.setattr(mcp_server, "_active_job_for_conversation", lambda *args, **kwargs: None)
     monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: None)
     monkeypatch.setattr(mcp_server, "_persist_chat_job", lambda _job: None)
+
+    def fake_claim(job, task_factory, **_kwargs):
+        task = task_factory()
+        mcp_server._CHAT_JOB_TASKS[job["request_id"]] = task
+        return "claimed", job, task, ""
+
+    monkeypatch.setattr(mcp_server, "_claim_chat_job_task", fake_claim)
     monkeypatch.setattr(mcp_server, "_update_session_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(mcp_server, "_finalize_chat_job", lambda *args, **kwargs: None)
     monkeypatch.setattr(mcp_server, "_run_chat_completion_job", fake_worker)
@@ -748,22 +1001,52 @@ def test_submit_passes_message_checkpoint_to_worker(monkeypatch):
     assert captured["baseline_message_id"] == 17
 
 
-def test_terminal_job_without_response_uses_persisted_checkpoint(monkeypatch):
+def test_terminal_job_without_response_recovers_persisted_checkpoint(monkeypatch):
     from types import SimpleNamespace
 
     captured = {}
     existing = {
+        "request_id": "request-checkpoint",
+        "job_id": "request-checkpoint",
         "status": "completed",
         "session_name": "checkpoint-test",
         "conversation_id": "conv-checkpoint",
         "baseline_message_id": 17,
     }
+    turn = {
+        "assistant_message_id": 18,
+        "response_text": "Recovered persisted answer",
+        "thinking": "",
+        "remote_chat_id": "thread-checkpoint",
+        "actual_model": "terra-route",
+    }
     monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: existing)
     monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
     monkeypatch.setattr(
         mcp_server,
+        "_completed_turn_after_checkpoint",
+        lambda conversation_id, baseline: (
+            captured.update(conversation_id=conversation_id, baseline=baseline) or turn
+        ),
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "_complete_chat_job_from_local_turn",
+        lambda request_id, job, completed_turn: (
+            captured.update(
+                request_id=request_id,
+                job=job,
+                completed_turn=completed_turn,
+            )
+            or {"status": "completed", "response_text": completed_turn["response_text"]}
+        ),
+    )
+    monkeypatch.setattr(
+        mcp_server,
         "_chat_pending_output",
-        lambda **kwargs: captured.update(kwargs) or {"status": "completed"},
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed checkpoint should be recovered before pending output")
+        ),
     )
 
     result = asyncio.run(
@@ -780,8 +1063,14 @@ def test_terminal_job_without_response_uses_persisted_checkpoint(monkeypatch):
         )
     )
 
-    assert result["status"] == "completed"
-    assert captured["baseline_message_id"] == 17
+    assert result == {
+        "status": "completed",
+        "response_text": "Recovered persisted answer",
+    }
+    assert captured["conversation_id"] == "conv-checkpoint"
+    assert captured["baseline"] == 17
+    assert captured["request_id"] == "request-checkpoint"
+    assert captured["completed_turn"] == turn
 
 
 def test_chat_job_poll_is_bounded_unless_full_response_is_requested(monkeypatch):

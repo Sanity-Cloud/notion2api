@@ -172,3 +172,10 @@ Successful local staging does not prove successful Notion ingestion. The upstrea
 ## Security note
 
 Do not publish this server directly to the public internet unless you add proper MCP-side authentication. Prefer Secure MCP Tunnel for private local use.
+
+
+## Concurrency and multi-tool status
+
+Notion2API permits parallel MCP chat jobs across different conversations while serializing unresolved turns within one conversation. The current implementation is designed for one MCP process; cross-process leases, account capacity scheduling, and durable per-tool-call fan-out/fan-in remain separate architecture work.
+
+See [MCP Concurrency and Multi-Tool Evaluation — July 20, 2026](MCP_CONCURRENCY_AND_MULTITOOL_EVALUATION_2026-07-20.md) for the evidence snapshot, supported invariants, test matrix, and prioritized updates.
