@@ -304,6 +304,11 @@ Notion2API keeps prompt text and attachments on separate request paths. MCP prom
 
 Persistent `session_name` values identify a chat, while `request_id` identifies one retry-safe operation. Polling snapshots, task/checklist summaries, attachment manifests, command output, and file listings are not appended to subsequent prompts. Marker text is preserved when the caller explicitly includes it.
 
+### Attachment file types
+
+The default attachment policy accepts common text, Markdown, diff/patch, source-code, structured-data, Office/OpenDocument, archive, and image formats. MIME aliases are normalized, and known extensions override generic operating-system guesses such as `text/plain` or `application/octet-stream`. Examples include `.txt`, `.md`, `.patch`, `.diff`, `.json`, `.yaml`, `.toml`, `.py`, `.js`, `.ts`, `.ps1`, `.docx`, `.xlsx`, `.pptx`, `.zip`, and `.svg`.
+
+Executables and unknown binary formats remain blocked by default. Deployments can narrow or replace the allowlist with `ATTACHMENT_ALLOWED_MIME_TYPES`.
 
 ### MCP job terminalization
 

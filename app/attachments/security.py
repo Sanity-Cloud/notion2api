@@ -10,19 +10,95 @@ from urllib.parse import urlparse
 
 from app.attachments.errors import AttachmentError
 
-DEFAULT_ALLOWED_MIME_TYPES = {
-    "application/pdf",
-    "text/csv",
-    "application/zip",
-    "application/x-zip-compressed",
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-    "image/heic",
-    "application/zip",
-    "application/x-zip-compressed",
+DEFAULT_EXTENSION_MIME_TYPES = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".patch": "text/x-diff",
+    ".diff": "text/x-diff",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+    ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
+    ".ndjson": "application/x-ndjson",
+    ".xml": "application/xml",
+    ".yaml": "application/yaml",
+    ".yml": "application/yaml",
+    ".toml": "application/toml",
+    ".ini": "text/plain",
+    ".cfg": "text/plain",
+    ".conf": "text/plain",
+    ".py": "text/x-python",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".cjs": "text/javascript",
+    ".ts": "text/typescript",
+    ".tsx": "text/tsx",
+    ".jsx": "text/jsx",
+    ".java": "text/x-java-source",
+    ".cs": "text/x-csharp",
+    ".c": "text/x-c",
+    ".cc": "text/x-c++src",
+    ".cpp": "text/x-c++src",
+    ".cxx": "text/x-c++src",
+    ".h": "text/x-c++hdr",
+    ".hpp": "text/x-c++hdr",
+    ".rs": "text/x-rust",
+    ".go": "text/x-go",
+    ".rb": "text/x-ruby",
+    ".php": "application/x-httpd-php",
+    ".sh": "application/x-sh",
+    ".ps1": "text/x-powershell",
+    ".psm1": "text/x-powershell",
+    ".psd1": "text/x-powershell",
+    ".sql": "application/sql",
+    ".css": "text/css",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".pdf": "application/pdf",
+    ".rtf": "application/rtf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".odp": "application/vnd.oasis.opendocument.presentation",
+    ".epub": "application/epub+zip",
+    ".zip": "application/zip",
+    ".tar": "application/x-tar",
+    ".gz": "application/gzip",
+    ".tgz": "application/gzip",
+    ".bz2": "application/x-bzip2",
+    ".xz": "application/x-xz",
+    ".7z": "application/x-7z-compressed",
+    ".rar": "application/vnd.rar",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
 }
+
+CONTENT_TYPE_ALIASES = {
+    "application/x-zip-compressed": "application/zip",
+    "application/x-yaml": "application/yaml",
+    "text/yaml": "application/yaml",
+    "text/x-markdown": "text/markdown",
+    "application/x-json": "application/json",
+    "text/json": "application/json",
+    "application/x-gzip": "application/gzip",
+    "application/x-rar-compressed": "application/vnd.rar",
+}
+
+DEFAULT_ALLOWED_MIME_TYPES = set(DEFAULT_EXTENSION_MIME_TYPES.values())
 
 _PRIVATE_HOSTNAMES = {"localhost", "localhost.localdomain"}
 _DEFAULT_ALLOWED_PORTS = {80, 443}
@@ -50,7 +126,11 @@ def _env_csv_set(name: str, default: set[str]) -> set[str]:
     value = os.getenv(name)
     if not value:
         return set(default)
-    parsed = {item.strip().lower() for item in value.split(",") if item.strip()}
+    parsed = {
+        CONTENT_TYPE_ALIASES.get(item.strip().lower(), item.strip().lower())
+        for item in value.split(",")
+        if item.strip()
+    }
     return parsed or set(default)
 
 
@@ -86,7 +166,8 @@ class AttachmentPolicy:
 
 
 def normalize_content_type(content_type: str) -> str:
-    return str(content_type or "").split(";", 1)[0].strip().lower()
+    normalized = str(content_type or "").split(";", 1)[0].strip().lower()
+    return CONTENT_TYPE_ALIASES.get(normalized, normalized)
 
 
 def validate_attachment_count(count: int, policy: AttachmentPolicy | None = None) -> None:
@@ -108,7 +189,8 @@ def validate_content_type(content_type: str, policy: AttachmentPolicy | None = N
             code="attachment_content_type_required",
             param="attachments.content_type",
         )
-    if normalized not in policy.allowed_mime_types:
+    allowed = {normalize_content_type(item) for item in policy.allowed_mime_types}
+    if normalized not in allowed:
         raise AttachmentError(
             f"Unsupported attachment content type: {normalized}",
             code="unsupported_attachment_type",

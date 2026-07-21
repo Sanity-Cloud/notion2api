@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app.attachments.errors import AttachmentError
-from app.attachments.loader import decode_inline_data, load_attachment_data
+from app.attachments.loader import decode_inline_data, infer_content_type, load_attachment_data
 from app.attachments.models import InputAttachment
 from app.api.chat import _attachments_enabled_for_request
 from app.core.internal_callers import (
@@ -16,6 +16,7 @@ from app.core.internal_callers import (
 )
 from app.attachments.security import (
     AttachmentPolicy,
+    normalize_content_type,
     validate_content_type,
     validate_remote_url,
     validate_size,
@@ -102,6 +103,30 @@ class AttachmentSecurityTests(unittest.TestCase):
         req = _mock_request(headers={REPO_AI_CALLER_HEADER: REPO_AI_CALLER_VALUE})
         policy = AttachmentPolicy(enabled=False)
         self.assertTrue(_attachments_enabled_for_request(req, policy))
+
+
+    def test_normalizes_common_content_type_aliases(self) -> None:
+        self.assertEqual(normalize_content_type("text/x-markdown; charset=utf-8"), "text/markdown")
+        self.assertEqual(normalize_content_type("application/x-yaml"), "application/yaml")
+        self.assertEqual(normalize_content_type("application/x-zip-compressed"), "application/zip")
+
+    def test_infers_deterministic_development_and_document_types(self) -> None:
+        expected = {
+            "README.md": "text/markdown",
+            "review.patch": "text/x-diff",
+            "notes.txt": "text/plain",
+            "config.yaml": "application/yaml",
+            "module.py": "text/x-python",
+            "report.docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        for name, content_type in expected.items():
+            with self.subTest(name=name):
+                self.assertEqual(infer_content_type(name), content_type)
+                self.assertEqual(validate_content_type(content_type, AttachmentPolicy(enabled=True)), content_type)
+
+    def test_extension_mapping_overrides_generic_os_guess(self) -> None:
+        self.assertEqual(infer_content_type("review.patch", "text/plain"), "text/x-diff")
+        self.assertEqual(infer_content_type("config.yaml", "application/octet-stream"), "application/yaml")
 
     def test_rejects_unsupported_content_type(self) -> None:
         with self.assertRaises(AttachmentError) as ctx:

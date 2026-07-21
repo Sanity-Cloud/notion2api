@@ -121,3 +121,41 @@ def test_generated_mcp_schema_separates_local_paths_from_transferred_files():
         file_schema = by_name[tool_name].inputSchema["properties"]["file"]
         assert file_schema["type"] == "string"
         assert file_schema["format"] == "file"
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected_type"),
+    [
+        (".md", "text/markdown"),
+        (".txt", "text/plain"),
+        (".patch", "text/x-diff"),
+        (".yaml", "application/yaml"),
+        (".py", "text/x-python"),
+        (".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    ],
+)
+def test_prepare_mcp_file_attachments_supports_common_formats(suffix, expected_type):
+    with patch.object(AttachmentPolicy, "from_env") as mock_policy:
+        mock_policy.return_value = AttachmentPolicy(enabled=True)
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(b"sample")
+            tmp_name = tmp.name
+        try:
+            result = prepare_mcp_file_attachments([tmp_name])
+            assert result[0]["content_type"] == expected_type
+        finally:
+            os.unlink(tmp_name)
+
+
+def test_prepare_mcp_file_attachments_rejects_executable_by_default():
+    with patch.object(AttachmentPolicy, "from_env") as mock_policy:
+        mock_policy.return_value = AttachmentPolicy(enabled=True)
+        with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as tmp:
+            tmp.write(b"MZ")
+            tmp_name = tmp.name
+        try:
+            with pytest.raises(AttachmentError) as exc_info:
+                prepare_mcp_file_attachments([tmp_name])
+            assert exc_info.value.code == "unsupported_attachment_type"
+        finally:
+            os.unlink(tmp_name)

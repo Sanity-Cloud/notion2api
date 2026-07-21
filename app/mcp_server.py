@@ -274,8 +274,8 @@ def prepare_mcp_file_attachments(
         return []
 
     from app.attachments.errors import AttachmentError
+    from app.attachments.loader import infer_content_type
     from app.attachments.security import AttachmentPolicy, validate_attachment_count, validate_content_type, validate_size
-    import mimetypes
     import base64
     from pathlib import Path
 
@@ -308,12 +308,7 @@ def prepare_mcp_file_attachments(
         size = path.stat().st_size
         validate_size(size, policy)
 
-        guessed_type, _ = mimetypes.guess_type(path.name)
-        if path.suffix.lower() == ".zip":
-            guessed_type = "application/zip"
-        elif path.suffix.lower() == ".csv":
-            guessed_type = "text/csv"
-        mime_type = validate_content_type(guessed_type or "application/octet-stream", policy)
+        mime_type = validate_content_type(infer_content_type(path.name), policy)
 
         data = path.read_bytes()
         encoded = base64.b64encode(data).decode("utf-8")
@@ -438,9 +433,9 @@ def stage_mcp_transferred_file(file_path: str, filename: str | None = None) -> d
     """Persist one connector-transferred file and return an opaque, expiring id."""
 
     import hashlib
-    import mimetypes
     import shutil
     from app.attachments.errors import AttachmentError
+    from app.attachments.loader import infer_content_type
     from app.attachments.security import AttachmentPolicy, validate_content_type, validate_size
 
     policy = AttachmentPolicy.from_env()
@@ -459,12 +454,7 @@ def stage_mcp_transferred_file(file_path: str, filename: str | None = None) -> d
     if not safe_name or safe_name in {".", ".."}:
         raise AttachmentError("A valid staged filename is required.", code="invalid_upload_filename", param="filename")
 
-    guessed_type, _ = mimetypes.guess_type(safe_name)
-    if Path(safe_name).suffix.lower() == ".zip":
-        guessed_type = "application/zip"
-    elif Path(safe_name).suffix.lower() == ".csv":
-        guessed_type = "text/csv"
-    content_type = validate_content_type(guessed_type or "application/octet-stream", policy)
+    content_type = validate_content_type(infer_content_type(safe_name), policy)
 
     root = _staged_file_root()
     _cleanup_expired_staged_files(root)

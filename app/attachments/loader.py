@@ -14,6 +14,8 @@ from app.attachments.errors import AttachmentError
 from app.attachments.models import InputAttachment, LoadedAttachment
 from app.attachments.security import (
     AttachmentPolicy,
+    DEFAULT_EXTENSION_MIME_TYPES,
+    normalize_content_type,
     validate_content_type,
     validate_local_path_allowed,
     validate_remote_url,
@@ -61,10 +63,19 @@ def decode_inline_data(value: bytes | str) -> tuple[bytes, str]:
 
 
 def infer_content_type(name: str, fallback: str = "") -> str:
-    if fallback:
-        return fallback.split(";", 1)[0].strip().lower()
+    suffix = Path(name or "").suffix.lower()
+    mapped = DEFAULT_EXTENSION_MIME_TYPES.get(suffix, "")
+    normalized_fallback = normalize_content_type(fallback)
+    if normalized_fallback and normalized_fallback not in {
+        "application/octet-stream",
+        "binary/octet-stream",
+        "text/plain",
+    }:
+        return normalized_fallback
+    if mapped:
+        return mapped
     guessed, _ = mimetypes.guess_type(name or "")
-    return str(guessed or "").lower()
+    return normalize_content_type(str(guessed or "")) or normalized_fallback
 
 
 def _infer_name_from_url(url: str) -> str:
