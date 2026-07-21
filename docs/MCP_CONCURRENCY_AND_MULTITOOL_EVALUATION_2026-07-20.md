@@ -267,6 +267,23 @@ All four corrections are implemented and regression-tested in this branch. The r
 - `git diff --check`: passed with line-ending conversion warnings only;
 - live secrets were not copied into the worktree; tests used synthetic account and API-key values.
 
+## Observed orchestration behavior during verification
+
+The delegated review also exercised the live multi-model and continuation paths:
+
+- RepoAI submitted Terra and GLM 5.2 sequentially in one persistent review conversation. Both model passes completed and independently converged on the same cross-conversation `request_id` isolation defect.
+- After those provider outputs completed, the live Notion2API MCP job record for the Terra turn remained `pending`. A continuation call and an authoritative job poll both timed out instead of closing the durable job from the persisted conversation checkpoint. No duplicate request was submitted.
+- A fresh verification run against corrected commit `9fd2cf0` failed before model dispatch with `Notion page ZIP staging failed: timed out`, even though review-dashboard creation was disabled. This demonstrates coupling between provider review and Notion staging that should be removed or made optional.
+- A later bounded no-attachment verification submission timed out before any durable request record was created. The ledger confirmed that the request never crossed admission.
+
+These observations do not invalidate the code correction or its 198-test receipt, but they prevent claiming a clean post-fix model PASS. They create separate operational follow-up requirements:
+
+1. close or reconcile an MCP job automatically when the assistant turn is durably present, rather than requiring a successful later poll;
+2. never retain a same-conversation busy claim after authoritative terminal output is stored;
+3. honor disabled dashboard/context staging and allow review execution without a Notion page upload;
+4. record staging and provider-preflight failures explicitly in the observable activity timeline; and
+5. distinguish connector timeout, admission failure, provider execution, and terminal persistence in every review receipt.
+
 ## KISS summary
 
 - Different conversations: parallel.
