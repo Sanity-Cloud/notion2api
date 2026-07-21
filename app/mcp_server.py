@@ -1647,9 +1647,10 @@ def _claim_chat_job_task(
     """Atomically reserve one active turn for a conversation in this MCP process.
 
     Returns ``(status, record, task, conflict_request_id)`` where status is one
-    of ``claimed``, ``existing``, ``conflict``, or ``stale_conflict``. The
-    durable job claim is persisted before task creation, and admission remains
-    inside one process-local critical section.
+    of ``claimed``, ``existing``, ``request_id_conflict``, ``conflict``, or
+    ``stale_conflict``. A request ID remains bound to its original conversation.
+    The durable job claim is persisted before task creation, and admission
+    remains inside one process-local critical section.
     """
 
     request_id = _normalize_request_id(str(job.get("request_id") or ""))
@@ -1662,6 +1663,16 @@ def _claim_chat_job_task(
         jobs = state.setdefault("jobs", {})
         existing = jobs.get(request_id)
         if isinstance(existing, dict):
+            existing_conversation_id = str(
+                existing.get("conversation_id") or ""
+            ).strip()
+            if existing_conversation_id and existing_conversation_id != conversation_id:
+                return (
+                    "request_id_conflict",
+                    dict(existing),
+                    _CHAT_JOB_TASKS.get(request_id),
+                    request_id,
+                )
             return "existing", dict(existing), _CHAT_JOB_TASKS.get(request_id), ""
 
         for other_request_id, raw_job in list(jobs.items()):
@@ -1897,6 +1908,42 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
     _CHAT_JOB_TASKS.pop(request_id, None)
 
 
+def _request_id_conversation_conflict_output(
+    *,
+    client: Notion2APIClient,
+    model: str,
+    session_key: str,
+    conversation_id: str,
+    session_created: bool,
+    request_id: str,
+    wait_seconds: float,
+) -> dict[str, Any]:
+    """Reject cross-conversation reuse without exposing the prior job."""
+
+    return {
+        "ok": False,
+        "status_code": 409,
+        "model": model,
+        "actual_model": "",
+        "model_metadata": None,
+        **_runtime_audit(client, model),
+        "session_name": session_key,
+        "conversation_id": conversation_id,
+        "session_created": session_created,
+        "status": "error",
+        "request_id": request_id,
+        "job_id": request_id,
+        "retry_safe": False,
+        "wait_seconds": wait_seconds,
+        "poll_hint": "Use a new request_id for a different conversation.",
+        "error": "This request_id is already bound to another conversation.",
+        "response_text": "",
+        "remote_chat_id": "",
+        "notion_thread_id": "",
+        "raw": {"code": "request_id_conversation_mismatch"},
+    }
+
+
 async def _submit_or_resume_chat_job(
     *,
     client: Notion2APIClient,
@@ -1921,6 +1968,21 @@ async def _submit_or_resume_chat_job(
 
     existing = _load_chat_job(normalized_id)
     task = _CHAT_JOB_TASKS.get(normalized_id)
+    existing_conversation_id = (
+        str(existing.get("conversation_id") or "").strip()
+        if isinstance(existing, dict)
+        else ""
+    )
+    if existing_conversation_id and existing_conversation_id != conversation_id:
+        return _request_id_conversation_conflict_output(
+            client=client,
+            model=model,
+            session_key=session_key,
+            conversation_id=conversation_id,
+            session_created=session_created,
+            request_id=normalized_id,
+            wait_seconds=bounded_wait,
+        )
     if existing:
         baseline_message_id = int(existing.get("baseline_message_id") or 0)
         status = str(existing.get("status") or "")
@@ -2032,6 +2094,16 @@ async def _submit_or_resume_chat_job(
             job,
             create_task,
         )
+        if claim_status == "request_id_conflict":
+            return _request_id_conversation_conflict_output(
+                client=client,
+                model=model,
+                session_key=session_key,
+                conversation_id=conversation_id,
+                session_created=session_created,
+                request_id=normalized_id,
+                wait_seconds=bounded_wait,
+            )
         if claim_status in {"conflict", "stale_conflict"}:
             stale_conflict = claim_status == "stale_conflict"
             return {

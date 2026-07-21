@@ -78,7 +78,7 @@ This closes the previous admission race. The lock covers only the admission tran
 
 ### Idempotent duplicate request handling
 
-Two simultaneous submissions with the same request ID produce one task and one durable job record. The second caller observes the existing request rather than launching duplicate work.
+Two simultaneous submissions with the same request ID and conversation produce one task and one durable job record. The second caller observes the existing request rather than launching duplicate work. Cross-conversation reuse of a request ID is rejected with a bounded `409` response and does not expose the prior job or response.
 
 ### Fail-closed orphan handling
 
@@ -106,8 +106,8 @@ The following invariants are now required for the supported single-process runti
 
 1. At most one unresolved active request may own a conversation.
 2. Independent conversations may execute concurrently after a brief ledger transaction.
-3. The same request ID must not create more than one task or durable job.
-4. A durable-write failure must cancel the newly created task and must not register it as active.
+3. The same request ID must not create more than one task or durable job and remains bound to its original conversation.
+4. An initial durable-write failure must create no task; a post-scheduling write failure must cancel the task and retain the earlier durable claim for reconciliation.
 5. An orphaned active request must be reconciled before replacement.
 6. Session updates to unrelated names must not overwrite each other.
 7. Terminal job state must be monotonic; polling must not relaunch terminal work.
@@ -129,7 +129,8 @@ Future multi-process and multi-tool work must add:
 
 - simultaneous same-conversation claims admit exactly one request;
 - simultaneous different-conversation claims admit both requests;
-- simultaneous same-request-ID claims create one task and one record;
+- simultaneous same-request-ID claims for one conversation create one task and one record;
+- cross-conversation request-ID reuse returns `409` without disclosing the prior response;
 - durable claim-write failure creates no task;
 - task-scheduling failure records a terminal error and permits a separately identified retry;
 - orphaned active work requires reconciliation and creates no replacement;
@@ -254,10 +255,13 @@ All four corrections are implemented and regression-tested in this branch. The r
 
 ## Validation receipt
 
-- focused concurrency and recovery tests: `41 passed in 1.19s`;
-- complete repository suite: `196 passed in 78.70s`;
-- full-suite process exit code: `0`;
-- full-suite stderr: empty;
+- focused concurrency and recovery tests before the independent review correction: `41 passed in 1.19s`;
+- complete repository suite before the independent review correction: `196 passed in 78.70s`;
+- independent RepoAI Terra and GLM review found and confirmed one cross-conversation request-ID isolation blocker;
+- corrected focused concurrency and recovery tests: `43 passed in 1.31s`;
+- corrected complete repository suite: `198 passed in 80.36s`;
+- corrected full-suite process exit code: `0`;
+- corrected full-suite stderr: empty;
 - Ruff on all modified Python and test files: passed;
 - Python compilation on all modified Python and test files: passed;
 - `git diff --check`: passed with line-ending conversion warnings only;
@@ -267,7 +271,7 @@ All four corrections are implemented and regression-tested in this branch. The r
 
 - Different conversations: parallel.
 - Same conversation: one unresolved turn at a time.
-- Same request ID: one task.
+- Same request ID: one task and one originating conversation.
 - Lost task: reconcile before retry.
 - Current locks: one-process protection only.
 - Multi-process and durable multi-tool execution: next architecture phase, not yet complete.

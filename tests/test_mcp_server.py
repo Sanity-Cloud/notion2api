@@ -684,6 +684,76 @@ def test_simultaneous_same_request_id_creates_only_one_task(tmp_path, monkeypatc
     assert list(persisted["jobs"]) == ["request-same"]
 
 
+def test_same_request_id_cannot_claim_a_second_conversation(tmp_path, monkeypatch):
+    state_path = tmp_path / "jobs.json"
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    first_status, first_record, first_task, _conflict_id = (
+        mcp_server._claim_chat_job_task(
+            _claim_test_job("request-shared", "conversation-a"),
+            _HeldTask,
+            path=state_path,
+        )
+    )
+    second_status, second_record, second_task, conflict_id = (
+        mcp_server._claim_chat_job_task(
+            _claim_test_job("request-shared", "conversation-b"),
+            _HeldTask,
+            path=state_path,
+        )
+    )
+
+    assert first_status == "claimed"
+    assert first_record["conversation_id"] == "conversation-a"
+    assert first_task is not None
+    assert second_status == "request_id_conflict"
+    assert second_record["conversation_id"] == "conversation-a"
+    assert second_task is first_task
+    assert conflict_id == "request-shared"
+    persisted = mcp_server._load_chat_job_state(state_path)
+    assert persisted["jobs"]["request-shared"]["conversation_id"] == "conversation-a"
+
+
+def test_submit_rejects_request_id_reused_for_another_conversation(monkeypatch):
+    from types import SimpleNamespace
+
+    existing = {
+        "request_id": "request-shared",
+        "job_id": "request-shared",
+        "status": "completed",
+        "conversation_id": "conversation-a",
+        "response": {"status": "completed", "response_text": "private answer"},
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _request_id: existing)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    result = asyncio.run(
+        mcp_server._submit_or_resume_chat_job(
+            client=SimpleNamespace(
+                base_url="http://127.0.0.1:8120",
+                timeout=30.0,
+            ),
+            path="/v1/chat/completions",
+            payload={
+                "model": "terra",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            model="terra",
+            session_key="other-session",
+            conversation_id="conversation-b",
+            session_created=False,
+            request_id="request-shared",
+            wait_seconds=0,
+        )
+    )
+
+    assert result["status_code"] == 409
+    assert result["raw"] == {"code": "request_id_conversation_mismatch"}
+    assert result["response_text"] == ""
+    assert "conversation-a" not in str(result)
+    assert "private answer" not in str(result)
+
+
 def test_atomic_admission_does_not_create_task_when_claim_write_fails(
     tmp_path, monkeypatch
 ):
