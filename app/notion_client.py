@@ -1131,6 +1131,23 @@ class NotionOpusAPI:
         # text thread_id text
         self.current_thread_id = thread_id
 
+        if attachments and should_create_thread and not computer_use_review:
+            # A normal file chat must exist as a markdown-chat thread before
+            # requesting an assistant-chat upload descriptor. Letting the
+            # descriptor create an implicit session and then continuing it as
+            # markdown-chat produces an invalid runInferenceTranscript payload.
+            if not self._create_thread(thread_id, thread_type):
+                raise NotionUpstreamError(
+                    "Failed to create an ordinary Notion AI chat for the attachment request.",
+                    status_code=502,
+                    retriable=True,
+                    response_excerpt="attachment_chat_precreate_failed",
+                )
+            should_create_thread = False
+            request_profile["create_thread"] = False
+            request_profile["precreate_thread"] = False
+            request_profile["is_partial_transcript"] = True
+
         if (
             requested_thread_title
             and thread_persistence["persist"]
@@ -1143,12 +1160,6 @@ class NotionOpusAPI:
             try:
                 uploader = NotionAttachmentUploader(self)
                 attachment_create_thread = bool(request_profile["create_thread"] and should_create_thread)
-                if not computer_use_review and should_create_thread:
-                    # Native attachment descriptor requests require an existing
-                    # assistant chat transcript session.  For a new stateless
-                    # markdown chat, let the first descriptor request create it;
-                    # otherwise Notion returns "Chat transcript session not found".
-                    attachment_create_thread = True
                 uploaded_attachments, resolved_thread_id = uploader.upload_attachments(
                     thread_id=thread_id,
                     attachments=list(attachments),
@@ -1246,18 +1257,8 @@ class NotionOpusAPI:
             },
             "transcript": notion_transcript,
         }
-        if uploaded_attachments:
-            if not payload["createThread"]:
-                payload.pop("threadParentPointer", None)
-            payload["attachments"] = [
-                {
-                    "type": "attachment",
-                    "fileName": uploaded.name,
-                    "contentType": uploaded.content_type,
-                    "fileUrl": uploaded.attachment_url,
-                }
-                for uploaded in uploaded_attachments
-            ]
+        if uploaded_attachments and not payload["createThread"]:
+            payload.pop("threadParentPointer", None)
         if request_profile["include_debug_overrides"]:
             payload["debugOverrides"] = {
                 "emitAgentSearchExtractedResults": True,
@@ -1646,6 +1647,11 @@ class NotionOpusAPI:
         clean = str(page_id or "").replace("-", "")
         return f"https://www.notion.so/{clean}"
 
+    @staticmethod
+    def _page_app_url(page_id: str) -> str:
+        clean = str(page_id or "").replace("-", "")
+        return f"notion://www.notion.so/{clean}"
+
     def _load_page_chunk(self, page_id: str) -> dict[str, Any]:
         normalized_page_id = self._normalize_notion_id(page_id, field_name="page_id")
         endpoint = "https://www.notion.so/api/v3/loadPageChunk"
@@ -1778,6 +1784,7 @@ class NotionOpusAPI:
             "ok": True,
             "page_id": page_id,
             "page_url": self._page_url(page_id),
+            "page_app_url": self._page_app_url(page_id),
             "parent_page_id": normalized_parent_id,
             "title": clean_title,
         }

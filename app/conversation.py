@@ -76,6 +76,18 @@ class ConversationManager:
             )
             cursor.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
+                ON messages(conversation_id, id)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation_role_created
+                ON messages(conversation_id, role, created_at DESC, id DESC)
+                """
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS compressed_summaries (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conversation_id TEXT NOT NULL,

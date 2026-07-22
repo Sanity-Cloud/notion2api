@@ -4,6 +4,7 @@ import argparse
 import copy
 import contextlib
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import zlib
 from pathlib import Path
 from typing import Any, Annotated, Literal
 
@@ -43,6 +45,7 @@ DEFAULT_MCP_PORT = 8130
 DEFAULT_MCP_PATH = "/mcp"
 DEFAULT_TIMEOUT_SECONDS = 900.0
 DEFAULT_MODEL = "terra"
+NOTION_PAGE_UPLOAD_ENDPOINT = "/v1/notion/upload_file"
 LEGACY_SHARED_SESSION_NAME = "op"
 DEFAULT_SESSION_NAME = LEGACY_SHARED_SESSION_NAME
 AUTO_SESSION_LABEL = "auto-generated"
@@ -58,6 +61,12 @@ DEFAULT_CHAT_JOB_STATE_PATH = Path(
         str(DEFAULT_SESSION_STATE_PATH.with_name(".notion2api_mcp_chat_jobs.json")),
     )
 )
+DEFAULT_CHAT_JOB_DB_PATH = Path(
+    os.getenv(
+        "MCP_NOTION2API_CHAT_JOB_DB",
+        str(DEFAULT_CHAT_JOB_STATE_PATH.with_suffix(".sqlite3")),
+    )
+)
 DEFAULT_CHAT_STALL_SECONDS = 180.0
 MAX_PROGRESS_REASONING_CHARS = 200_000
 MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS = 4_000
@@ -67,9 +76,14 @@ SESSION_STATE_VERSION = 2
 _SESSION_STATE_MUTEX = threading.RLock()
 _CHAT_JOB_STATE_MUTEX = threading.RLock()
 _CHAT_JOB_TASKS: dict[str, asyncio.Task[dict[str, Any]]] = {}
+_CHAT_JOB_STATE_CACHE: dict[
+    str, tuple[tuple[int, int, int, int] | None, dict[str, Any]]
+] = {}
+_CHAT_JOB_DB_READY: set[str] = set()
 logger = logging.getLogger(__name__)
 CHAT_JOB_STATE_WRITE_RETRIES = 5
 CHAT_JOB_STATE_WRITE_BACKOFF_SECONDS = 0.05
+CHAT_JOB_LEDGER_SCHEMA_VERSION = 1
 
 
 class HealthOutput(BaseModel):
@@ -1046,6 +1060,205 @@ def _load_chat_job_state_file(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _chat_job_state_signature(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    wal_path = path.with_name(f"{path.name}-wal")
+    try:
+        wal_stat = wal_path.stat()
+        wal_signature = (wal_stat.st_mtime_ns, wal_stat.st_size)
+    except OSError:
+        wal_signature = (0, 0)
+    return stat.st_mtime_ns, stat.st_size, *wal_signature
+
+
+def _compact_chat_job_state(state: dict[str, Any]) -> None:
+    jobs = state.get("jobs")
+    if not isinstance(jobs, dict):
+        return
+    for job in jobs.values():
+        if not isinstance(job, dict):
+            continue
+        response = job.get("response")
+        response_text = job.get("response_text")
+        if (
+            isinstance(response, dict)
+            and isinstance(response_text, str)
+            and response.get("response_text") == response_text
+        ):
+            job.pop("response_text", None)
+
+
+def _uses_sqlite_chat_job_ledger(path: Path) -> bool:
+    return path.resolve() == DEFAULT_CHAT_JOB_STATE_PATH.resolve()
+
+
+def _chat_job_storage_path(path: Path) -> Path:
+    return DEFAULT_CHAT_JOB_DB_PATH if _uses_sqlite_chat_job_ledger(path) else path
+
+
+@contextlib.contextmanager
+def _chat_job_db(path: Path):
+    conn = sqlite3.connect(str(path), timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _ensure_chat_job_db_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ledger_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS chat_jobs (
+            request_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT '',
+            conversation_id TEXT NOT NULL DEFAULT '',
+            session_name TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT 0,
+            payload_zlib BLOB NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            payload_bytes INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_jobs_status_updated
+            ON chat_jobs(status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_chat_jobs_conversation_updated
+            ON chat_jobs(conversation_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_chat_jobs_session_updated
+            ON chat_jobs(session_name, updated_at DESC);
+        """
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO ledger_metadata(key, value) VALUES ('schema_version', ?)",
+        (str(CHAT_JOB_LEDGER_SCHEMA_VERSION),),
+    )
+
+
+def _encoded_chat_job(job: dict[str, Any]) -> tuple[bytes, str, int]:
+    raw = json.dumps(
+        job,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return zlib.compress(raw, level=6), hashlib.sha256(raw).hexdigest(), len(raw)
+
+
+def _upsert_chat_jobs(
+    conn: sqlite3.Connection,
+    state: dict[str, Any],
+    request_ids: set[str] | None = None,
+) -> None:
+    jobs = state.get("jobs") if isinstance(state.get("jobs"), dict) else {}
+    ids = request_ids if request_ids is not None else {str(key) for key in jobs}
+    for request_id in ids:
+        job = jobs.get(request_id)
+        if not isinstance(job, dict):
+            continue
+        payload, payload_hash, payload_bytes = _encoded_chat_job(job)
+        conn.execute(
+            """
+            INSERT INTO chat_jobs(
+                request_id, status, conversation_id, session_name, model,
+                created_at, updated_at, payload_zlib, payload_sha256, payload_bytes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(request_id) DO UPDATE SET
+                status = excluded.status,
+                conversation_id = excluded.conversation_id,
+                session_name = excluded.session_name,
+                model = excluded.model,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                payload_zlib = excluded.payload_zlib,
+                payload_sha256 = excluded.payload_sha256,
+                payload_bytes = excluded.payload_bytes
+            """,
+            (
+                request_id,
+                str(job.get("status") or ""),
+                str(job.get("conversation_id") or ""),
+                str(job.get("session_name") or ""),
+                str(job.get("model") or ""),
+                int(job.get("created_at") or 0),
+                int(job.get("updated_at") or 0),
+                sqlite3.Binary(payload),
+                payload_hash,
+                payload_bytes,
+            ),
+        )
+
+
+def _load_chat_job_db(path: Path) -> dict[str, Any]:
+    jobs: dict[str, Any] = {}
+    with _chat_job_db(path) as conn:
+        rows = conn.execute(
+            "SELECT request_id, payload_zlib, payload_sha256 FROM chat_jobs"
+        ).fetchall()
+    for row in rows:
+        raw = zlib.decompress(bytes(row["payload_zlib"]))
+        if hashlib.sha256(raw).hexdigest() != str(row["payload_sha256"]):
+            raise ValueError(f"Chat job ledger checksum mismatch for {row['request_id']}")
+        job = json.loads(raw)
+        request_id = str(row["request_id"])
+        if not isinstance(job, dict) or str(job.get("request_id") or "") != request_id:
+            raise ValueError(f"Invalid chat job ledger payload for {request_id}")
+        jobs[request_id] = job
+    return {"jobs": jobs}
+
+
+def _migrate_chat_job_json_to_sqlite(source_path: Path, db_path: Path) -> None:
+    if db_path.exists():
+        return
+    state = _recover_chat_job_state(source_path)
+    _compact_chat_job_state(state)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = db_path.with_name(f"{db_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with _chat_job_db(tmp_path) as conn:
+            conn.execute("PRAGMA journal_mode = DELETE")
+            conn.execute("PRAGMA synchronous = FULL")
+            _ensure_chat_job_db_schema(conn)
+            _upsert_chat_jobs(conn, state)
+            source_hash = (
+                hashlib.sha256(source_path.read_bytes()).hexdigest()
+                if source_path.exists()
+                else ""
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO ledger_metadata(key, value) VALUES ('source_json_sha256', ?)",
+                (source_hash,),
+            )
+            conn.commit()
+        if _load_chat_job_db(tmp_path) != state:
+            raise ValueError("Chat job ledger migration verification failed")
+        os.replace(tmp_path, db_path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+
+
+def _ensure_chat_job_db(source_path: Path, db_path: Path) -> None:
+    key = str(db_path.resolve())
+    if key in _CHAT_JOB_DB_READY and db_path.exists():
+        return
+    _migrate_chat_job_json_to_sqlite(source_path, db_path)
+    with _chat_job_db(db_path) as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = FULL")
+        _ensure_chat_job_db_schema(conn)
+        conn.commit()
+    _CHAT_JOB_DB_READY.add(key)
+
+
 def _job_timestamp(job: Any) -> int:
     if not isinstance(job, dict):
         return 0
@@ -1128,13 +1341,53 @@ def _recover_chat_job_state(path: Path) -> dict[str, Any]:
 
 
 def _load_chat_job_state(path: Path = DEFAULT_CHAT_JOB_STATE_PATH) -> dict[str, Any]:
-    return _recover_chat_job_state(path)
+    storage_path = _chat_job_storage_path(path)
+    key = str(storage_path.resolve())
+    with _CHAT_JOB_STATE_MUTEX:
+        if _uses_sqlite_chat_job_ledger(path):
+            _ensure_chat_job_db(path, storage_path)
+        signature = _chat_job_state_signature(storage_path)
+        cached = _CHAT_JOB_STATE_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        state = (
+            _load_chat_job_db(storage_path)
+            if _uses_sqlite_chat_job_ledger(path)
+            else _recover_chat_job_state(path)
+        )
+        _CHAT_JOB_STATE_CACHE[key] = (
+            _chat_job_state_signature(storage_path),
+            state,
+        )
+        return state
 
 
-def _save_chat_job_state(state: dict[str, Any], path: Path = DEFAULT_CHAT_JOB_STATE_PATH) -> None:
+def _save_chat_job_state(
+    state: dict[str, Any],
+    path: Path = DEFAULT_CHAT_JOB_STATE_PATH,
+    changed_request_ids: set[str] | None = None,
+) -> None:
     if not isinstance(state.get("jobs"), dict):
         state["jobs"] = {}
-    _atomic_write_json(path, state)
+    _compact_chat_job_state(state)
+    storage_path = _chat_job_storage_path(path)
+    key = str(storage_path.resolve())
+    try:
+        if _uses_sqlite_chat_job_ledger(path):
+            _ensure_chat_job_db(path, storage_path)
+            with _chat_job_db(storage_path) as conn:
+                conn.execute("PRAGMA synchronous = FULL")
+                _upsert_chat_jobs(conn, state, changed_request_ids)
+                conn.commit()
+        else:
+            _atomic_write_json(path, state)
+    except Exception:
+        _CHAT_JOB_STATE_CACHE.pop(key, None)
+        raise
+    _CHAT_JOB_STATE_CACHE[key] = (
+        _chat_job_state_signature(storage_path),
+        state,
+    )
 
 
 def _job_response_text(response: dict[str, Any] | None) -> str:
@@ -1184,8 +1437,9 @@ def _persist_chat_job(job: dict[str, Any]) -> None:
     with _CHAT_JOB_STATE_MUTEX:
         state = _load_chat_job_state()
         jobs = state.setdefault("jobs", {})
-        jobs[str(job["request_id"])] = job
-        _save_chat_job_state(state)
+        request_id = str(job["request_id"])
+        jobs[request_id] = job
+        _save_chat_job_state(state, changed_request_ids={request_id})
 
 
 def _progress_fingerprint(snapshot: dict[str, Any]) -> str:
@@ -1245,7 +1499,8 @@ def _persist_chat_progress(request_id: str, reasoning: str, content: str, event_
         job["updated_at"] = now
         job = _refresh_chat_job_health(job)
         jobs[request_id] = job
-        _save_chat_job_state(state)
+        # ponytail: progress stays process-local until terminal persistence;
+        # add a small append-only journal if sub-second crash recovery matters.
 
 
 def _load_chat_job(request_id: str) -> dict[str, Any] | None:
@@ -1289,7 +1544,7 @@ def _cancel_chat_job(request_id: str, reason: str = "Cancelled by caller.") -> C
         job["dead_loop_suspected"] = False
         job["cancel_recommended"] = False
         jobs[normalized_id] = job
-        _save_chat_job_state(state)
+        _save_chat_job_state(state, changed_request_ids={normalized_id})
     if task is not None and not task.done():
         task.cancel()
     _CHAT_JOB_TASKS.pop(normalized_id, None)
@@ -1696,7 +1951,7 @@ def _claim_chat_job_task(
                 "completed. Check the local conversation by conversation_id before retrying."
             )
             jobs[other_id] = _refresh_chat_job_health(stale)
-            _save_chat_job_state(state, path)
+            _save_chat_job_state(state, path, {other_id})
             return "stale_conflict", dict(stale), None, other_id
 
         durable_job = dict(job)
@@ -1705,7 +1960,7 @@ def _claim_chat_job_task(
         durable_job["status"] = "pending"
         durable_job["updated_at"] = _now_ms()
         jobs[request_id] = durable_job
-        _save_chat_job_state(state, path)
+        _save_chat_job_state(state, path, {request_id})
 
         try:
             task = task_factory()
@@ -1716,7 +1971,7 @@ def _claim_chat_job_task(
             failed_job["error"] = f"Task scheduling failed: {type(exc).__name__}: {exc}"
             jobs[request_id] = _refresh_chat_job_health(failed_job)
             try:
-                _save_chat_job_state(state, path)
+                _save_chat_job_state(state, path, {request_id})
             except OSError:
                 logger.exception(
                     "Could not persist chat task scheduling failure",
@@ -1735,7 +1990,7 @@ def _claim_chat_job_task(
         running_job["updated_at"] = _now_ms()
         jobs[request_id] = running_job
         try:
-            _save_chat_job_state(state, path)
+            _save_chat_job_state(state, path, {request_id})
         except Exception:
             if task is not None and not task.done():
                 task.cancel()
@@ -1897,7 +2152,7 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
             job["error"] = error
         job = _refresh_chat_job_health(job)
         jobs[request_id] = job
-        _save_chat_job_state(state)
+        _save_chat_job_state(state, changed_request_ids={request_id})
     _update_session_record(
         str(job.get("session_name") or DEFAULT_SESSION_NAME),
         conversation_id=str(job.get("conversation_id") or ""),
@@ -2239,7 +2494,6 @@ def _chat_job_output(
         job = _mark_chat_job_stale(job)
 
     job = _refresh_chat_job_health(job, increment_poll=increment_poll)
-    _persist_chat_job(job)
     response = job.get("response") if isinstance(job.get("response"), dict) else None
     full_response_text = str(job.get("response_text") or _job_response_text(response))
     response_text = (
@@ -2930,7 +3184,7 @@ def create_server(
         try:
             staged_path, was_staged = stage_mcp_file_for_page(file, filename)
             data = await client.post(
-                "/notion/upload_file",
+                NOTION_PAGE_UPLOAD_ENDPOINT,
                 {
                     "page_id": page_id,
                     "file_path": str(staged_path),

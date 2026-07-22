@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import asyncio
 import threading
@@ -113,7 +114,11 @@ def test_chat_wait_is_always_immediate_for_polling():
 def test_persist_chat_progress_updates_pollable_job(monkeypatch):
     state = {"jobs": {"request-1": {"request_id": "request-1", "status": "running"}}}
     monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
-    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+    monkeypatch.setattr(
+        mcp_server,
+        "_save_chat_job_state",
+        lambda _value: pytest.fail("stream progress must not rewrite the durable ledger"),
+    )
 
     mcp_server._persist_chat_progress(
         "request-1",
@@ -131,6 +136,107 @@ def test_persist_chat_progress_updates_pollable_job(monkeypatch):
         {"completed": True, "text": "Map pages"},
         {"completed": False, "text": "Apply edits"},
     ]
+
+
+def test_chat_job_state_cache_and_compaction_avoid_repeated_full_reads(tmp_path, monkeypatch):
+    path = tmp_path / "jobs.json"
+    response = {"response_text": "answer", "raw": {"content": "answer"}}
+    path.write_text(
+        json.dumps(
+            {
+                "jobs": {
+                    "request-1": {
+                        "request_id": "request-1",
+                        "status": "completed",
+                        "response": response,
+                        "response_text": "answer",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = {"count": 0}
+    real_recover = mcp_server._recover_chat_job_state
+
+    def counted_recover(state_path):
+        calls["count"] += 1
+        return real_recover(state_path)
+
+    monkeypatch.setattr(mcp_server, "_recover_chat_job_state", counted_recover)
+    mcp_server._CHAT_JOB_STATE_CACHE.pop(str(path.resolve()), None)
+
+    state = mcp_server._load_chat_job_state(path)
+    assert mcp_server._load_chat_job_state(path) is state
+    assert calls["count"] == 1
+
+    mcp_server._save_chat_job_state(state, path)
+    saved_job = json.loads(path.read_text(encoding="utf-8"))["jobs"]["request-1"]
+    assert "response_text" not in saved_job
+    assert saved_job["response"]["response_text"] == "answer"
+
+
+def test_default_chat_job_ledger_migrates_losslessly_to_compressed_sqlite(
+    tmp_path, monkeypatch
+):
+    json_path = tmp_path / "jobs.json"
+    db_path = tmp_path / "jobs.sqlite3"
+    dense_text = "dense evidence \u2713 " * 2_000
+    original = {
+        "jobs": {
+            "request-1": {
+                "request_id": "request-1",
+                "status": "completed",
+                "conversation_id": "conversation-1",
+                "session_name": "research",
+                "model": "terra",
+                "created_at": 1,
+                "updated_at": 2,
+                "response": {
+                    "response_text": dense_text,
+                    "raw": {"evidence": dense_text, "nested": [1, 2, 3]},
+                },
+                "response_text": dense_text,
+            },
+            "request-2": {
+                "request_id": "request-2",
+                "status": "error",
+                "conversation_id": "conversation-2",
+                "updated_at": 3,
+                "error": "preserved error",
+            },
+        }
+    }
+    original_bytes = json.dumps(original, ensure_ascii=False).encode("utf-8")
+    json_path.write_bytes(original_bytes)
+    monkeypatch.setattr(mcp_server, "DEFAULT_CHAT_JOB_STATE_PATH", json_path)
+    monkeypatch.setattr(mcp_server, "DEFAULT_CHAT_JOB_DB_PATH", db_path)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_STATE_CACHE", {})
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_DB_READY", set())
+
+    state = mcp_server._load_chat_job_state(json_path)
+
+    assert json_path.read_bytes() == original_bytes
+    assert state["jobs"]["request-1"]["response"]["raw"]["evidence"] == dense_text
+    assert "response_text" not in state["jobs"]["request-1"]
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT payload_bytes, length(payload_zlib) FROM chat_jobs "
+            "WHERE request_id = 'request-1'"
+        ).fetchone()
+        indexes = {
+            item[1] for item in conn.execute("PRAGMA index_list(chat_jobs)").fetchall()
+        }
+    assert row[1] < row[0] // 4
+    assert "idx_chat_jobs_conversation_updated" in indexes
+
+    state["jobs"]["request-1"]["status"] = "verified"
+    state["jobs"]["request-1"]["updated_at"] = 4
+    mcp_server._save_chat_job_state(state, json_path, {"request-1"})
+    reloaded = mcp_server._load_chat_job_db(db_path)
+    assert reloaded["jobs"]["request-1"]["status"] == "verified"
+    assert reloaded["jobs"]["request-2"]["error"] == "preserved error"
+    assert json_path.read_bytes() == original_bytes
 
 
 def test_chat_stream_updates_progress_and_returns_final_content(monkeypatch):
@@ -326,7 +432,11 @@ def test_cancel_chat_job_marks_persisted_job_cancelled(monkeypatch):
         }
     }
     monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
-    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+    monkeypatch.setattr(
+        mcp_server,
+        "_save_chat_job_state",
+        lambda value, *args, **kwargs: state.update(value),
+    )
 
     result = mcp_server._cancel_chat_job("request-1", "obsolete")
 
@@ -338,7 +448,11 @@ def test_cancel_chat_job_marks_persisted_job_cancelled(monkeypatch):
 def test_cancel_unknown_chat_job_returns_not_found(monkeypatch):
     state = {"jobs": {}}
     monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
-    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+    monkeypatch.setattr(
+        mcp_server,
+        "_save_chat_job_state",
+        lambda value, *args, **kwargs: state.update(value),
+    )
 
     result = mcp_server._cancel_chat_job("missing-request")
 
@@ -361,13 +475,21 @@ def test_pending_job_without_live_task_is_marked_stale(monkeypatch):
         }
     }
     monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
-    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+    monkeypatch.setattr(
+        mcp_server,
+        "_save_chat_job_state",
+        lambda value, *args, **kwargs: state.update(value),
+    )
     monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
 
     result = mcp_server._chat_job_output("request-2")
 
     assert result.status == "stale"
     assert "lost the in-memory task" in (result.error or "")
+
+
+def test_page_upload_uses_versioned_backend_endpoint():
+    assert mcp_server.NOTION_PAGE_UPLOAD_ENDPOINT == "/v1/notion/upload_file"
 
 
 def test_mcp_schema_exposes_continuation_and_cancellation():
@@ -570,7 +692,11 @@ def test_completed_job_is_not_downgraded_by_cancelled_stream_callback(monkeypatc
         }
     }
     monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
-    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+    monkeypatch.setattr(
+        mcp_server,
+        "_save_chat_job_state",
+        lambda value, *args, **kwargs: state.update(value),
+    )
 
     class CancelledTask:
         def result(self):
@@ -766,7 +892,7 @@ def test_atomic_admission_does_not_create_task_when_claim_write_fails(
         created.append(task)
         return task
 
-    def fail_save(_state, _path=state_path):
+    def fail_save(_state, _path=state_path, _request_ids=None):
         raise OSError("simulated durable ledger failure")
 
     monkeypatch.setattr(mcp_server, "_save_chat_job_state", fail_save)
@@ -937,7 +1063,11 @@ def test_startup_reconciliation_closes_orphaned_jobs(monkeypatch):
         }
     }
     monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
-    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda value: state.update(value))
+    monkeypatch.setattr(
+        mcp_server,
+        "_save_chat_job_state",
+        lambda value, *args, **kwargs: state.update(value),
+    )
     monkeypatch.setattr(mcp_server, "_update_session_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         mcp_server,

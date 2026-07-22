@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
+from app.api.notion import CreatePageResponse
 from app.notion_client import NotionOpusAPI, NotionUpstreamError
 from app.attachments.models import InputAttachment, UploadedAttachment
 from app.attachments.notion_upload import NotionAttachmentUploadError
@@ -23,6 +24,30 @@ class NotionClientAttachmentTests(unittest.TestCase):
 
     def tearDown(self):
         self.session_post_patcher.stop()
+
+    def test_page_urls_include_web_and_desktop_variants(self):
+        page_id = "b3824128-1465-4419-ad59-e63617c1e383"
+
+        self.assertEqual(
+            self.client._page_url(page_id),
+            "https://www.notion.so/b382412814654419ad59e63617c1e383",
+        )
+        self.assertEqual(
+            self.client._page_app_url(page_id),
+            "notion://www.notion.so/b382412814654419ad59e63617c1e383",
+        )
+
+    def test_create_page_response_exposes_desktop_link(self):
+        response = CreatePageResponse(
+            ok=True,
+            page_id="page-id",
+            page_url="https://www.notion.so/page-id",
+            page_app_url="notion://www.notion.so/page-id",
+            parent_page_id="parent-id",
+            title="Example",
+        )
+
+        self.assertTrue(response.page_app_url.startswith("notion://"))
 
     def test_create_thread_persists_markdown_chat_type(self):
         response = Mock(status_code=200)
@@ -281,17 +306,7 @@ class NotionClientAttachmentTests(unittest.TestCase):
             create_thread=False,
         )
         self.assertNotIn("threadParentPointer", payload)
-        self.assertIn("attachments", payload)
-        self.assertEqual(
-            payload["attachments"][0],
-            {
-                "type": "attachment",
-                "fileName": "a.csv",
-                "contentType": "text/csv",
-                "fileUrl": "https://files.test/a.csv",
-            },
-        )
-        self.assertNotIn("attachmentUrl", payload["attachments"][0])
+        self.assertNotIn("attachments", payload)
         transcript_steps = [item for item in payload["transcript"] if item.get("type") == "attachment"]
         self.assertTrue(transcript_steps)
         self.assertEqual(transcript_steps[0]["fileName"], "a.csv")
@@ -304,7 +319,7 @@ class NotionClientAttachmentTests(unittest.TestCase):
         self.assertNotIn("token_v2", str(payload))
         self.assertNotIn("bytes", str(payload))
 
-    def test_attachment_workflow_uses_ai_module_source_without_precreate(self):
+    def test_new_attachment_chat_precreates_markdown_chat_before_upload(self):
         response = Mock(status_code=200, text="")
         response.close = Mock()
         scraper = Mock()
@@ -330,19 +345,23 @@ class NotionClientAttachmentTests(unittest.TestCase):
         ):
             list(self.client.stream_response(transcript, attachments=attachments))
 
-        create_thread.assert_not_called()
-        created_thread_id = uploader_instance.upload_attachments.call_args.kwargs["thread_id"]
+        create_thread.assert_called_once()
+        created_thread_id, created_thread_type = create_thread.call_args.args
+        self.assertEqual(created_thread_type, "markdown-chat")
         uploader_instance.upload_attachments.assert_called_once_with(
             thread_id=created_thread_id,
             attachments=attachments,
-            create_thread=True,
+            create_thread=False,
         )
         payload = scraper.post.call_args.kwargs["json"]
         self.assertEqual(payload["threadId"], created_thread_id)
+        self.assertFalse(payload["createThread"])
+        self.assertTrue(payload["isPartialTranscript"])
         self.assertEqual(payload["threadType"], "markdown-chat")
         self.assertEqual(payload["createdSource"], "ai_module")
+        self.assertNotIn("threadParentPointer", payload)
 
-    def test_new_ephemeral_attachment_chat_creates_descriptor_thread(self):
+    def test_new_ephemeral_attachment_chat_precreates_markdown_chat(self):
         response = Mock(status_code=200, text="")
         response.close = Mock()
         scraper = Mock()
@@ -368,16 +387,18 @@ class NotionClientAttachmentTests(unittest.TestCase):
         ):
             list(self.client.stream_response(transcript, attachments=attachments))
 
-        create_thread.assert_not_called()
-        created_thread_id = uploader_instance.upload_attachments.call_args.kwargs["thread_id"]
+        create_thread.assert_called_once()
+        created_thread_id, created_thread_type = create_thread.call_args.args
+        self.assertEqual(created_thread_type, "markdown-chat")
         uploader_instance.upload_attachments.assert_called_once_with(
             thread_id=created_thread_id,
             attachments=attachments,
-            create_thread=True,
+            create_thread=False,
         )
         payload = scraper.post.call_args.kwargs["json"]
         self.assertEqual(payload["threadId"], created_thread_id)
         self.assertFalse(payload["createThread"])
+        self.assertTrue(payload["isPartialTranscript"])
         self.assertEqual(payload["threadType"], "markdown-chat")
         self.assertNotIn("threadParentPointer", payload)
 

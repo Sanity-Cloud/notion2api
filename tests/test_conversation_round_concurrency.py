@@ -44,3 +44,18 @@ def test_persist_round_allocates_unique_indices_across_connections(tmp_path, mon
     assert next_round == 2
     assert stored_rounds == [0, 1]
     assert message_count == 4
+
+
+def test_conversation_manager_creates_message_lookup_indexes(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "conversations.db"))
+
+    from app.conversation import ConversationManager
+
+    manager = ConversationManager()
+    with manager._get_conn() as conn:
+        indexes = {
+            row["name"] for row in conn.execute("PRAGMA index_list(messages)").fetchall()
+        }
+
+    assert "idx_messages_conversation_id" in indexes
+    assert "idx_messages_conversation_role_created" in indexes

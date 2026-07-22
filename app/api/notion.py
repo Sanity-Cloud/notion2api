@@ -57,6 +57,7 @@ class CreatePageResponse(BaseModel):
     ok: bool
     page_id: str
     page_url: str
+    page_app_url: str
     parent_page_id: str
     title: str
 
