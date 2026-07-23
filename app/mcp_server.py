@@ -118,7 +118,16 @@ class ChatOutput(BaseModel):
     model: str = Field(description="Requested model id passed through the MCP wrapper.")
     actual_model: str = Field(default="", description="Actual Notion model/provider route used, if returned.")
     model_metadata: dict[str, Any] | None = Field(default=None, description="Notion2API model metadata, if any.")
-    requested_model: str = Field(default="", description="Requested model id originally passed to the MCP wrapper.")
+    requested_model: str = Field(default="", description="Requested model alias originally passed to the MCP wrapper.")
+    resolved_model: str = Field(default="", description="Concrete Notion route resolved from the requested alias.")
+    verified_model: str = Field(default="", description="Responder model only when supported by authoritative upstream evidence.")
+    model_identity_verified: bool = Field(default=False, description="Whether verified_model is backed by authoritative responder evidence.")
+    model_identity_source: str = Field(default="", description="Evidence source used for model identity classification.")
+    model_identity_confidence: str = Field(default="unverified", description="Model identity confidence: verified, observed, or unverified.")
+    model_substitution: dict[str, Any] | None = Field(default=None, description="Requested/resolved/responding route change, when observed.")
+    caller_id: str = Field(default="", description="Stable identity of the system or agent that initiated the request.")
+    caller_type: str = Field(default="", description="Caller class, such as repoai, chatgpt, or mcp.")
+    caller_metadata: dict[str, Any] | None = Field(default=None, description="Bounded caller provenance supplied with the request.")
     backend_base_url: str = Field(default="", description="Canonical Notion2API backend URL used by this MCP wrapper.")
     timeout_seconds: float | None = Field(default=None, description="HTTP timeout used by the MCP wrapper for backend calls.")
     session_state_path: str = Field(default="", description="Path to the MCP session state file.")
@@ -173,9 +182,18 @@ class ResponsesOutput(BaseModel):
     ok: bool = Field(description="Whether the responses endpoint call succeeded.")
     status_code: int | None = Field(default=None, description="HTTP status code returned by Notion2API.")
     model: str = Field(description="Requested model id passed through the MCP wrapper.")
-    actual_model: str = Field(default="", description="Actual Notion model/provider route used, if returned.")
+    actual_model: str = Field(default="", description="Observed Notion model/provider route, if returned.")
     model_metadata: dict[str, Any] | None = Field(default=None, description="Notion2API model metadata, if any.")
-    requested_model: str = Field(default="", description="Requested model id originally passed to the MCP wrapper.")
+    requested_model: str = Field(default="", description="Requested model alias originally passed to the MCP wrapper.")
+    resolved_model: str = Field(default="", description="Concrete Notion route resolved from the requested alias.")
+    verified_model: str = Field(default="", description="Responder model only when verified by upstream evidence.")
+    model_identity_verified: bool = Field(default=False)
+    model_identity_source: str = Field(default="")
+    model_identity_confidence: str = Field(default="unverified")
+    model_substitution: dict[str, Any] | None = Field(default=None)
+    caller_id: str = Field(default="")
+    caller_type: str = Field(default="")
+    caller_metadata: dict[str, Any] | None = Field(default=None)
     backend_base_url: str = Field(default="", description="Canonical Notion2API backend URL used by this MCP wrapper.")
     timeout_seconds: float | None = Field(default=None, description="HTTP timeout used by the MCP wrapper for backend calls.")
     session_state_path: str = Field(default="", description="Path to the MCP session state file.")
@@ -812,6 +830,79 @@ def _extract_actual_model(data: dict[str, Any]) -> str:
         return actual.strip()
     direct = data.get("actual_model")
     return direct.strip() if isinstance(direct, str) and direct.strip() else ""
+
+
+def _caller_trace(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    raw = metadata.get("caller") if isinstance(metadata, dict) else None
+    caller = dict(raw) if isinstance(raw, dict) else {}
+    caller_id = str(caller.get("id") or caller.get("caller_id") or "").strip()
+    caller_type = str(caller.get("type") or caller.get("caller_type") or "").strip()
+    bounded = {
+        str(key): value
+        for key, value in caller.items()
+        if str(key) in {
+            "id", "caller_id", "type", "caller_type", "project_id", "run_id",
+            "job_id", "review_instance_id", "team_id", "manager_id", "request_origin",
+        }
+        and value not in (None, "", [], {})
+    }
+    return {
+        "caller_id": caller_id,
+        "caller_type": caller_type,
+        "caller_metadata": bounded or None,
+    }
+
+
+def _model_identity_trace(
+    data: dict[str, Any], requested_model: str
+) -> dict[str, Any]:
+    metadata = (
+        dict(data.get("model_metadata"))
+        if isinstance(data.get("model_metadata"), dict)
+        else {}
+    )
+    requested = str(metadata.get("requested_model") or requested_model or "").strip()
+    resolved = str(
+        metadata.get("notion_requested_model")
+        or metadata.get("resolved_model")
+        or requested
+    ).strip()
+    observed = _extract_actual_model(data)
+    verified = bool(metadata.get("actual_model_verified") is True and observed)
+    source = str(
+        metadata.get("actual_model_source")
+        or metadata.get("model_identity_source")
+        or ("authoritative_upstream_metadata" if verified else "")
+    ).strip()
+    if verified:
+        confidence = "verified"
+        verified_model = observed
+    elif observed:
+        confidence = "observed"
+        verified_model = ""
+        source = source or "unverified_upstream_observation"
+    else:
+        confidence = "unverified"
+        verified_model = ""
+        source = source or "no_responder_identity_evidence"
+    substitution = None
+    comparison_model = verified_model or observed
+    if comparison_model and resolved and comparison_model != resolved:
+        substitution = {
+            "requested_model": requested,
+            "resolved_model": resolved,
+            "responding_model": comparison_model,
+            "verified": verified,
+        }
+    return {
+        "requested_model": requested,
+        "resolved_model": resolved,
+        "verified_model": verified_model,
+        "model_identity_verified": verified,
+        "model_identity_source": source,
+        "model_identity_confidence": confidence,
+        "model_substitution": substitution,
+    }
 
 
 def _extract_remote_chat_id(data: dict[str, Any]) -> str:
@@ -1571,6 +1662,12 @@ def _chat_output_from_backend(
         "model": _extract_actual_model(data) or data.get("model") or model,
         "actual_model": _extract_actual_model(data),
         "model_metadata": data.get("model_metadata") if isinstance(data.get("model_metadata"), dict) else None,
+        **_model_identity_trace(data, model),
+        **_caller_trace(
+            data.get("request_metadata")
+            if isinstance(data.get("request_metadata"), dict)
+            else None
+        ),
         **_runtime_audit(client, model),
         "session_name": session_key,
         "conversation_id": conversation_id,
@@ -1606,8 +1703,20 @@ def _chat_pending_output(
         "ok": False,
         "status_code": None,
         "model": model,
-        "actual_model": "",
-        "model_metadata": None,
+        "actual_model": str(job.get("actual_model") or ""),
+        "model_metadata": job.get("model_metadata") if isinstance(job.get("model_metadata"), dict) else None,
+        **_model_identity_trace(
+            {
+                "actual_model": job.get("actual_model"),
+                "model_metadata": job.get("model_metadata"),
+            },
+            str(job.get("requested_model") or model),
+        ),
+        **_caller_trace(
+            {"caller": job.get("caller")}
+            if isinstance(job.get("caller"), dict)
+            else None
+        ),
         **_runtime_audit(client, model),
         "session_name": session_key,
         "conversation_id": conversation_id,
@@ -2070,6 +2179,8 @@ async def _run_chat_completion_job(
                             },
                             turn,
                         )
+                data = dict(data)
+                data["request_metadata"] = dict(payload.get("metadata") or {})
                 return _chat_output_from_backend(
                     data=data,
                     client=client,
@@ -2139,6 +2250,20 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
         if response is not None:
             provenance = _attachment_provenance_from_job(job)
             response = {**response, **provenance}
+            if not response.get("caller_id"):
+                response["caller_id"] = str((job.get("caller") or {}).get("id") or "")
+            if not response.get("caller_type"):
+                response["caller_type"] = str((job.get("caller") or {}).get("type") or "")
+            if not response.get("caller_metadata"):
+                response["caller_metadata"] = dict(job.get("caller") or {}) or None
+            if not response.get("requested_model"):
+                response["requested_model"] = str(job.get("requested_model") or job.get("model") or "")
+            if not response.get("resolved_model"):
+                response["resolved_model"] = str(job.get("resolved_model") or job.get("model") or "")
+            if isinstance(response.get("model_metadata"), dict):
+                job["model_metadata"] = dict(response["model_metadata"])
+            if response.get("actual_model"):
+                job["actual_model"] = str(response.get("actual_model") or "")
             raw_response = dict(response.get("raw") or {}) if isinstance(response.get("raw"), dict) else {}
             raw_response["attachment_provenance"] = provenance
             response["raw"] = raw_response
@@ -2218,6 +2343,19 @@ async def _submit_or_resume_chat_job(
         metadata = {}
         payload["metadata"] = metadata
     metadata.setdefault("mcp_request_id", normalized_id)
+    caller = metadata.get("caller") if isinstance(metadata.get("caller"), dict) else {}
+    caller = {
+        "id": str(caller.get("id") or caller.get("caller_id") or "notion2api-mcp").strip(),
+        "type": str(caller.get("type") or caller.get("caller_type") or "mcp").strip(),
+        **{
+            str(key): value
+            for key, value in caller.items()
+            if str(key) not in {"id", "caller_id", "type", "caller_type"}
+            and value not in (None, "", [], {})
+        },
+    }
+    caller.setdefault("request_origin", "notion2api_mcp")
+    metadata["caller"] = caller
     attachment_manifest = _attachment_manifest_from_payload(payload)
     attachment_required = bool(metadata.get("require_attachments"))
 
@@ -2316,6 +2454,9 @@ async def _submit_or_resume_chat_job(
             "status": "running",
             "endpoint": path,
             "model": model,
+            "requested_model": model,
+            "resolved_model": model,
+            "caller": caller,
             "session_name": session_key,
             "conversation_id": conversation_id,
             "session_created": session_created,
@@ -3045,6 +3186,9 @@ def create_server(
         web_access: MCPWebAccess = None,
         persona: MCPNotionPersona = None,
         notion_instructions: MCPNotionInstructions = None,
+        caller_id: str = "notion2api-mcp",
+        caller_type: str = "mcp",
+        caller_metadata: dict[str, Any] | None = None,
     ) -> ChatOutput:
         resolved_session_name = _infer_session_name(
             session_name,
@@ -3077,6 +3221,11 @@ def create_server(
                 "mcp_session_name": session_key,
                 "continue_from_request_id": continue_from_request_id,
                 "require_attachments": require_attachments,
+                "caller": {
+                    "id": caller_id,
+                    "type": caller_type,
+                    **dict(caller_metadata or {}),
+                },
             },
         }
         if prepared:
@@ -3144,6 +3293,9 @@ def create_server(
         web_access: MCPWebAccess = None,
         persona: MCPNotionPersona = None,
         notion_instructions: MCPNotionInstructions = None,
+        caller_id: str = "notion2api-mcp",
+        caller_type: str = "mcp",
+        caller_metadata: dict[str, Any] | None = None,
     ) -> ChatOutput:
         return await notion2api_chat(
             prompt=prompt,
@@ -3164,6 +3316,9 @@ def create_server(
             web_access=web_access,
             persona=persona,
             notion_instructions=notion_instructions,
+            caller_id=caller_id,
+            caller_type=caller_type,
+            caller_metadata=caller_metadata,
         )
 
     @server.tool(
@@ -3228,6 +3383,9 @@ def create_server(
         web_access: MCPWebAccess = None,
         persona: MCPNotionPersona = None,
         notion_instructions: MCPNotionInstructions = None,
+        caller_id: str = "notion2api-mcp",
+        caller_type: str = "mcp",
+        caller_metadata: dict[str, Any] | None = None,
     ) -> ChatOutput:
         explicit_messages = _copy_explicit_messages(messages)
         inferred_prompt = _prompt_text_from_messages(explicit_messages)
@@ -3261,6 +3419,11 @@ def create_server(
                 "mcp_session_name": session_key,
                 "continue_from_request_id": continue_from_request_id,
                 "require_attachments": require_attachments,
+                "caller": {
+                    "id": caller_id,
+                    "type": caller_type,
+                    **dict(caller_metadata or {}),
+                },
             },
         }
         if prepared:
@@ -3286,6 +3449,9 @@ def create_server(
         attachments: FileAttachments = None,
         staged_file_ids: StagedFileIds = None,
         require_attachments: bool = False,
+        caller_id: str = "notion2api-mcp",
+        caller_type: str = "mcp",
+        caller_metadata: dict[str, Any] | None = None,
     ) -> ResponsesOutput:
         validated_input = validate_prompt_text(input_text, param="input_text")
         validated_instructions = validate_prompt_text(
@@ -3312,6 +3478,11 @@ def create_server(
             "metadata": {
                 "persist_remote_chat": persist_remote_chat,
                 "require_attachments": require_attachments,
+                "caller": {
+                    "id": caller_id,
+                    "type": caller_type,
+                    **dict(caller_metadata or {}),
+                },
             },
         }
         if validated_instructions:

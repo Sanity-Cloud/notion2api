@@ -22,6 +22,7 @@ from app.attachments.normalizer import (
     PromptValidationError,
     normalize_chat_messages,
     validate_chat_messages,
+    validate_inline_attachment_data,
 )
 from app.attachments.security import AttachmentPolicy
 from app.attachments.errors import AttachmentError
@@ -627,7 +628,11 @@ def _merge_model_metadata(current: dict[str, Any] | None, item: dict[str, Any]) 
     return merged
 
 
-def _response_model_metadata(requested_model: str, model_metadata: dict[str, Any] | None) -> dict[str, Any]:
+def _response_model_metadata(
+    requested_model: str,
+    model_metadata: dict[str, Any] | None,
+    request_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = dict(model_metadata or {})
     requested = normalize_model_id(requested_model) or requested_model
     notion_requested = ""
@@ -635,33 +640,56 @@ def _response_model_metadata(requested_model: str, model_metadata: dict[str, Any
         payload.setdefault("requested_model", requested)
         try:
             from app.model_registry import get_notion_model
+
             notion_requested = get_notion_model(requested)
             payload.setdefault("notion_requested_model", notion_requested)
+            payload.setdefault(
+                "resolved_model",
+                str(payload.get("notion_requested_model") or notion_requested),
+            )
         except Exception:
-            pass
-    # Resolve the actual model from available metadata fields.
+            payload.setdefault(
+                "resolved_model",
+                str(payload.get("notion_requested_model") or requested),
+            )
+    resolved_route = str(
+        payload.get("resolved_model")
+        or payload.get("notion_requested_model")
+        or notion_requested
+        or requested
+        or ""
+    ).strip()
+
+    caller = request_metadata.get("caller") if isinstance(request_metadata, dict) else None
+    if isinstance(caller, dict):
+        payload["caller"] = {
+            str(key): value
+            for key, value in caller.items()
+            if str(key) in {
+                "id", "caller_id", "type", "caller_type", "project_id", "run_id",
+                "job_id", "review_instance_id", "team_id", "manager_id", "request_origin",
+            }
+            and value not in (None, "", [], {})
+        }
+
     actual = payload.get("actual_model") or payload.get("notion_model_name")
     step_model = payload.get("notion_step_model") or ""
     if actual:
         payload["actual_model"] = actual
-        # notionModelName often just echoes the requested model — that is NOT
-        # proof that the model actually responded (locked/downgraded models
-        # like Fable 5 silently swap to a different model while still
-        # reporting the original codename).  Only mark as verified when the
-        # upstream reports a DIFFERENT model than what was requested.
-        if notion_requested and actual == notion_requested:
+        # Matching notionModelName can be a request echo. It is an observation,
+        # not authoritative responder identity.
+        if resolved_route and actual == resolved_route:
             payload["actual_model_verified"] = False
             payload.setdefault(
                 "actual_model_unverified_reason",
-                "notionModelName matches the requested model; may be an echo, not proof of actual responder.",
+                "notionModelName matches the requested route; it may be an echo.",
             )
+            payload.setdefault("actual_model_source", "notion_model_name_observation")
         else:
             payload.setdefault("actual_model_verified", True)
+            payload.setdefault("actual_model_source", "notion_model_name_mismatch")
     elif step_model:
-        # step.model (notion_step_model) is usually the requested route, but
-        # when it DIFFERS from the requested notion model that is genuine
-        # proof of a silent model swap (e.g. Fable 5 → Gemini 3.5 Flash).
-        if notion_requested and step_model != notion_requested:
+        if resolved_route and step_model != resolved_route:
             payload["actual_model"] = step_model
             payload["actual_model_verified"] = True
             payload["actual_model_source"] = "notion_step_model_mismatch"
@@ -669,14 +697,47 @@ def _response_model_metadata(requested_model: str, model_metadata: dict[str, Any
             payload["actual_model_verified"] = False
             payload.setdefault(
                 "actual_model_unverified_reason",
-                "Only notion_step_model was observed and it matches the request; may be an echo.",
+                "Only notion_step_model was observed and it matches the request route.",
             )
+            payload.setdefault("actual_model_source", "notion_step_model_observation")
             payload.pop("actual_model", None)
+
+    observed = str(payload.get("actual_model") or "").strip()
+    verified = bool(payload.get("actual_model_verified") is True and observed)
+    payload["model_identity_verified"] = verified
+    payload["model_identity_confidence"] = (
+        "verified" if verified else ("observed" if observed else "unverified")
+    )
+    payload["model_identity_source"] = str(
+        payload.get("actual_model_source")
+        or ("authoritative_upstream_metadata" if verified else "no_responder_identity_evidence")
+    )
+    if verified:
+        payload["verified_model"] = observed
+    else:
+        payload.pop("verified_model", None)
+
+    resolved = resolved_route
+    comparison_model = str(payload.get("verified_model") or observed or "").strip()
+    if resolved and comparison_model and comparison_model != resolved:
+        payload["model_substitution"] = {
+            "requested_model": requested,
+            "resolved_model": resolved,
+            "responding_model": comparison_model,
+            "verified": verified,
+        }
     return {k: v for k, v in payload.items() if v not in (None, "", [], {})}
 
 
-def _attach_response_model_metadata(response_obj: ChatCompletionResponse, requested_model: str, model_metadata: dict[str, Any] | None) -> None:
-    payload = _response_model_metadata(requested_model, model_metadata)
+def _attach_response_model_metadata(
+    response_obj: ChatCompletionResponse,
+    requested_model: str,
+    model_metadata: dict[str, Any] | None,
+    request_metadata: dict[str, Any] | None = None,
+) -> None:
+    payload = _response_model_metadata(
+        requested_model, model_metadata, request_metadata=request_metadata
+    )
     if not payload:
         return
     response_obj.requested_model = payload.get("requested_model")
@@ -684,12 +745,32 @@ def _attach_response_model_metadata(response_obj: ChatCompletionResponse, reques
     response_obj.actual_model = payload.get("actual_model")
     response_obj.model_metadata = payload
 
-    # The OpenAI-compatible response `model` should identify the responder,
-    # not merely the user's requested alias. Preserve the alias separately in
-    # requested_model / notion_requested_model.
-    actual_model = payload.get("actual_model")
-    if isinstance(actual_model, str) and actual_model.strip():
-        response_obj.model = actual_model.strip()
+    # Never promote a request echo or unverified observation into the response
+    # model field. Only authoritative responder evidence may replace the route.
+    verified_model = payload.get("verified_model")
+    if isinstance(verified_model, str) and verified_model.strip():
+        response_obj.model = verified_model.strip()
+    else:
+        resolved = payload.get("resolved_model")
+        if isinstance(resolved, str) and resolved.strip():
+            response_obj.model = resolved.strip()
+
+
+def _build_model_metadata_event(
+    requested_model: str,
+    model_metadata: dict[str, Any] | None,
+    request_metadata: dict[str, Any] | None = None,
+) -> str:
+    payload = _response_model_metadata(
+        requested_model, model_metadata, request_metadata=request_metadata
+    )
+    if not payload:
+        return ""
+    display_model = payload.get("verified_model") or payload.get("resolved_model")
+    if isinstance(display_model, str) and display_model.strip():
+        payload["display_model"] = display_model.strip()
+    event = {"type": "model_metadata", "model_metadata": payload}
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
 def _attach_notion_thread_metadata(
@@ -705,17 +786,6 @@ def _attach_notion_thread_metadata(
         if response is not None:
             response.headers["X-Notion-Thread-Id"] = notion_thread_id
     return metadata
-
-
-def _build_model_metadata_event(requested_model: str, model_metadata: dict[str, Any] | None) -> str:
-    payload = _response_model_metadata(requested_model, model_metadata)
-    if not payload:
-        return ""
-    actual_model = payload.get("actual_model")
-    if isinstance(actual_model, str) and actual_model.strip():
-        payload["display_model"] = actual_model.strip()
-    event = {"type": "model_metadata", "model_metadata": payload}
-    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
 def _compute_missing_suffix(current_text: str, final_text: str) -> str:
@@ -1509,7 +1579,9 @@ def _handle_lite_request(
                 client=client,
                 model_metadata=model_metadata,
             )
-            _attach_response_model_metadata(response_obj, req_body.model, model_metadata)
+            _attach_response_model_metadata(
+                response_obj, req_body.model, model_metadata, req_body.metadata
+            )
             _attach_response_hygiene(response_obj, hygiene_meta)
             if _strict_model_requested(req_body) and _is_model_mismatch(response_obj):
                 return _model_mismatch_response(response_obj)
@@ -1786,7 +1858,9 @@ def _handle_standard_request(
                 client=client,
                 model_metadata=model_metadata,
             )
-            _attach_response_model_metadata(response_obj, req_body.model, model_metadata)
+            _attach_response_model_metadata(
+                response_obj, req_body.model, model_metadata, req_body.metadata
+            )
             _attach_response_hygiene(response_obj, hygiene_meta)
 
             # text
@@ -1912,6 +1986,35 @@ async def create_chat_completion(
             message.model_dump() if hasattr(message, "model_dump") else message.dict()
             for message in req_body.messages
         ])
+    except PromptValidationError as exc:
+        return _attachment_error_response(exc)
+
+    # Resolve attachment policy and inline-data validity before selecting a
+    # mode, acquiring an account, or creating a remote Notion thread.
+    try:
+        _preflight_messages, preflight_attachments = normalize_chat_messages(
+            [
+                message.model_dump()
+                if hasattr(message, "model_dump")
+                else message.dict()
+                for message in req_body.messages
+            ],
+            getattr(req_body, "attachments", None),
+        )
+        state_attachments = _request_state_attachments(request)
+        if state_attachments:
+            preflight_attachments = state_attachments
+        policy = AttachmentPolicy.from_env()
+        if preflight_attachments and not _attachments_enabled_for_request(
+            request, policy
+        ):
+            openai_error(
+                "Attachments are disabled for this server.",
+                "attachments_disabled",
+            )
+        validate_inline_attachment_data(preflight_attachments)
+        if preflight_attachments:
+            request.state.attachments = preflight_attachments
     except PromptValidationError as exc:
         return _attachment_error_response(exc)
 
@@ -2473,7 +2576,9 @@ async def create_chat_completion(
                                     }
                                 },
                             )
-                    metadata_event = _build_model_metadata_event(req_body.model, model_metadata)
+                    metadata_event = _build_model_metadata_event(
+                        req_body.model, model_metadata, req_body.metadata
+                    )
                     if metadata_event:
                         yield metadata_event
 
@@ -2585,7 +2690,9 @@ async def create_chat_completion(
                     )
                 ],
             )
-            _attach_response_model_metadata(response_obj, req_body.model, model_metadata)
+            _attach_response_model_metadata(
+                response_obj, req_body.model, model_metadata, req_body.metadata
+            )
             _attach_response_hygiene(response_obj, hygiene_meta)
             return response_obj
         except NotionUpstreamError as exc:

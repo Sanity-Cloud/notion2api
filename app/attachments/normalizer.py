@@ -6,6 +6,7 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
+from app.attachments.errors import AttachmentError
 from app.attachments.models import DEFAULT_ATTACHMENT_PROMPT, InputAttachment
 
 TEXT_PART_TYPES = {"text", "input_text", "output_text"}
@@ -188,6 +189,9 @@ def _attachment_from_reference(part: dict[str, Any], ref: str) -> InputAttachmen
     content_type = _attachment_content_type(part, ref)
     name = _attachment_name(part)
     if ref.startswith("data:"):
+        # Reject malformed inline payloads before any remote thread or upload
+        # operation is attempted. Loading later would turn a caller-side 400
+        # into an upstream 5xx and waste retry/cooldown capacity.
         return InputAttachment(name=name, content_type=content_type, source="inline_data", data=ref)
     if _looks_like_url(ref):
         return InputAttachment(name=name, content_type=content_type, source="remote_url", url=ref)
@@ -233,6 +237,29 @@ def _top_level_attachment(item: Any) -> InputAttachment | None:
         else:
             normalized["type"] = "file"
     return _attachment_from_part(normalized)
+
+
+def validate_inline_attachment_data(attachments: list[InputAttachment]) -> None:
+    """Validate inline bytes only after attachment policy admission.
+
+    Normalization remains structural and side-effect free. Enabled request paths
+    call this before any Notion thread, upload, retry, or account cooldown work.
+    """
+    from app.attachments.errors import AttachmentError
+    from app.attachments.loader import decode_inline_data
+
+    for attachment in attachments:
+        if str(attachment.source or "") != "inline_data":
+            continue
+        try:
+            decode_inline_data(attachment.data or b"")
+        except AttachmentError as exc:
+            raise PromptValidationError(
+                str(exc),
+                code=exc.code,
+                param=exc.param,
+                status_code=exc.status_code,
+            ) from exc
 
 
 def _attachment_signature(attachment: InputAttachment) -> tuple[Any, ...]:

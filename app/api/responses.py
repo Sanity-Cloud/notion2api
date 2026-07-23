@@ -12,7 +12,11 @@ from app.attachments.errors import AttachmentError
 from app.core.errors import openai_error
 from app.core.models import normalize_model_id
 from app.schemas import ChatCompletionRequest, ChatMessage
-from app.attachments.normalizer import PromptValidationError, normalize_responses_input
+from app.attachments.normalizer import (
+    PromptValidationError,
+    normalize_responses_input,
+    validate_inline_attachment_data,
+)
 from app.attachments.security import AttachmentPolicy, validate_content_type
 
 router = APIRouter()
@@ -155,6 +159,7 @@ async def create_response(
         openai_error("Attachments are disabled.", "attachments_disabled")
 
     try:
+        validate_inline_attachment_data(attachments)
         for att in attachments:
             if att.content_type:
                 validate_content_type(att.content_type, policy)
