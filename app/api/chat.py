@@ -203,6 +203,34 @@ def _raise_output_contaminated(hygiene: dict[str, Any]) -> None:
     )
 
 
+def _bound_thread_history_replay_response(
+    *,
+    conversation_id: str,
+    thread_id: str,
+    history_message_count: int,
+) -> JSONResponse:
+    evidence = {
+        "error_code": "BOUND_THREAD_HISTORY_REPLAY",
+        "conversation_id": conversation_id,
+        "thread_id": thread_id,
+        "history_message_count": history_message_count,
+    }
+    return _build_error_response(
+        409,
+        code="BOUND_THREAD_HISTORY_REPLAY",
+        message=(
+            "A persistent Notion thread may receive only the new user message; "
+            "client-supplied historical dialog is prohibited."
+        ),
+        error_type="conversation_integrity_error",
+        suggestion=(
+            "Remove prior user/assistant messages and retry the same logical operation "
+            "against the existing conversation_id."
+        ),
+        detail=json.dumps(evidence, sort_keys=True),
+    )
+
+
 def _resolve_request_model(request: Request, model: str | None) -> str:
     normalized_model = normalize_model_id(model)
     if not normalized_model:
@@ -2196,16 +2224,21 @@ async def create_chat_completion(
     # second source of truth and can later replay those rows into the bound thread.
     if history_messages and bound_thread_id:
         logger.warning(
-            "Blocked local history restoration for bound Notion thread",
+            "Rejected client history for bound Notion thread",
             extra={
                 "request_info": {
-                    "event": "bound_thread_history_restore_blocked",
+                    "event": "bound_thread_history_replay_rejected",
                     "error_code": "BOUND_THREAD_HISTORY_REPLAY",
                     "conversation_id": conversation_id,
                     "thread_id": bound_thread_id,
                     "history_message_count": len(history_messages),
                 }
             },
+        )
+        return _bound_thread_history_replay_response(
+            conversation_id=conversation_id,
+            thread_id=bound_thread_id,
+            history_message_count=len(history_messages),
         )
     elif history_messages:
         with manager._get_conn() as conn:

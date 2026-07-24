@@ -1,7 +1,9 @@
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.config import API_KEY
 from app.conversation import ConversationManager
 from app.notion_client import (
     BOUND_THREAD_HISTORY_REPLAY,
@@ -9,6 +11,7 @@ from app.notion_client import (
     NotionUpstreamError,
     validate_bound_thread_transcript,
 )
+from app.server import app
 
 
 TRIGGER_PHRASES = [
@@ -108,3 +111,44 @@ def test_non_dialog_bound_control_call_remains_allowed():
     validate_bound_thread_transcript(
         [{"type": "config", "value": {"type": "workflow", "model": "terra"}}]
     )
+
+
+def test_api_rejects_bound_client_history_before_account_acquisition(
+    tmp_path, monkeypatch
+):
+    manager = _manager(tmp_path, monkeypatch)
+    conversation_id = manager.new_conversation(conversation_id="api-bound-conversation")
+    manager.set_conversation_thread_id(conversation_id, "remote-api-thread", "terra")
+    account_pool = MagicMock()
+    headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
+    payload = {
+        "model": "terra",
+        "conversation_id": conversation_id,
+        "messages": [
+            {"role": "user", "content": "historical user message"},
+            {"role": "assistant", "content": "historical assistant answer"},
+            {"role": "user", "content": "new request"},
+        ],
+    }
+
+    with TestClient(app) as client:
+        original_manager = app.state.conversation_manager
+        original_pool = app.state.account_pool
+        try:
+            app.state.conversation_manager = manager
+            app.state.account_pool = account_pool
+            response = client.post(
+                "/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+        finally:
+            app.state.conversation_manager = original_manager
+            app.state.account_pool = original_pool
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"]["code"] == "BOUND_THREAD_HISTORY_REPLAY"
+    assert body["error"]["type"] == "conversation_integrity_error"
+    assert "history_message_count" in body["error"]["detail"]
+    account_pool.acquire.assert_not_called()
