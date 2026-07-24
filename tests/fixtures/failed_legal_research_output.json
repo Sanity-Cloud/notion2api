@@ -1,0 +1,6 @@
+{
+  "request_id": "test-legal-research-failed-syntax-001",
+  "prompt": "Provide a legal memorandum on Minnesota appellate rules.",
+  "raw_escaping_output": "{\"tool_call_id\": \"call_res_legal_12345\", \"recipient\": \"legal_search\", \"parameters\": {\"query\": \"Minnesota appellate rules\", \"jurisdiction\": \"MN\"}, \"action_plan\": [{\"step\": 1, \"action\": \"query_statutes\"}]}",
+  "description": "Sanitized regression payload reproducing escaped internal research-tool syntax"
+}
