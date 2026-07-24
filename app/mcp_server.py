@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import copy
@@ -2522,10 +2522,30 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
                 response.get("remote_chat_id")
                 or response.get("notion_thread_id")
                 or ""
-            )
+            ).strip()
+            if not remote_chat_id and isinstance(response.get("model_metadata"), dict):
+                mm = response["model_metadata"]
+                remote_chat_id = str(mm.get("notion_thread_id") or mm.get("remote_chat_id") or "").strip()
+            if not remote_chat_id:
+                conv_id = str(job.get("conversation_id") or "").strip()
+                if conv_id:
+                    db_path = _local_conversation_db_path()
+                    if db_path.exists():
+                        try:
+                            with sqlite3.connect(str(db_path), timeout=5) as conn:
+                                row = conn.execute("SELECT thread_id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+                                if row and row[0]:
+                                    remote_chat_id = str(row[0]).strip()
+                        except Exception:
+                            pass
             if remote_chat_id:
                 job["remote_chat_id"] = remote_chat_id
                 job["notion_thread_id"] = remote_chat_id
+                response["remote_chat_id"] = remote_chat_id
+                response["notion_thread_id"] = remote_chat_id
+                if isinstance(response.get("model_metadata"), dict):
+                    response["model_metadata"]["remote_chat_id"] = remote_chat_id
+                    response["model_metadata"]["notion_thread_id"] = remote_chat_id
         if error:
             job["error"] = error
         job = _refresh_chat_job_health(job)
@@ -3240,6 +3260,21 @@ def _read_local_messages(session_name: str | None = None, conversation_id: str |
             for row in rows
         ]
         messages.reverse()
+        if not messages:
+            jobs_state = _load_chat_job_state()
+            all_jobs = jobs_state.get("jobs", {})
+            for job in sorted(all_jobs.values(), key=lambda j: j.get("updated_at") or j.get("created_at") or 0, reverse=True):
+                if str(job.get("status")) == "completed" and not job.get("quarantined"):
+                    if str(job.get("session_name")) == key or str(job.get("conversation_id")) == resolved_id:
+                        text = _job_response_text(job)
+                        if text:
+                            created_ts = int(job.get("updated_at") or job.get("created_at") or 0)
+                            prompt_text = str(job.get("prompt") or "")
+                            if prompt_text:
+                                messages.append({"id": 1, "role": "user", "content": prompt_text, "thinking": "", "created_at": created_ts - 1})
+                            messages.append({"id": 2, "role": "assistant", "content": text, "thinking": "", "created_at": created_ts})
+                            total = len(messages)
+                            break
         return MessagesOutput(ok=True, session_name=key, conversation_id=resolved_id, count=len(messages), total_count=total, db_path=str(db_path), messages=messages)
     except Exception as exc:
         return MessagesOutput(ok=False, session_name=key, conversation_id=resolved_id, db_path=str(db_path), error=f"{type(exc).__name__}: {exc}")
@@ -3266,6 +3301,35 @@ def _read_last_local_response(session_name: str | None = None, conversation_id: 
                 (resolved_id,),
             ).fetchone()
         if not row:
+            # Fallback to completed MCP job records for this session/conversation
+            completed_job = None
+            jobs_state = _load_chat_job_state()
+            all_jobs = jobs_state.get("jobs", {})
+            for job in sorted(all_jobs.values(), key=lambda j: j.get("updated_at") or j.get("created_at") or 0, reverse=True):
+                if str(job.get("status")) == "completed" and not job.get("quarantined"):
+                    if str(job.get("session_name")) == key or str(job.get("conversation_id")) == resolved_id:
+                        text = _job_response_text(job)
+                        if text:
+                            completed_job = (job, text)
+                            break
+            if completed_job:
+                c_job, c_text = completed_job
+                message = {
+                    "id": 0,
+                    "role": "assistant",
+                    "content": c_text,
+                    "thinking": "",
+                    "created_at": int(c_job.get("updated_at") or c_job.get("created_at") or 0),
+                }
+                return LastResponseOutput(
+                    ok=True,
+                    found=True,
+                    session_name=key,
+                    conversation_id=resolved_id,
+                    response_text=c_text,
+                    message=message,
+                    db_path=str(db_path),
+                )
             return LastResponseOutput(ok=True, found=False, session_name=key, conversation_id=resolved_id, db_path=str(db_path))
         message = {
             "id": int(row["id"]),
