@@ -102,7 +102,10 @@ class ChatCompletionResponse(BaseModel):
     notion_requested_model: Optional[str] = Field(default=None)
     actual_model: Optional[str] = Field(default=None)
     model_metadata: Optional[Dict[str, Any]] = Field(default=None)
-    hygiene: Optional[Dict[str, bool]] = Field(default=None)
+    hygiene: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Visible-output hygiene flags and bounded integrity receipt.",
+    )
     usage: Dict[str, int] = Field(
         default_factory=lambda: {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     )

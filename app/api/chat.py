@@ -26,6 +26,7 @@ from app.attachments.normalizer import (
 )
 from app.attachments.security import AttachmentPolicy
 from app.attachments.errors import AttachmentError
+from app.output_integrity import assess_output_integrity
 from app.output_hygiene import (
     detect_visible_output_contamination,
     finalize_visible_output,
@@ -167,7 +168,16 @@ def _build_error_response(
 
 
 def _upstream_error_response(exc: NotionUpstreamError) -> JSONResponse:
-    """Convert NotionUpstreamError to a unified 503 JSON response."""
+    """Convert NotionUpstreamError to a unified JSON response."""
+    if exc.status_code == 422 and "OUTPUT_CONTAMINATED" in (exc.response_excerpt or ""):
+        return _build_error_response(
+            422,
+            code="OUTPUT_CONTAMINATED",
+            message="Assistant output failed integrity validation and was quarantined.",
+            error_type="indeterminate_output",
+            suggestion="Inspect the original request and quarantined evidence; do not resubmit blindly.",
+            detail=exc.response_excerpt or "",
+        )
     info = _classify_upstream_error(exc)
     return _build_error_response(
         503,
@@ -176,6 +186,20 @@ def _upstream_error_response(exc: NotionUpstreamError) -> JSONResponse:
         error_type=info["type"],
         suggestion=info.get("suggestion", ""),
         detail=exc.response_excerpt or "",
+    )
+
+
+def _raise_output_contaminated(hygiene: dict[str, Any]) -> None:
+    integrity = hygiene.get("output_integrity")
+    evidence = {
+        "error_code": "OUTPUT_CONTAMINATED",
+        "output_integrity": integrity if isinstance(integrity, dict) else {},
+    }
+    raise NotionUpstreamError(
+        "Assistant output failed integrity validation.",
+        status_code=422,
+        retriable=False,
+        response_excerpt=json.dumps(evidence, sort_keys=True),
     )
 
 
@@ -410,18 +434,39 @@ def _finalize_visible_reply(
     streamed_text: str,
     authoritative_final: str,
     authoritative_source: str,
-) -> tuple[str, str, dict[str, bool]]:
+) -> tuple[str, str, dict[str, Any]]:
     raw_reply, decision = _select_best_final_reply(
         streamed_text,
         authoritative_final,
         authoritative_source,
     )
     sanitized, hygiene = finalize_visible_output(raw_reply)
+    additional_reasons = (
+        ("visible_output_contamination",)
+        if hygiene.get("visible_contamination_detected")
+        else ()
+    )
+    hygiene["output_integrity"] = assess_output_integrity(
+        raw_reply,
+        additional_reasons=additional_reasons,
+    )
     return sanitized, decision, hygiene
 
 
-def _build_hygiene_metadata_event(hygiene: dict[str, bool]) -> str:
-    if not any(hygiene.values()):
+def _output_requires_quarantine(hygiene: dict[str, Any] | None) -> bool:
+    if not isinstance(hygiene, dict):
+        return False
+    integrity = hygiene.get("output_integrity")
+    return bool(isinstance(integrity, dict) and integrity.get("quarantine_required"))
+
+
+def _build_hygiene_metadata_event(hygiene: dict[str, Any]) -> str:
+    if not (
+        hygiene.get("hidden_thinking_removed")
+        or hygiene.get("visible_contamination_detected")
+        or hygiene.get("retry_recommended")
+        or _output_requires_quarantine(hygiene)
+    ):
         return ""
     event = {"type": "output_hygiene", "hygiene": hygiene}
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -492,9 +537,9 @@ def _emit_visible_stream_correction(
 
 def _attach_response_hygiene(
     response_obj: ChatCompletionResponse,
-    hygiene: dict[str, bool] | None,
+    hygiene: dict[str, Any] | None,
 ) -> None:
-    if hygiene and any(hygiene.values()):
+    if hygiene and (any(value for key, value in hygiene.items() if key != "output_integrity") or _output_requires_quarantine(hygiene)):
         response_obj.hygiene = hygiene
 
 
@@ -2144,19 +2189,28 @@ async def create_chat_completion(
         )
         restore_history = True
 
-    # text
-    # text conversation_id text
-    if history_messages:
-        # text
+    bound_thread_id = _resolve_persistent_thread_id(manager, conversation_id)
+
+    # Client-supplied history may reconstruct only an unbound/stateless conversation.
+    # Once Notion owns a remote thread, restoring historical rows locally creates a
+    # second source of truth and can later replay those rows into the bound thread.
+    if history_messages and bound_thread_id:
+        logger.warning(
+            "Blocked local history restoration for bound Notion thread",
+            extra={
+                "request_info": {
+                    "event": "bound_thread_history_restore_blocked",
+                    "error_code": "BOUND_THREAD_HISTORY_REPLAY",
+                    "conversation_id": conversation_id,
+                    "thread_id": bound_thread_id,
+                    "history_message_count": len(history_messages),
+                }
+            },
+        )
+    elif history_messages:
         with manager._get_conn() as conn:
             existing_count = manager._count_messages(conn, conversation_id)
             history_count = len(history_messages)
-
-            # text
-            # text
-            # 1. text
-            # 2. text
-            # 3. text"text AI text"text bug
             if history_count > existing_count:
                 _persist_history_messages(manager, conversation_id, history_messages)
                 restored_user_count = sum(
@@ -2167,7 +2221,7 @@ async def create_chat_completion(
                 )
 
                 logger.info(
-                    "Restored history into conversation",
+                    "Restored history into unbound conversation",
                     extra={
                         "request_info": {
                             "event": "conversation_history_restored",
@@ -2194,7 +2248,7 @@ async def create_chat_completion(
                 conversation_id=conversation_id,
                 new_prompt=user_prompt,
                 model_name=req_body.model,
-                recall_query=recall_query,
+                recall_query=None if bound_thread_id else recall_query,
                 context_page_id=_request_context_page_id(req_body, client),
             )
             transcript = transcript_payload["transcript"]
@@ -2202,8 +2256,8 @@ async def create_chat_completion(
             memory_degraded = bool(transcript_payload.get("memory_degraded"))
             memory_headers = {"X-Memory-Status": "degraded"} if memory_degraded else {}
 
-            # text thread_id text
-            thread_id = _resolve_persistent_thread_id(manager, conversation_id)
+            # Bound conversations always continue the existing remote-native thread.
+            thread_id = bound_thread_id
 
             # Pass attachments when present
             _cleaned_msgs, attachments = normalize_chat_messages(
@@ -2555,7 +2609,21 @@ async def create_chat_completion(
                         if thinking_replacement is not None
                         else thinking_accumulator
                     )
-                    if final_reply.strip() or persisted_thinking.strip():
+                    quarantined = _output_requires_quarantine(hygiene_meta)
+                    if quarantined:
+                        logger.error(
+                            "Quarantined contaminated streaming response",
+                            extra={
+                                "request_info": {
+                                    "event": "output_quarantined",
+                                    "error_code": "OUTPUT_CONTAMINATED",
+                                    "conversation_id": conversation_id,
+                                    "output_integrity": hygiene_meta.get("output_integrity"),
+                                    "normal_persistence_blocked": True,
+                                }
+                            },
+                        )
+                    elif final_reply.strip() or persisted_thinking.strip():
                         try:
                             _persist_round(
                                 manager,
@@ -2587,7 +2655,9 @@ async def create_chat_completion(
                         yield hygiene_event
 
                     yield _build_stream_chunk(
-                        response_id, req_body.model, finish_reason="stop"
+                        response_id,
+                        req_body.model,
+                        finish_reason="content_filter" if quarantined else "stop",
                     )
                     yield "data: [DONE]\n\n"
 
@@ -2655,6 +2725,8 @@ async def create_chat_completion(
                 raise NotionUpstreamError(
                     "Notion upstream returned empty content.", retriable=True
                 )
+            if _output_requires_quarantine(hygiene_meta):
+                _raise_output_contaminated(hygiene_meta)
 
             _persist_round(
                 manager,

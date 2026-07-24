@@ -1285,9 +1285,8 @@ class ConversationManager:
                 raise ValueError(f"Conversation ID '{conversation_id}' does not exist.")
 
             remote_thread_id = str(row["thread_id"] or "").strip()
-            remote_native_enabled = self._env_flag("NOTION_REMOTE_NATIVE_CONTINUE", True)
             recall_requested = bool((recall_query or "").strip())
-            if remote_native_enabled and remote_thread_id and not recall_requested:
+            if remote_thread_id:
                 gemini_mode = is_gemini_model(model_name)
                 transcript: List[Dict[str, Any]] = [
                     self._build_config_block(model_name, gemini_mode=gemini_mode),
@@ -1307,7 +1306,10 @@ class ConversationManager:
                             "conversation_id": conversation_id,
                             "thread_id": remote_thread_id,
                             "transcript_length": len(transcript),
+                            "history_messages_sent": 0,
                             "replayed_local_history": False,
+                            "memory_mode": "remote_native",
+                            "recall_query_ignored": recall_requested,
                         }
                     },
                 )
@@ -1315,6 +1317,11 @@ class ConversationManager:
                     "transcript": transcript,
                     "memory_degraded": False,
                     "remote_native": True,
+                    "memory_mode": "remote_native",
+                    "remote_thread_id": remote_thread_id,
+                    "history_messages_sent": 0,
+                    "replayed_local_history": False,
+                    "recall_query_ignored": recall_requested,
                 }
 
             # text

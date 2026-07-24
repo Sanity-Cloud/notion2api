@@ -21,6 +21,8 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.attachments.normalizer import validate_chat_messages, validate_prompt_text
+from app.output_hygiene import detect_visible_output_contamination
+from app.output_integrity import assess_output_integrity
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -136,7 +138,7 @@ class ChatOutput(BaseModel):
     session_name: str | None = Field(default=None, description="Normalized MCP session name. Omitted and legacy 'op' names are generated.")
     conversation_id: str | None = Field(default=None, description="Stable Notion2API conversation id used for the request.")
     session_created: bool | None = Field(default=None, description="True when the wrapper created a new MCP conversation binding.")
-    status: str = Field(default="completed", description="MCP wrapper job status: completed, pending, running, error, stale, or cancelled.")
+    status: str = Field(default="completed", description="MCP wrapper job status: completed, indeterminate_output, pending, running, error, stale, or cancelled.")
     request_id: str | None = Field(default=None, description="Idempotency key used to deduplicate or poll this MCP chat request.")
     job_id: str | None = Field(default=None, description="Pollable job id. Currently identical to request_id.")
     retry_safe: bool = Field(default=False, description="True when retrying with the same request_id is safe and will not resubmit.")
@@ -144,6 +146,8 @@ class ChatOutput(BaseModel):
     poll_hint: str = Field(default="", description="Human-readable polling instruction for pending or stale jobs.")
     error: str | None = Field(default=None, description="Error summary if the backend call failed or the job became stale.")
     response_text: str = Field(default="", description="Extracted assistant response text.")
+    output_integrity: dict[str, Any] | None = Field(default=None, description="Bounded pre-persistence output-integrity receipt.")
+    quarantined: bool = Field(default=False, description="Whether visible output was removed from normal conversation state.")
     attachment_required: bool = Field(default=False, description="Whether this request was required to include at least one verified attachment.")
     attachment_count: int = Field(default=0, description="Number of attachments verified before submission.")
     attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance state: verified, missing, or not_requested.")
@@ -199,7 +203,19 @@ class ResponsesOutput(BaseModel):
     session_state_path: str = Field(default="", description="Path to the MCP session state file.")
     local_conversations_db: str = Field(default="", description="Expected local Notion2API conversations DB path.")
     imported_history_db: str = Field(default="", description="Expected imported Notion history DB path.")
+    status: str = Field(
+        default="completed",
+        description="Terminal response state: completed, error, or indeterminate_output.",
+    )
     response_text: str = Field(default="", description="Extracted response output text.")
+    output_integrity: dict[str, Any] | None = Field(
+        default=None,
+        description="Bounded pre-return output-integrity receipt.",
+    )
+    quarantined: bool = Field(
+        default=False,
+        description="Whether visible output was withheld from the normal response projection.",
+    )
     error: str | None = Field(default=None, description="Error summary if the responses request failed.")
     attachment_required: bool = Field(default=False, description="Whether at least one attachment was required.")
     attachment_count: int = Field(default=0, description="Number of verified attachments submitted.")
@@ -270,7 +286,7 @@ class LastResponseOutput(BaseModel):
 class ChatJobOutput(BaseModel):
     ok: bool = Field(description="Whether the chat job lookup completed.")
     found: bool = Field(default=False, description="Whether a job with this request_id exists.")
-    status: str = Field(default="", description="Persisted job status: running, pending, completed, error, stale, or cancelled.")
+    status: str = Field(default="", description="Persisted job status: running, pending, completed, indeterminate_output, error, stale, or cancelled.")
     request_id: str = Field(default="", description="Idempotency key / job id.")
     job_id: str = Field(default="", description="Pollable job id. Currently identical to request_id.")
     session_name: str = Field(default="", description="Normalized MCP session name.")
@@ -282,6 +298,8 @@ class ChatJobOutput(BaseModel):
     response_text: str = Field(default="", description="Bounded completed-response preview unless include_response is true.")
     response_chars: int = Field(default=0, description="Full completed-response character count.")
     response_truncated: bool = Field(default=False, description="Whether response_text is a bounded preview.")
+    output_integrity: dict[str, Any] | None = Field(default=None, description="Bounded pre-persistence output-integrity receipt.")
+    quarantined: bool = Field(default=False, description="Whether visible output was removed from normal conversation state.")
     attachment_required: bool = Field(default=False, description="Whether the request required one or more verified attachments.")
     attachment_count: int = Field(default=0, description="Number of verified attachments submitted.")
     attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance state: verified, missing, or not_requested.")
@@ -957,6 +975,68 @@ def _extract_responses_text(data: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _responses_output_from_backend(
+    *,
+    data: dict[str, Any],
+    client: Notion2APIClient,
+    model: str,
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a fail-closed MCP responses projection from backend data."""
+
+    ok = bool(data.get("ok", False))
+    base = {
+        "ok": ok,
+        "status_code": data.get("status_code"),
+        "status": "completed" if ok else "error",
+        "model": _extract_actual_model(data) or data.get("model") or model,
+        "actual_model": _extract_actual_model(data),
+        "model_metadata": (
+            data.get("model_metadata")
+            if isinstance(data.get("model_metadata"), dict)
+            else None
+        ),
+        **_model_identity_trace(data, model),
+        **_caller_trace(
+            data.get("request_metadata")
+            if isinstance(data.get("request_metadata"), dict)
+            else None
+        ),
+        **_runtime_audit(client, model),
+        "response_text": _extract_responses_text(data),
+        "error": _error_summary(data),
+        **provenance,
+        "raw": {**data, "attachment_provenance": provenance},
+    }
+    normalized, evidence = _normalize_terminal_output(
+        base,
+        source="responses_endpoint",
+    )
+    if evidence is None:
+        return normalized
+
+    receipt = normalized.get("output_integrity")
+    logger.error(
+        "Quarantined contaminated responses-endpoint output",
+        extra={
+            "request_info": {
+                "event": "output_quarantined",
+                "error_code": "OUTPUT_CONTAMINATED",
+                "source": "responses_endpoint",
+                "output_integrity": receipt,
+                "normal_projection_blocked": True,
+            }
+        },
+    )
+    normalized["raw"] = {
+        "quarantined": True,
+        "source": "responses_endpoint",
+        "output_integrity": receipt,
+        "attachment_provenance": provenance,
+    }
+    return normalized
+
+
 def _local_conversation_db_path() -> Path:
     root = Path(__file__).resolve().parents[1]
     configured = os.getenv("DB_PATH", "").strip()
@@ -1489,6 +1569,92 @@ def _job_response_text(response: dict[str, Any] | None) -> str:
     return ""
 
 
+def _normalize_terminal_output(
+    response: dict[str, Any],
+    *,
+    source: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Demote contaminated output before it enters normal job projections."""
+
+    original = copy.deepcopy(response)
+    text = _job_response_text(original)
+    legacy_contamination = detect_visible_output_contamination(text)
+    additional_reasons = (
+        ("visible_output_contamination",) if legacy_contamination else ()
+    )
+    receipt = assess_output_integrity(
+        text,
+        additional_reasons=additional_reasons,
+    )
+    normalized = dict(response)
+    normalized["output_integrity"] = receipt
+    normalized["quarantined"] = bool(receipt["quarantine_required"])
+    if not receipt["quarantine_required"]:
+        return normalized, None
+
+    evidence = {
+        "schema_version": 1,
+        "source": source,
+        "output_integrity": receipt,
+        "response": original,
+    }
+    normalized.update(
+        {
+            "ok": False,
+            "status_code": 422,
+            "status": "indeterminate_output",
+            "retry_safe": False,
+            "poll_hint": (
+                "Inspect quarantined evidence and reconcile the original request; "
+                "do not submit a new semantic request blindly."
+            ),
+            "error": "OUTPUT_CONTAMINATED: assistant output was quarantined.",
+            "response_text": "",
+            "raw": {
+                "quarantined": True,
+                "source": source,
+                "output_integrity": receipt,
+            },
+        }
+    )
+    return normalized, evidence
+
+
+def _demote_legacy_completed_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Fail closed when polling a completed job created before containment."""
+
+    if str(job.get("status") or "") != "completed":
+        return job
+    response = (
+        dict(job["response"])
+        if isinstance(job.get("response"), dict)
+        else {
+            "ok": True,
+            "status": "completed",
+            "response_text": str(job.get("response_text") or ""),
+        }
+    )
+    normalized, evidence = _normalize_terminal_output(
+        response,
+        source="legacy_completed_job_poll",
+    )
+    if evidence is None:
+        return job
+
+    updated = dict(job)
+    updated["status"] = "indeterminate_output"
+    updated["response"] = normalized
+    updated["response_text"] = ""
+    updated["output_integrity"] = normalized["output_integrity"]
+    updated["quarantined"] = True
+    updated["error"] = normalized["error"]
+    updated["retry_safe"] = False
+    updated["_quarantined_response"] = evidence
+    updated["updated_at"] = _now_ms()
+    _persist_chat_job(updated)
+    return updated
+
+
 _CHECKLIST_RE = re.compile(r"(?m)^\s*(?:[-*]\s*)?\[([ xX])\]\s+(.+?)\s*$")
 _PUBLIC_ACTIVITY_RE = re.compile(
     r"^(?:now\s+)?(?:i(?:'m| am|â€™m)\s+)?"
@@ -1656,12 +1822,16 @@ def _chat_output_from_backend(
     ok = bool(data.get("ok", False))
     status = "completed" if ok else "error"
     remote_chat_id = _extract_remote_chat_id(data)
-    return {
+    response = {
         "ok": ok,
         "status_code": data.get("status_code"),
         "model": _extract_actual_model(data) or data.get("model") or model,
         "actual_model": _extract_actual_model(data),
-        "model_metadata": data.get("model_metadata") if isinstance(data.get("model_metadata"), dict) else None,
+        "model_metadata": (
+            data.get("model_metadata")
+            if isinstance(data.get("model_metadata"), dict)
+            else None
+        ),
         **_model_identity_trace(data, model),
         **_caller_trace(
             data.get("request_metadata")
@@ -1677,14 +1847,27 @@ def _chat_output_from_backend(
         "job_id": request_id,
         "retry_safe": status != "completed",
         "wait_seconds": wait_seconds,
-        "poll_hint": "" if status == "completed" else f"Retry with request_id={request_id} or call notion2api_get_chat_job.",
+        "poll_hint": (
+            ""
+            if status == "completed"
+            else (
+                f"Retry with request_id={request_id} or call "
+                "notion2api_get_chat_job."
+            )
+        ),
         "error": _error_summary(data),
         "response_text": _extract_chat_content(data),
         "remote_chat_id": remote_chat_id,
         "notion_thread_id": remote_chat_id,
         "raw": data,
     }
-
+    normalized, evidence = _normalize_terminal_output(
+        response,
+        source="backend_response",
+    )
+    if evidence is not None:
+        normalized["_quarantined_response"] = evidence
+    return normalized
 
 def _chat_pending_output(
     *,
@@ -1917,7 +2100,7 @@ def _chat_output_from_local_turn(
         model_metadata["notion_thread_id"] = remote_chat_id
     if actual_model:
         model_metadata["actual_model"] = actual_model
-    return {
+    response = {
         "ok": True,
         "status_code": 200,
         "model": actual_model or requested_model,
@@ -1926,8 +2109,12 @@ def _chat_output_from_local_turn(
         "requested_model": requested_model,
         "backend_base_url": str(job.get("backend_base_url") or ""),
         "timeout_seconds": job.get("timeout_seconds"),
-        "session_state_path": str(job.get("session_state_path") or DEFAULT_SESSION_STATE_PATH),
-        "local_conversations_db": str(job.get("local_conversations_db") or _local_conversation_db_path()),
+        "session_state_path": str(
+            job.get("session_state_path") or DEFAULT_SESSION_STATE_PATH
+        ),
+        "local_conversations_db": str(
+            job.get("local_conversations_db") or _local_conversation_db_path()
+        ),
         "imported_history_db": str(job.get("imported_history_db") or ""),
         "session_name": str(job.get("session_name") or DEFAULT_SESSION_NAME),
         "conversation_id": str(job.get("conversation_id") or ""),
@@ -1941,7 +2128,11 @@ def _chat_output_from_local_turn(
         "error": None,
         "response_text": str(turn.get("response_text") or ""),
         **_attachment_provenance_from_job(persisted_job),
-        "progress": persisted_job.get("progress") if isinstance(persisted_job.get("progress"), dict) else None,
+        "progress": (
+            persisted_job.get("progress")
+            if isinstance(persisted_job.get("progress"), dict)
+            else None
+        ),
         "remote_chat_id": remote_chat_id,
         "notion_thread_id": remote_chat_id,
         "raw": {
@@ -1949,26 +2140,42 @@ def _chat_output_from_local_turn(
             "assistant_message_id": int(turn.get("assistant_message_id") or 0),
         },
     }
-
+    normalized, evidence = _normalize_terminal_output(
+        response,
+        source="local_conversation_checkpoint",
+    )
+    if evidence is not None:
+        normalized["_quarantined_response"] = evidence
+    return normalized
 
 def _complete_chat_job_from_local_turn(
     request_id: str, job: dict[str, Any], turn: dict[str, Any]
 ) -> dict[str, Any]:
-    """Persist a monotonic completed state and stop any hanging stream task."""
+    """Persist a monotonic terminal state and stop any hanging stream task."""
 
     normalized_id = _normalize_request_id(request_id)
     response = _chat_output_from_local_turn(job, turn)
     completed = dict(job)
-    completed["status"] = "completed"
+    completed["status"] = str(response.get("status") or "error")
     completed["updated_at"] = _now_ms()
-    completed["response"] = response
+    completed["response"] = {
+        key: value
+        for key, value in response.items()
+        if key != "_quarantined_response"
+    }
     completed["response_text"] = str(response.get("response_text") or "")
+    completed["output_integrity"] = response.get("output_integrity")
+    completed["quarantined"] = bool(response.get("quarantined"))
+    if isinstance(response.get("_quarantined_response"), dict):
+        completed["_quarantined_response"] = response["_quarantined_response"]
     completed["remote_chat_id"] = str(response.get("remote_chat_id") or "")
     completed["notion_thread_id"] = str(response.get("notion_thread_id") or "")
     completed["completion_source"] = "local_conversation_checkpoint"
     completed["assistant_message_id"] = int(turn.get("assistant_message_id") or 0)
     completed["dead_loop_suspected"] = False
     completed["cancel_recommended"] = False
+    if response.get("error"):
+        completed["error"] = str(response["error"])
     _persist_chat_job(completed)
     _update_session_record(
         str(completed.get("session_name") or DEFAULT_SESSION_NAME),
@@ -1980,8 +2187,7 @@ def _complete_chat_job_from_local_turn(
     task = _CHAT_JOB_TASKS.get(normalized_id)
     if task is not None and not task.done():
         task.cancel()
-    return response
-
+    return completed["response"]
 
 def _active_job_for_conversation(
     conversation_id: str, *, exclude_request_id: str = ""
@@ -2222,10 +2428,29 @@ async def _run_chat_completion_job(
 
 
 def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> None:
+    quarantine_evidence: dict[str, Any] | None = None
     try:
-        response = task.result()
-        status = str(response.get("status") or ("completed" if response.get("ok") else "error"))
-        error = response.get("error") if isinstance(response.get("error"), str) else None
+        task_response = task.result()
+        response, generated_evidence = _normalize_terminal_output(
+            task_response,
+            source="chat_job_finalizer",
+        )
+        supplied_evidence = task_response.get("_quarantined_response")
+        quarantine_evidence = (
+            dict(supplied_evidence)
+            if isinstance(supplied_evidence, dict)
+            else generated_evidence
+        )
+        response.pop("_quarantined_response", None)
+        status = str(
+            response.get("status")
+            or ("completed" if response.get("ok") else "error")
+        )
+        error = (
+            response.get("error")
+            if isinstance(response.get("error"), str)
+            else None
+        )
     except asyncio.CancelledError:
         response = None
         status = "cancelled"
@@ -2234,17 +2459,28 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
         response = None
         status = "error"
         error = f"{type(exc).__name__}: {exc}"
+
     with _CHAT_JOB_STATE_MUTEX:
         state = _load_chat_job_state()
         jobs = state.setdefault("jobs", {})
-        job = jobs.get(request_id) if isinstance(jobs.get(request_id), dict) else {"request_id": request_id, "job_id": request_id}
-        job = dict(job)
+        existing = jobs.get(request_id)
+        job = (
+            dict(existing)
+            if isinstance(existing, dict)
+            else {"request_id": request_id, "job_id": request_id}
+        )
         existing_status = str(job.get("status") or "")
-        if existing_status in {"completed", "error", "cancelled"}:
+        if existing_status in {
+            "completed",
+            "indeterminate_output",
+            "error",
+            "cancelled",
+        }:
             _CHAT_JOB_TASKS.pop(request_id, None)
             return
         if existing_status == "cancelled":
             status = "cancelled"
+
         job["status"] = status
         job["updated_at"] = _now_ms()
         if response is not None:
@@ -2257,19 +2493,36 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
             if not response.get("caller_metadata"):
                 response["caller_metadata"] = dict(job.get("caller") or {}) or None
             if not response.get("requested_model"):
-                response["requested_model"] = str(job.get("requested_model") or job.get("model") or "")
+                response["requested_model"] = str(
+                    job.get("requested_model") or job.get("model") or ""
+                )
             if not response.get("resolved_model"):
-                response["resolved_model"] = str(job.get("resolved_model") or job.get("model") or "")
+                response["resolved_model"] = str(
+                    job.get("resolved_model") or job.get("model") or ""
+                )
             if isinstance(response.get("model_metadata"), dict):
                 job["model_metadata"] = dict(response["model_metadata"])
             if response.get("actual_model"):
                 job["actual_model"] = str(response.get("actual_model") or "")
-            raw_response = dict(response.get("raw") or {}) if isinstance(response.get("raw"), dict) else {}
+
+            raw_response = (
+                dict(response.get("raw") or {})
+                if isinstance(response.get("raw"), dict)
+                else {}
+            )
             raw_response["attachment_provenance"] = provenance
             response["raw"] = raw_response
             job["response"] = response
             job["response_text"] = _job_response_text(response)
-            remote_chat_id = str(response.get("remote_chat_id") or response.get("notion_thread_id") or "")
+            job["output_integrity"] = response.get("output_integrity")
+            job["quarantined"] = bool(response.get("quarantined"))
+            if quarantine_evidence is not None:
+                job["_quarantined_response"] = quarantine_evidence
+            remote_chat_id = str(
+                response.get("remote_chat_id")
+                or response.get("notion_thread_id")
+                or ""
+            )
             if remote_chat_id:
                 job["remote_chat_id"] = remote_chat_id
                 job["notion_thread_id"] = remote_chat_id
@@ -2278,6 +2531,7 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
         job = _refresh_chat_job_health(job)
         jobs[request_id] = job
         _save_chat_job_state(state, changed_request_ids={request_id})
+
     _update_session_record(
         str(job.get("session_name") or DEFAULT_SESSION_NAME),
         conversation_id=str(job.get("conversation_id") or ""),
@@ -2286,7 +2540,6 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
         request_id=request_id,
     )
     _CHAT_JOB_TASKS.pop(request_id, None)
-
 
 def _request_id_conversation_conflict_output(
     *,
@@ -2380,7 +2633,7 @@ async def _submit_or_resume_chat_job(
         baseline_message_id = int(existing.get("baseline_message_id") or 0)
         status = str(existing.get("status") or "")
         response = existing.get("response") if isinstance(existing.get("response"), dict) else None
-        if status in {"completed", "error", "cancelled"}:
+        if status in {"completed", "indeterminate_output", "error", "cancelled"}:
             if response:
                 return response
             if status == "completed" and "baseline_message_id" in existing:
@@ -2616,7 +2869,13 @@ def _chat_job_output(
         _finalize_chat_job(normalized_id, task)
     job = _load_chat_job(normalized_id)
     if not job:
-        return ChatJobOutput(ok=True, found=False, request_id=normalized_id, job_id=normalized_id)
+        return ChatJobOutput(
+            ok=True,
+            found=False,
+            request_id=normalized_id,
+            job_id=normalized_id,
+        )
+    job = _demote_legacy_completed_job(job)
 
     if str(job.get("status") or "") in {"running", "pending"}:
         baseline_message_id = int(job.get("baseline_message_id") or 0)
@@ -2636,19 +2895,41 @@ def _chat_job_output(
 
     job = _refresh_chat_job_health(job, increment_poll=increment_poll)
     response = job.get("response") if isinstance(job.get("response"), dict) else None
-    full_response_text = str(job.get("response_text") or _job_response_text(response))
+    integrity = (
+        dict(job["output_integrity"])
+        if isinstance(job.get("output_integrity"), dict)
+        else (
+            dict(response["output_integrity"])
+            if isinstance(response, dict)
+            and isinstance(response.get("output_integrity"), dict)
+            else None
+        )
+    )
+    quarantined = bool(
+        job.get("quarantined")
+        or (isinstance(response, dict) and response.get("quarantined"))
+        or (isinstance(integrity, dict) and integrity.get("quarantine_required"))
+    )
+    full_response_text = "" if quarantined else str(
+        job.get("response_text") or _job_response_text(response)
+    )
     response_text = (
         full_response_text
         if include_response
         else full_response_text[:MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS]
     )
+    response_chars = (
+        int(integrity.get("response_chars") or 0)
+        if quarantined and isinstance(integrity, dict)
+        else len(full_response_text)
+    )
     raw_job = {
         key: value
         for key, value in job.items()
-        if key not in {"response", "response_text"}
+        if key not in {"response", "response_text", "_quarantined_response"}
     }
     last_response = None
-    if include_last_response:
+    if include_last_response and not quarantined:
         last = _read_last_local_response(
             session_name=str(job.get("session_name") or DEFAULT_SESSION_NAME),
             conversation_id=str(job.get("conversation_id") or ""),
@@ -2668,8 +2949,10 @@ def _chat_job_output(
         created_at=int(job.get("created_at") or 0),
         updated_at=int(job.get("updated_at") or 0),
         response_text=response_text,
-        response_chars=len(full_response_text),
-        response_truncated=len(response_text) < len(full_response_text),
+        response_chars=response_chars,
+        response_truncated=quarantined or len(response_text) < len(full_response_text),
+        output_integrity=integrity,
+        quarantined=quarantined,
         **_attachment_provenance_from_job(job),
         progress=job.get("progress") if isinstance(job.get("progress"), dict) else None,
         remote_chat_id=str(job.get("remote_chat_id") or job.get("notion_thread_id") or ""),
@@ -2678,7 +2961,7 @@ def _chat_job_output(
         stalled_for_seconds=float(job.get("stalled_for_seconds") or 0.0),
         dead_loop_suspected=bool(job.get("dead_loop_suspected")),
         cancel_recommended=bool(job.get("cancel_recommended")),
-        response=response if include_response else None,
+        response=response if include_response and not quarantined else None,
         error=job.get("error") if isinstance(job.get("error"), str) else None,
         raw_job=raw_job,
         last_response=last_response,
@@ -3490,17 +3773,12 @@ def create_server(
         if prepared:
             payload["attachments"] = prepared
         data = await client.post("/v1/responses", payload)
-        return {
-            "ok": data.get("ok", False),
-            "status_code": data.get("status_code"),
-            "model": _extract_actual_model(data) or data.get("model") or model,
-            "actual_model": _extract_actual_model(data),
-            "model_metadata": data.get("model_metadata") if isinstance(data.get("model_metadata"), dict) else None,
-            **_runtime_audit(client, model),
-            "response_text": _extract_responses_text(data),
-            **provenance,
-            "raw": {**data, "attachment_provenance": provenance},
-        }
+        return _responses_output_from_backend(
+            data=data,
+            client=client,
+            model=model,
+            provenance=provenance,
+        )
 
     @server.tool(description="List named persistent Notion2API MCP chat sessions with local and remote identifiers.", structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:

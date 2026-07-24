@@ -1305,3 +1305,153 @@ def test_chat_job_poll_is_bounded_unless_full_response_is_requested(monkeypatch)
     assert complete.response_text == response_text
     assert complete.response_truncated is False
     assert complete.response == job["response"]
+
+
+
+def _recursive_contaminated_text() -> str:
+    paragraph = (
+        "This completion claims successful writes but recursively repeats the same "
+        "substantive paragraph without independent evidence or distinct content."
+    )
+    return "\n\n".join([paragraph] * 5)
+
+
+def test_backend_contaminated_output_is_quarantined_before_completion():
+    client = type("Client", (), {"base_url": "http://127.0.0.1:8120", "timeout": 10})()
+    text = _recursive_contaminated_text()
+    data = {
+        "ok": True,
+        "status_code": 200,
+        "choices": [{"message": {"content": text}}],
+    }
+
+    result = mcp_server._chat_output_from_backend(
+        data=data,
+        client=client,
+        model="terra",
+        session_key="session",
+        conversation_id="conversation",
+        session_created=False,
+        request_id="request-contaminated",
+        wait_seconds=0,
+    )
+
+    assert result["status"] == "indeterminate_output"
+    assert result["ok"] is False
+    assert result["response_text"] == ""
+    assert result["quarantined"] is True
+    assert result["retry_safe"] is False
+    assert result["output_integrity"]["response_chars"] == len(text)
+    assert "identical_paragraph_repetition" in result["output_integrity"]["reasons"]
+    assert result["_quarantined_response"]["response"]["response_text"] == text
+
+
+def test_clean_backend_output_remains_completed():
+    client = type("Client", (), {"base_url": "http://127.0.0.1:8120", "timeout": 10})()
+    result = mcp_server._chat_output_from_backend(
+        data={
+            "ok": True,
+            "status_code": 200,
+            "choices": [{"message": {"content": "A clean and distinct answer."}}],
+        },
+        client=client,
+        model="terra",
+        session_key="session",
+        conversation_id="conversation",
+        session_created=False,
+        request_id="request-clean",
+        wait_seconds=0,
+    )
+
+    assert result["status"] == "completed"
+    assert result["response_text"] == "A clean and distinct answer."
+    assert result["quarantined"] is False
+
+
+def test_legacy_completed_job_is_demoted_and_hidden_on_poll(monkeypatch):
+    text = _recursive_contaminated_text()
+    job = {
+        "request_id": "legacy-contaminated",
+        "job_id": "legacy-contaminated",
+        "status": "completed",
+        "model": "terra",
+        "response_text": text,
+        "response": {
+            "ok": True,
+            "status": "completed",
+            "response_text": text,
+            "raw": {"choices": [{"message": {"content": text}}]},
+        },
+    }
+    persisted = []
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: job)
+    monkeypatch.setattr(mcp_server, "_persist_chat_job", lambda value: persisted.append(value))
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    result = mcp_server._chat_job_output(
+        "legacy-contaminated",
+        include_response=True,
+        include_last_response=True,
+    )
+
+    assert result.status == "indeterminate_output"
+    assert result.response_text == ""
+    assert result.response is None
+    assert result.quarantined is True
+    assert result.response_chars == len(text)
+    assert result.response_truncated is True
+    assert "_quarantined_response" not in result.raw_job
+    assert persisted[0]["_quarantined_response"]["response"]["response_text"] == text
+
+
+
+def test_responses_endpoint_contaminated_output_is_quarantined():
+    client = type("Client", (), {"base_url": "http://127.0.0.1:8120", "timeout": 10})()
+    text = _recursive_contaminated_text()
+    result = mcp_server._responses_output_from_backend(
+        data={
+            "ok": True,
+            "status_code": 200,
+            "output_text": text,
+        },
+        client=client,
+        model="terra",
+        provenance={
+            "attachment_required": False,
+            "attachment_count": 0,
+            "attachment_transfer_status": "not_requested",
+            "attachment_manifest": [],
+        },
+    )
+
+    assert result["status"] == "indeterminate_output"
+    assert result["ok"] is False
+    assert result["response_text"] == ""
+    assert result["quarantined"] is True
+    assert result["output_integrity"]["response_chars"] == len(text)
+    assert result["raw"]["quarantined"] is True
+    assert "output_text" not in result["raw"]
+
+
+def test_responses_endpoint_clean_output_remains_available():
+    client = type("Client", (), {"base_url": "http://127.0.0.1:8120", "timeout": 10})()
+    result = mcp_server._responses_output_from_backend(
+        data={
+            "ok": True,
+            "status_code": 200,
+            "output_text": "A clean responses-endpoint answer.",
+        },
+        client=client,
+        model="terra",
+        provenance={
+            "attachment_required": False,
+            "attachment_count": 0,
+            "attachment_transfer_status": "not_requested",
+            "attachment_manifest": [],
+        },
+    )
+
+    assert result["status"] == "completed"
+    assert result["response_text"] == "A clean responses-endpoint answer."
+    assert result["quarantined"] is False
+    assert result["raw"]["output_text"] == "A clean responses-endpoint answer."

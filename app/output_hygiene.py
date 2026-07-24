@@ -10,6 +10,8 @@ import re
 from collections import Counter
 from typing import Any, Dict
 
+from .output_integrity import assess_output_integrity
+
 THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>[\s\S]*?</think>", re.IGNORECASE)
 UNCLOSED_THINK_RE = re.compile(r"<think\b[^>]*>[\s\S]*$", re.IGNORECASE)
 LEADING_PARTIAL_TAG_RE = re.compile(r"^\s*<[A-Za-z]{1,24}(?=#{1,6}\s)")
@@ -240,18 +242,19 @@ def _has_repeated_markdown_heading(text: str) -> bool:
 
 
 def detect_visible_output_contamination(text: Any) -> bool:
-    """Detect visible reasoning leaks or token-corruption artifacts in output."""
+    """Detect visible reasoning leaks, token corruption, or integrity amplification."""
 
     cleaned = strip_thinking_blocks(text)
     if not cleaned:
         return False
-    return bool(
+    legacy_contamination = bool(
         VISIBLE_REASONING_PREAMBLE_RE.search(cleaned)
         or TEXT_CORRUPTION_ARTIFACT_RE.search(cleaned)
         or CORRUPT_CITATION_OR_HEADING_RE.search(cleaned)
         or MODEL_NAME_SPLICE_RE.search(cleaned)
         or _has_repeated_markdown_heading(cleaned)
     )
+    return legacy_contamination or bool(assess_output_integrity(cleaned)["contaminated"])
 
 
 def clean_visible_output(text: Any) -> str:

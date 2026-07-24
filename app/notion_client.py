@@ -1,5 +1,6 @@
 import os
 import datetime
+import json
 import threading
 import time
 import uuid
@@ -140,6 +141,63 @@ class NotionUpstreamError(RuntimeError):
         self.status_code = status_code
         self.retriable = retriable
         self.response_excerpt = response_excerpt
+
+
+BOUND_THREAD_HISTORY_REPLAY = "BOUND_THREAD_HISTORY_REPLAY"
+_BOUND_THREAD_ALLOWED_BLOCK_TYPES = frozenset({"config", "context", "user"})
+_BOUND_THREAD_HISTORY_MARKERS = (
+    "[previous conversation context]",
+    "[recalled conversation archive]",
+    "[conversation history]",
+)
+
+
+def _transcript_block_text(block: dict[str, Any]) -> str:
+    value = block.get("value")
+    parts: list[str] = []
+
+    def collect(item: Any) -> None:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, list):
+            for child in item:
+                collect(child)
+        elif isinstance(item, dict):
+            for child in item.values():
+                collect(child)
+
+    collect(value)
+    return "\n".join(parts)
+
+
+def validate_bound_thread_transcript(transcript: list[dict[str, Any]]) -> None:
+    """Reject historical dialog replay when Notion already owns thread history."""
+
+    block_types = [str(block.get("type") or "").strip() for block in transcript]
+    unsupported = [kind for kind in block_types if kind not in _BOUND_THREAD_ALLOWED_BLOCK_TYPES]
+    user_blocks = [block for block in transcript if block.get("type") == "user"]
+
+    marker_detected = False
+    for block in user_blocks:
+        lowered = _transcript_block_text(block).casefold()
+        if any(marker in lowered for marker in _BOUND_THREAD_HISTORY_MARKERS):
+            marker_detected = True
+            break
+
+    if unsupported or len(user_blocks) > 1 or marker_detected:
+        evidence = {
+            "error_code": BOUND_THREAD_HISTORY_REPLAY,
+            "block_types": block_types,
+            "user_block_count": len(user_blocks),
+            "unsupported_block_types": unsupported,
+            "history_marker_detected": marker_detected,
+        }
+        raise NotionUpstreamError(
+            "A bound Notion thread may not receive historical dialog or multiple user messages.",
+            status_code=409,
+            retriable=False,
+            response_excerpt=json.dumps(evidence, sort_keys=True),
+        )
 
 
 class NotionOpusAPI:
@@ -1089,6 +1147,8 @@ class NotionOpusAPI:
             raise ValueError("Invalid transcript payload: transcript must be a non-empty list.")
 
         notion_transcript = self._to_notion_transcript(transcript)
+        if str(thread_id or "").strip():
+            validate_bound_thread_transcript(notion_transcript)
         thread_type = self._resolve_thread_type(notion_transcript)
         if computer_use_review:
             notion_transcript = self._with_computer_use_capabilities(notion_transcript)
