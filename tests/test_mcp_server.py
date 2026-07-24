@@ -1305,3 +1305,35 @@ def test_chat_job_poll_is_bounded_unless_full_response_is_requested(monkeypatch)
     assert complete.response_text == response_text
     assert complete.response_truncated is False
     assert complete.response == job["response"]
+
+
+def test_chat_job_poll_preserves_terra_alias_resolution(monkeypatch):
+    alias_resolution = {
+        "requested_model": "terra",
+        "canonical_model": "terra",
+        "resolved_model": "orchid-muffin",
+        "public_model": "gpt-5.6-terra",
+        "display_name": "GPT-5.6 Terra",
+        "resolution_kind": "configured_alias",
+    }
+    job = {
+        "request_id": "terra-request",
+        "job_id": "terra-request",
+        "status": "completed",
+        "model": "terra",
+        "requested_model": "terra",
+        "resolved_model": "orchid-muffin",
+        "alias_resolution": alias_resolution,
+        "model_route_disposition": "alias_resolution",
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: job)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    result = mcp_server._chat_job_output("terra-request")
+
+    assert result.model == "terra"
+    assert result.requested_model == "terra"
+    assert result.resolved_model == "orchid-muffin"
+    assert result.alias_resolution == alias_resolution
+    assert result.model_route_disposition == "alias_resolution"
+    assert result.raw_job["resolved_model"] == "orchid-muffin"

@@ -16,7 +16,11 @@ from app.core.models import normalize_model_id
 from app.conversation import apply_notion_ai_options, compress_round_if_needed, compress_sliding_window_round, build_lite_transcript
 from app.config import is_lite_mode
 from app.logger import logger
-from app.model_registry import is_supported_model, list_available_models
+from app.model_registry import (
+    get_model_route_resolution,
+    is_supported_model,
+    list_available_models,
+)
 from app.notion_client import NotionUpstreamError
 from app.attachments.normalizer import (
     PromptValidationError,
@@ -636,12 +640,12 @@ def _response_model_metadata(
     payload = dict(model_metadata or {})
     requested = normalize_model_id(requested_model) or requested_model
     notion_requested = ""
+    route_resolution: dict[str, object] = {}
     if requested:
         payload.setdefault("requested_model", requested)
         try:
-            from app.model_registry import get_notion_model
-
-            notion_requested = get_notion_model(requested)
+            route_resolution = get_model_route_resolution(requested)
+            notion_requested = str(route_resolution["resolved_model"])
             payload.setdefault("notion_requested_model", notion_requested)
             payload.setdefault(
                 "resolved_model",
@@ -659,6 +663,25 @@ def _response_model_metadata(
         or requested
         or ""
     ).strip()
+    if (
+        route_resolution.get("resolution_kind") == "configured_alias"
+        and resolved_route == str(route_resolution.get("resolved_model") or "")
+    ):
+        alias_resolution = {
+            key: route_resolution[key]
+            for key in (
+                "requested_model",
+                "canonical_model",
+                "resolved_model",
+                "public_model",
+                "display_name",
+                "resolution_kind",
+            )
+        }
+        payload.setdefault("alias_resolution", alias_resolution)
+        payload.setdefault("model_route_disposition", "alias_resolution")
+    elif resolved_route:
+        payload.setdefault("model_route_disposition", "direct_route")
 
     caller = request_metadata.get("caller") if isinstance(request_metadata, dict) else None
     if isinstance(caller, dict):
@@ -726,6 +749,11 @@ def _response_model_metadata(
             "responding_model": comparison_model,
             "verified": verified,
         }
+        payload["model_route_disposition"] = (
+            "verified_substitution" if verified else "unverified_route_mismatch"
+        )
+    else:
+        payload.pop("model_substitution", None)
     return {k: v for k, v in payload.items() if v not in (None, "", [], {})}
 
 

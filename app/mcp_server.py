@@ -21,6 +21,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.attachments.normalizer import validate_chat_messages, validate_prompt_text
+from app.model_registry import get_model_route_resolution
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -125,6 +126,8 @@ class ChatOutput(BaseModel):
     model_identity_source: str = Field(default="", description="Evidence source used for model identity classification.")
     model_identity_confidence: str = Field(default="unverified", description="Model identity confidence: verified, observed, or unverified.")
     model_substitution: dict[str, Any] | None = Field(default=None, description="Requested/resolved/responding route change, when observed.")
+    alias_resolution: dict[str, Any] | None = Field(default=None, description="Configured logical alias to concrete Notion route mapping.")
+    model_route_disposition: str = Field(default="direct_route", description="Route classification such as alias_resolution or verified_substitution.")
     caller_id: str = Field(default="", description="Stable identity of the system or agent that initiated the request.")
     caller_type: str = Field(default="", description="Caller class, such as repoai, chatgpt, or mcp.")
     caller_metadata: dict[str, Any] | None = Field(default=None, description="Bounded caller provenance supplied with the request.")
@@ -191,6 +194,8 @@ class ResponsesOutput(BaseModel):
     model_identity_source: str = Field(default="")
     model_identity_confidence: str = Field(default="unverified")
     model_substitution: dict[str, Any] | None = Field(default=None)
+    alias_resolution: dict[str, Any] | None = Field(default=None)
+    model_route_disposition: str = Field(default="direct_route")
     caller_id: str = Field(default="")
     caller_type: str = Field(default="")
     caller_metadata: dict[str, Any] | None = Field(default=None)
@@ -276,6 +281,10 @@ class ChatJobOutput(BaseModel):
     session_name: str = Field(default="", description="Normalized MCP session name.")
     conversation_id: str = Field(default="", description="Conversation id associated with the job.")
     model: str = Field(default="", description="Requested model for the job.")
+    requested_model: str = Field(default="", description="Logical model alias requested for the job.")
+    resolved_model: str = Field(default="", description="Concrete Notion route resolved for the job.")
+    alias_resolution: dict[str, Any] | None = Field(default=None, description="Configured alias resolution for the job.")
+    model_route_disposition: str = Field(default="direct_route", description="Requested-to-route classification.")
     endpoint: str = Field(default="", description="Backend endpoint used by the job.")
     created_at: int = Field(default=0, description="Unix epoch milliseconds when the job was created.")
     updated_at: int = Field(default=0, description="Unix epoch milliseconds when the job was last updated.")
@@ -862,11 +871,39 @@ def _model_identity_trace(
         else {}
     )
     requested = str(metadata.get("requested_model") or requested_model or "").strip()
+    route_resolution = get_model_route_resolution(requested)
     resolved = str(
         metadata.get("notion_requested_model")
         or metadata.get("resolved_model")
+        or route_resolution.get("resolved_model")
         or requested
     ).strip()
+    alias_resolution = None
+    supplied_alias = metadata.get("alias_resolution")
+    if (
+        isinstance(supplied_alias, dict)
+        and str(supplied_alias.get("resolved_model") or "").strip() == resolved
+    ):
+        alias_resolution = dict(supplied_alias)
+    elif (
+        route_resolution.get("resolution_kind") == "configured_alias"
+        and resolved == str(route_resolution.get("resolved_model") or "")
+    ):
+        alias_resolution = {
+            key: route_resolution[key]
+            for key in (
+                "requested_model",
+                "canonical_model",
+                "resolved_model",
+                "public_model",
+                "display_name",
+                "resolution_kind",
+            )
+        }
+    route_disposition = str(metadata.get("model_route_disposition") or "").strip()
+    if not route_disposition:
+        route_disposition = "alias_resolution" if alias_resolution else "direct_route"
+
     observed = _extract_actual_model(data)
     verified = bool(metadata.get("actual_model_verified") is True and observed)
     source = str(
@@ -894,6 +931,9 @@ def _model_identity_trace(
             "responding_model": comparison_model,
             "verified": verified,
         }
+        route_disposition = (
+            "verified_substitution" if verified else "unverified_route_mismatch"
+        )
     return {
         "requested_model": requested,
         "resolved_model": resolved,
@@ -902,6 +942,8 @@ def _model_identity_trace(
         "model_identity_source": source,
         "model_identity_confidence": confidence,
         "model_substitution": substitution,
+        "alias_resolution": alias_resolution,
+        "model_route_disposition": route_disposition,
     }
 
 
@@ -1699,16 +1741,30 @@ def _chat_pending_output(
 ) -> dict[str, Any]:
     job = _refresh_chat_job_health(job)
     remote_chat_id = str(job.get("remote_chat_id") or job.get("notion_thread_id") or "")
+    job_metadata = (
+        dict(job.get("model_metadata"))
+        if isinstance(job.get("model_metadata"), dict)
+        else {}
+    )
+    for key in (
+        "requested_model",
+        "resolved_model",
+        "alias_resolution",
+        "model_route_disposition",
+    ):
+        value = job.get(key)
+        if value not in (None, "", [], {}):
+            job_metadata.setdefault(key, value)
     return {
         "ok": False,
         "status_code": None,
         "model": model,
         "actual_model": str(job.get("actual_model") or ""),
-        "model_metadata": job.get("model_metadata") if isinstance(job.get("model_metadata"), dict) else None,
+        "model_metadata": job_metadata or None,
         **_model_identity_trace(
             {
                 "actual_model": job.get("actual_model"),
-                "model_metadata": job.get("model_metadata"),
+                "model_metadata": job_metadata,
             },
             str(job.get("requested_model") or model),
         ),
@@ -2260,10 +2316,20 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
                 response["requested_model"] = str(job.get("requested_model") or job.get("model") or "")
             if not response.get("resolved_model"):
                 response["resolved_model"] = str(job.get("resolved_model") or job.get("model") or "")
+            if not response.get("alias_resolution") and isinstance(job.get("alias_resolution"), dict):
+                response["alias_resolution"] = dict(job["alias_resolution"])
+            if not response.get("model_route_disposition"):
+                response["model_route_disposition"] = str(
+                    job.get("model_route_disposition") or "direct_route"
+                )
             if isinstance(response.get("model_metadata"), dict):
                 job["model_metadata"] = dict(response["model_metadata"])
             if response.get("actual_model"):
                 job["actual_model"] = str(response.get("actual_model") or "")
+            if isinstance(response.get("alias_resolution"), dict):
+                job["alias_resolution"] = dict(response["alias_resolution"])
+            if response.get("model_route_disposition"):
+                job["model_route_disposition"] = str(response["model_route_disposition"])
             raw_response = dict(response.get("raw") or {}) if isinstance(response.get("raw"), dict) else {}
             raw_response["attachment_provenance"] = provenance
             response["raw"] = raw_response
@@ -2448,14 +2514,34 @@ async def _submit_or_resume_chat_job(
     if task is None:
         baseline_message_id = _conversation_message_checkpoint(conversation_id)
         now = _now_ms()
+        route_resolution = get_model_route_resolution(model)
+        alias_resolution = (
+            {
+                key: route_resolution[key]
+                for key in (
+                    "requested_model",
+                    "canonical_model",
+                    "resolved_model",
+                    "public_model",
+                    "display_name",
+                    "resolution_kind",
+                )
+            }
+            if route_resolution.get("resolution_kind") == "configured_alias"
+            else None
+        )
         job = {
             "request_id": normalized_id,
             "job_id": normalized_id,
             "status": "running",
             "endpoint": path,
             "model": model,
-            "requested_model": model,
-            "resolved_model": model,
+            "requested_model": str(route_resolution.get("requested_model") or model),
+            "resolved_model": str(route_resolution.get("resolved_model") or model),
+            "alias_resolution": alias_resolution,
+            "model_route_disposition": (
+                "alias_resolution" if alias_resolution else "direct_route"
+            ),
             "caller": caller,
             "session_name": session_key,
             "conversation_id": conversation_id,
@@ -2664,6 +2750,16 @@ def _chat_job_output(
         session_name=str(job.get("session_name") or ""),
         conversation_id=str(job.get("conversation_id") or ""),
         model=str(job.get("model") or ""),
+        requested_model=str(job.get("requested_model") or job.get("model") or ""),
+        resolved_model=str(job.get("resolved_model") or job.get("model") or ""),
+        alias_resolution=(
+            dict(job["alias_resolution"])
+            if isinstance(job.get("alias_resolution"), dict)
+            else None
+        ),
+        model_route_disposition=str(
+            job.get("model_route_disposition") or "direct_route"
+        ),
         endpoint=str(job.get("endpoint") or ""),
         created_at=int(job.get("created_at") or 0),
         updated_at=int(job.get("updated_at") or 0),
