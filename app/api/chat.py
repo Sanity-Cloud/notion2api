@@ -76,13 +76,23 @@ def _persist_local_thread_title(request: Request, req_body: ChatCompletionReques
 def _classify_upstream_error(exc: NotionUpstreamError) -> dict[str, Any]:
     """Classify NotionUpstreamError into frontend-safe structured error details."""
     sc = exc.status_code
+    excerpt = str(exc.response_excerpt or "")
 
+    if sc == 409 or "BOUND_THREAD_HISTORY_REPLAY" in excerpt:
+        return {
+            "code": "BOUND_THREAD_HISTORY_REPLAY",
+            "type": "conversation_integrity_error",
+            "message": "Send only the new user turn for the existing bound thread. Do not replay prior assistant or historical dialog.",
+            "suggestion": "Send only the new user turn for the existing bound thread. Do not replay prior assistant or historical dialog.",
+            "status_code": 409,
+        }
     if sc == 401:
         return {
             "code": "NOTION_401",
             "type": "upstream_auth_error",
             "message": "Notion authentication failed (HTTP 401). The saved session may be expired.",
             "suggestion": "Refresh the local login session and update configuration.",
+            "status_code": 401,
         }
     if sc == 403:
         return {
@@ -90,6 +100,7 @@ def _classify_upstream_error(exc: NotionUpstreamError) -> dict[str, Any]:
             "type": "upstream_forbidden",
             "message": "Notion denied access (HTTP 403). Cloudflare or account restrictions may be involved.",
             "suggestion": "Check server network access or retry later.",
+            "status_code": 403,
         }
     if sc == 429:
         return {
@@ -97,13 +108,18 @@ def _classify_upstream_error(exc: NotionUpstreamError) -> dict[str, Any]:
             "type": "upstream_rate_limit",
             "message": "Notion request rate is too high (HTTP 429).",
             "suggestion": "Wait briefly before retrying, or configure multiple accounts to spread requests.",
+            "status_code": 429,
         }
     if sc and sc >= 500:
+        msg = f"Notion is temporarily unavailable (HTTP {sc})."
+        if "missing_finishedAt" in excerpt:
+            msg = "Notion stream ended before completion metadata (missing_finishedAt)."
         return {
             "code": f"NOTION_{sc}",
             "type": "upstream_server_error",
-            "message": f"Notion is temporarily unavailable (HTTP {sc}).",
-            "suggestion": "The Notion upstream service failed. Retry later.",
+            "message": msg,
+            "suggestion": "The Notion upstream service failed. Inspect diagnostic metadata; do not resubmit blindly.",
+            "status_code": sc,
         }
     if "timed out" in str(exc).lower():
         return {
@@ -111,6 +127,7 @@ def _classify_upstream_error(exc: NotionUpstreamError) -> dict[str, Any]:
             "type": "network_timeout",
             "message": "Connection to Notion timed out.",
             "suggestion": "Check network connectivity from the server to notion.so.",
+            "status_code": 504,
         }
     if "failed" in str(exc).lower() and not sc:
         return {
@@ -118,6 +135,7 @@ def _classify_upstream_error(exc: NotionUpstreamError) -> dict[str, Any]:
             "type": "network_error",
             "message": "Unable to connect to the Notion service.",
             "suggestion": "Check server network and DNS configuration.",
+            "status_code": 503,
         }
     if "empty" in str(exc).lower():
         return {
@@ -125,6 +143,7 @@ def _classify_upstream_error(exc: NotionUpstreamError) -> dict[str, Any]:
             "type": "upstream_empty_response",
             "message": "Notion returned empty content.",
             "suggestion": "Send the message again.",
+            "status_code": 502,
         }
     if sc == 400 and not exc.retriable:
         return {
@@ -132,12 +151,14 @@ def _classify_upstream_error(exc: NotionUpstreamError) -> dict[str, Any]:
             "type": "upstream_invalid_request",
             "message": str(exc),
             "suggestion": "Inspect the rejected Notion request stage and payload before retrying.",
+            "status_code": 400,
         }
     return {
         "code": "UPSTREAM_UNKNOWN",
         "type": "upstream_error",
         "message": str(exc),
         "suggestion": "Retry later.",
+        "status_code": sc or 503,
     }
 
 
@@ -169,23 +190,25 @@ def _build_error_response(
 
 def _upstream_error_response(exc: NotionUpstreamError) -> JSONResponse:
     """Convert NotionUpstreamError to a unified JSON response."""
-    if exc.status_code == 422 and "OUTPUT_CONTAMINATED" in (exc.response_excerpt or ""):
+    excerpt = str(exc.response_excerpt or "")
+    if exc.status_code == 422 or "OUTPUT_CONTAMINATED" in excerpt or "INTERNAL_TOOL_SYNTAX_EXPOSED" in excerpt:
         return _build_error_response(
             422,
-            code="OUTPUT_CONTAMINATED",
+            code="OUTPUT_CONTAMINATED" if "INTERNAL_TOOL_SYNTAX" not in excerpt else "INTERNAL_TOOL_SYNTAX_EXPOSED",
             message="Assistant output failed integrity validation and was quarantined.",
             error_type="indeterminate_output",
             suggestion="Inspect the original request and quarantined evidence; do not resubmit blindly.",
-            detail=exc.response_excerpt or "",
+            detail=excerpt,
         )
     info = _classify_upstream_error(exc)
+    resp_status = info.get("status_code") or exc.status_code or 503
     return _build_error_response(
-        503,
+        resp_status,
         code=info["code"],
         message=info["message"],
         error_type=info["type"],
         suggestion=info.get("suggestion", ""),
-        detail=exc.response_excerpt or "",
+        detail=excerpt,
     )
 
 
@@ -224,8 +247,8 @@ def _bound_thread_history_replay_response(
         ),
         error_type="conversation_integrity_error",
         suggestion=(
-            "Remove prior user/assistant messages and retry the same logical operation "
-            "against the existing conversation_id."
+            "Send only the new user turn for the existing bound thread. "
+            "Do not replay prior assistant or historical dialog."
         ),
         detail=json.dumps(evidence, sort_keys=True),
     )
@@ -777,6 +800,10 @@ def _response_model_metadata(
 
     observed = str(payload.get("actual_model") or "").strip()
     verified = bool(payload.get("actual_model_verified") is True and observed)
+    payload["route_alias"] = requested
+    payload["resolved_route_model"] = resolved_route
+    payload["observed_step_model"] = step_model
+    payload["observed_responder_model"] = observed
     payload["model_identity_verified"] = verified
     payload["model_identity_confidence"] = (
         "verified" if verified else ("observed" if observed else "unverified")
@@ -789,6 +816,8 @@ def _response_model_metadata(
         payload["verified_model"] = observed
     else:
         payload.pop("verified_model", None)
+    if not verified:
+        payload["model_identity_warning"] = "The responding model identity was not independently verified."
 
     resolved = resolved_route
     comparison_model = str(payload.get("verified_model") or observed or "").strip()
@@ -799,7 +828,7 @@ def _response_model_metadata(
             "responding_model": comparison_model,
             "verified": verified,
         }
-    return {k: v for k, v in payload.items() if v not in (None, "", [], {})}
+    return {k: v for k, v in payload.items() if v not in (None, [], {})}
 
 
 def _attach_response_model_metadata(
@@ -1755,11 +1784,48 @@ def _handle_standard_request(
     """
     from app.conversation import build_standard_transcript
 
-    pool = request.app.state.account_pool
+    manager = getattr(request.app.state, "conversation_manager", None)
+    conversation_id = str(req_body.conversation_id or "").strip()
+    user_prompt, history_messages, raw_user_prompt = _prepare_messages(req_body)
+
+    bound_thread_id = _resolve_persistent_thread_id(manager, conversation_id) if manager and conversation_id else ""
+    persist_remote_chat = bool(
+        req_body.metadata.get("persist_remote_chat", True) if isinstance(req_body.metadata, dict) else True
+    )
+    trusted_import = bool(
+        (req_body.metadata.get("trusted_import") or req_body.metadata.get("import_mode"))
+        if isinstance(req_body.metadata, dict)
+        else False
+    )
+    has_assistant_or_multi_user_history = any(
+        role == "assistant" for role, *_ in history_messages
+    ) or (sum(1 for role, *_ in history_messages if role == "user") > 0)
+
+    if history_messages and (bound_thread_id or (persist_remote_chat and not trusted_import and has_assistant_or_multi_user_history)):
+        logger.warning(
+            "Rejected client history for persistent Notion thread before account acquisition",
+            extra={
+                "request_info": {
+                    "event": "bound_thread_history_replay_rejected",
+                    "error_code": "BOUND_THREAD_HISTORY_REPLAY",
+                    "conversation_id": conversation_id,
+                    "thread_id": bound_thread_id or "",
+                    "history_message_count": len(history_messages),
+                    "persist_remote_chat": persist_remote_chat,
+                    "trusted_import": trusted_import,
+                }
+            },
+        )
+        return _bound_thread_history_replay_response(
+            conversation_id=conversation_id,
+            thread_id=bound_thread_id or "",
+            history_message_count=len(history_messages),
+        )
 
     req_body.model = _resolve_request_model(request, req_body.model)
     assert req_body.model is not None
 
+    pool = request.app.state.account_pool
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
     max_retries = max(3, len(pool.clients))
     client_type = _client_type_from_request(request)
@@ -2215,29 +2281,42 @@ async def create_chat_completion(
             title=_requested_thread_title(req_body),
             conversation_id=conversation_id,
         )
-        restore_history = True
-
     bound_thread_id = _resolve_persistent_thread_id(manager, conversation_id)
 
-    # Client-supplied history may reconstruct only an unbound/stateless conversation.
-    # Once Notion owns a remote thread, restoring historical rows locally creates a
-    # second source of truth and can later replay those rows into the bound thread.
-    if history_messages and bound_thread_id:
+    persist_remote_chat = bool(
+        req_body.metadata.get("persist_remote_chat", True) if isinstance(req_body.metadata, dict) else True
+    )
+    trusted_import = bool(
+        (req_body.metadata.get("trusted_import") or req_body.metadata.get("import_mode"))
+        if isinstance(req_body.metadata, dict)
+        else False
+    )
+
+    has_assistant_or_multi_user_history = any(
+        role == "assistant" for role, *_ in history_messages
+    ) or (sum(1 for role, *_ in history_messages if role == "user") > 0)
+
+    # Persistent remote-chat workflows prohibit client-supplied historical dialog
+    # before provider dispatch (whether the thread is already bound or newly created),
+    # unless an explicit trusted import mode is enabled.
+    if history_messages and (bound_thread_id or (persist_remote_chat and not trusted_import and has_assistant_or_multi_user_history)):
         logger.warning(
-            "Rejected client history for bound Notion thread",
+            "Rejected client history for persistent Notion thread",
             extra={
                 "request_info": {
                     "event": "bound_thread_history_replay_rejected",
                     "error_code": "BOUND_THREAD_HISTORY_REPLAY",
                     "conversation_id": conversation_id,
-                    "thread_id": bound_thread_id,
+                    "thread_id": bound_thread_id or "",
                     "history_message_count": len(history_messages),
+                    "persist_remote_chat": persist_remote_chat,
+                    "trusted_import": trusted_import,
                 }
             },
         )
         return _bound_thread_history_replay_response(
             conversation_id=conversation_id,
-            thread_id=bound_thread_id,
+            thread_id=bound_thread_id or "",
             history_message_count=len(history_messages),
         )
     elif history_messages:
@@ -2677,6 +2756,12 @@ async def create_chat_completion(
                                     }
                                 },
                             )
+                    active_thread_id = str(getattr(client, "current_thread_id", "") or thread_id or "").strip()
+                    if active_thread_id:
+                        model_metadata = dict(model_metadata or {})
+                        model_metadata["notion_thread_id"] = active_thread_id
+                        model_metadata["remote_chat_id"] = active_thread_id
+
                     metadata_event = _build_model_metadata_event(
                         req_body.model, model_metadata, req_body.metadata
                     )
