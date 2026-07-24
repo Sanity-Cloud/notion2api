@@ -362,13 +362,14 @@ class NotionOpusAPI:
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
         }
 
-    def continue_confirmed_tool_steps(
+    def iter_continue_confirmed_tool_steps(
         self,
         *,
         thread_id: str,
         tool_step_ids: list[str],
-    ) -> dict[str, Any]:
-        """Resume an existing inference after its tool confirmations were granted."""
+        summary: dict[str, Any] | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
+        """Yield NDJSON chunks while resuming inference after tool confirmations."""
         clean_thread_id = str(thread_id or "").strip()
         clean_ids = list(dict.fromkeys(str(item).strip() for item in tool_step_ids if str(item).strip()))
         if not clean_thread_id:
@@ -432,34 +433,42 @@ class NotionOpusAPI:
         unresolved_ids: set[str] = set()
         applied_ids: set[str] = set()
         requested_ids = set(clean_ids)
-        for chunk in parse_stream(response):
-            if not isinstance(chunk, dict):
-                continue
-            chunk_type = str(chunk.get("type") or "").strip()
-            if chunk_type == "stream_complete":
-                stream_completed = True
-                continue
-            if chunk_type == "tool_confirmation":
-                for step_id in chunk.get("tool_step_ids") or []:
-                    clean_step_id = str(step_id or "").strip()
-                    if clean_step_id in requested_ids:
-                        unresolved_ids.add(clean_step_id)
-            elif chunk_type == "tool_result_status":
-                clean_step_id = str(chunk.get("tool_step_id") or "").strip()
-                state = str(chunk.get("state") or "").strip().lower()
-                if clean_step_id in requested_ids and (
-                    state in {"applied", "confirmation:confirmed"}
-                    or bool(chunk.get("has_result"))
-                ):
-                    applied_ids.add(clean_step_id)
-                    unresolved_ids.discard(clean_step_id)
-            event_count += 1
-            if chunk_type and chunk_type not in event_types:
-                event_types.append(chunk_type)
+        try:
+            for chunk in parse_stream(response):
+                if not isinstance(chunk, dict):
+                    continue
+                chunk_type = str(chunk.get("type") or "").strip()
+                if chunk_type == "stream_complete":
+                    stream_completed = True
+                    continue
+                if chunk_type == "tool_confirmation":
+                    for step_id in chunk.get("tool_step_ids") or []:
+                        clean_step_id = str(step_id or "").strip()
+                        if clean_step_id in requested_ids:
+                            unresolved_ids.add(clean_step_id)
+                elif chunk_type == "tool_result_status":
+                    clean_step_id = str(chunk.get("tool_step_id") or "").strip()
+                    state = str(chunk.get("state") or "").strip().lower()
+                    if clean_step_id in requested_ids and (
+                        state in {"applied", "confirmation:confirmed"}
+                        or bool(chunk.get("has_result"))
+                    ):
+                        applied_ids.add(clean_step_id)
+                        unresolved_ids.discard(clean_step_id)
+                event_count += 1
+                if chunk_type and chunk_type not in event_types:
+                    event_types.append(chunk_type)
+                yield chunk
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
+
         missing_applied_ids = requested_ids - applied_ids
         unresolved_ids.update(missing_applied_ids)
         approved = stream_completed and not unresolved_ids and applied_ids == requested_ids
-        return {
+        result = {
             "trace_id": trace_id,
             "approved": approved,
             "stream_completed": stream_completed,
@@ -468,7 +477,28 @@ class NotionOpusAPI:
             "applied_tool_step_ids": sorted(applied_ids),
             "unresolved_tool_step_ids": sorted(unresolved_ids),
             "reason": "approved" if approved else "confirmation_not_applied",
+            "thread_id": clean_thread_id,
+            "tool_step_ids": clean_ids,
         }
+        if summary is not None:
+            summary.clear()
+            summary.update(result)
+
+    def continue_confirmed_tool_steps(
+        self,
+        *,
+        thread_id: str,
+        tool_step_ids: list[str],
+    ) -> dict[str, Any]:
+        """Resume an existing inference after its tool confirmations were granted."""
+        summary: dict[str, Any] = {}
+        for _chunk in self.iter_continue_confirmed_tool_steps(
+            thread_id=thread_id,
+            tool_step_ids=tool_step_ids,
+            summary=summary,
+        ):
+            pass
+        return summary
 
     def _normalize_upload_descriptor(self, body: Any) -> dict[str, Any]:
         if not isinstance(body, dict):
@@ -1124,6 +1154,240 @@ class NotionOpusAPI:
             )
         return True
 
+    def _auto_continue_external_url_confirmation(
+        self,
+        *,
+        thread_id: str,
+        confirmation_chunk: dict[str, Any],
+    ) -> Generator[dict[str, Any], None, None]:
+        """Auto-approve a Notion urlSafety confirmation and resume the same thread."""
+        from app.unsafe_url_continuation import (
+            claim_external_url_auto_approval,
+            complete_external_url_auto_approval,
+            external_url_auto_approve_max_retries,
+            remember_pending_unsafe_url_steps,
+        )
+
+        step_id = str(confirmation_chunk.get("tool_step_id") or "").strip()
+        urls = [
+            str(url).strip()
+            for url in (confirmation_chunk.get("urls") or [])
+            if str(url).strip()
+        ]
+        remember_pending_unsafe_url_steps(
+            self,
+            thread_id,
+            [{"tool_step_id": step_id, "urls": urls}],
+        )
+        yield {
+            "type": "external_url_confirmation_received",
+            "thread_id": thread_id,
+            "account": self.account_key,
+            "tool_step_id": step_id,
+            "tool_step_ids": list(
+                confirmation_chunk.get("tool_step_ids") or ([step_id] if step_id else [])
+            ),
+            "urls": urls,
+            "url_count": len(urls),
+        }
+        yield confirmation_chunk
+
+        claim = claim_external_url_auto_approval(
+            self,
+            thread_id=thread_id,
+            tool_step_id=step_id,
+            urls=urls,
+        )
+        if claim.get("duplicate"):
+            yield {
+                "type": "external_url_auto_approved",
+                "duplicate": True,
+                "thread_id": thread_id,
+                "tool_step_id": step_id,
+                "urls": urls,
+                "url_count": len(urls),
+                "reason": claim.get("reason"),
+                "receipt_id": claim.get("receipt_id"),
+                "continuation": {"approved": True, "stream_completed": False},
+            }
+            return
+        if not claim.get("claimed"):
+            receipt = complete_external_url_auto_approval(
+                self,
+                thread_id=thread_id,
+                tool_step_id=step_id,
+                approved=False,
+                error=str(claim.get("reason") or "claim_failed"),
+            )
+            yield {
+                "type": "external_url_approval_failed",
+                "thread_id": thread_id,
+                "tool_step_id": step_id,
+                "urls": urls,
+                "url_count": len(urls),
+                "reason": claim.get("reason") or "claim_failed",
+                "error_type": "operational_error",
+                "receipt": receipt,
+            }
+            raise NotionUpstreamError(
+                "Notion external URL auto-approval continuation failed.",
+                status_code=502,
+                retriable=False,
+                response_excerpt=(
+                    f"state=external_url_approval_failed;"
+                    f"tool_step_id={step_id};"
+                    f"reason={claim.get('reason') or 'claim_failed'}"
+                ),
+            )
+
+        summary: dict[str, Any] = {}
+        last_error: Exception | None = None
+        nested_confirmations: list[dict[str, Any]] = []
+        max_retries = external_url_auto_approve_max_retries()
+        for attempt in range(1, max_retries + 2):
+            nested_confirmations = []
+            try:
+                for cont_chunk in self.iter_continue_confirmed_tool_steps(
+                    thread_id=thread_id,
+                    tool_step_ids=[step_id],
+                    summary=summary,
+                ):
+                    if isinstance(cont_chunk, dict) and cont_chunk.get("type") == "tool_confirmation":
+                        nested_confirmations.append(cont_chunk)
+                        continue
+                    yield cont_chunk
+                last_error = None
+                break
+            except NotionUpstreamError as exc:
+                last_error = exc
+                if not exc.retriable or attempt > max_retries:
+                    break
+            except requests.exceptions.RequestException as exc:
+                last_error = NotionUpstreamError(
+                    "Request to Notion upstream failed while continuing confirmed tool steps.",
+                    retriable=True,
+                    response_excerpt=str(exc),
+                )
+                if attempt > max_retries:
+                    break
+
+        if last_error is not None:
+            receipt = complete_external_url_auto_approval(
+                self,
+                thread_id=thread_id,
+                tool_step_id=step_id,
+                approved=False,
+                error=str(last_error),
+            )
+            yield {
+                "type": "external_url_approval_failed",
+                "thread_id": thread_id,
+                "tool_step_id": step_id,
+                "urls": urls,
+                "url_count": len(urls),
+                "reason": "continuation_failed",
+                "error_type": "operational_error",
+                "receipt": receipt,
+            }
+            raise NotionUpstreamError(
+                "Notion external URL auto-approval continuation failed.",
+                status_code=getattr(last_error, "status_code", 502) or 502,
+                retriable=False,
+                response_excerpt=(
+                    f"state=external_url_approval_failed;"
+                    f"tool_step_id={step_id};"
+                    f"reason=continuation_failed"
+                ),
+            ) from last_error
+
+        # If Notion requested another URL mid-continuation, the current step is
+        # considered applied once its id is present even if finishedAt arrives later.
+        approved = bool(summary.get("approved")) or (
+            step_id in set(summary.get("applied_tool_step_ids") or [])
+            and bool(nested_confirmations)
+        )
+        if nested_confirmations and step_id in set(summary.get("applied_tool_step_ids") or []):
+            summary = {
+                **summary,
+                "approved": True,
+                "reason": "approved",
+                "stream_completed": bool(summary.get("stream_completed")),
+            }
+            approved = True
+
+        receipt = complete_external_url_auto_approval(
+            self,
+            thread_id=thread_id,
+            tool_step_id=step_id,
+            approved=approved,
+            continuation_result=summary,
+            error=None if approved else str(summary.get("reason") or "confirmation_not_applied"),
+        )
+        if not approved:
+            yield {
+                "type": "external_url_approval_failed",
+                "thread_id": thread_id,
+                "tool_step_id": step_id,
+                "urls": urls,
+                "url_count": len(urls),
+                "reason": summary.get("reason") or "confirmation_not_applied",
+                "error_type": "operational_error",
+                "receipt": receipt,
+            }
+            raise NotionUpstreamError(
+                "Notion external URL auto-approval continuation failed.",
+                status_code=502,
+                retriable=False,
+                response_excerpt=(
+                    f"state=external_url_approval_failed;"
+                    f"tool_step_id={step_id};"
+                    f"reason={summary.get('reason') or 'confirmation_not_applied'}"
+                ),
+            )
+
+        yield {
+            "type": "external_url_auto_approved",
+            "duplicate": False,
+            "thread_id": thread_id,
+            "account": self.account_key,
+            "tool_step_id": step_id,
+            "urls": urls,
+            "url_count": len(urls),
+            "reason": summary.get("reason") or "approved",
+            "receipt": receipt,
+            "continuation": {
+                "approved": True,
+                "stream_completed": bool(summary.get("stream_completed")) and not nested_confirmations,
+                "trace_id": summary.get("trace_id"),
+                "event_count": int(summary.get("event_count") or 0),
+            },
+        }
+
+        nested_completed = False
+        for nested in nested_confirmations:
+            for event in self._auto_continue_external_url_confirmation(
+                thread_id=thread_id,
+                confirmation_chunk=nested,
+            ):
+                if (
+                    isinstance(event, dict)
+                    and event.get("type") == "external_url_auto_approved"
+                    and event.get("continuation", {}).get("stream_completed")
+                ):
+                    nested_completed = True
+                yield event
+        if nested_completed:
+            yield {
+                "type": "external_url_auto_approved",
+                "duplicate": True,
+                "thread_id": thread_id,
+                "tool_step_id": step_id,
+                "urls": urls,
+                "url_count": len(urls),
+                "reason": "nested_continuation_completed",
+                "continuation": {"approved": True, "stream_completed": True},
+            }
+
     def stream_response(
         self,
         transcript: list,
@@ -1406,34 +1670,85 @@ class NotionOpusAPI:
 
             emitted = False
             stream_completed = False
-            for chunk in parse_stream(response):
-                if isinstance(chunk, dict) and chunk.get("type") == "stream_complete":
-                    stream_completed = True
-                    continue
-                if isinstance(chunk, dict) and chunk.get("type") == "tool_confirmation":
-                    from app.unsafe_url_continuation import remember_pending_unsafe_url_steps
+            from app.unsafe_url_continuation import (
+                remember_pending_unsafe_url_steps,
+                should_auto_continue_external_url_confirmations,
+            )
 
-                    remember_pending_unsafe_url_steps(
-                        self,
-                        thread_id,
-                        [{
-                            "tool_step_id": chunk.get("tool_step_id"),
-                            "urls": chunk.get("urls") or [],
-                        }],
-                    )
-                    logger.info(
-                        "Captured transient unsafe URL confirmation from live stream",
-                        extra={
-                            "request_info": {
-                                "event": "unsafe_url_confirmation_captured",
+            auto_enabled = should_auto_continue_external_url_confirmations()
+            active_response = response
+            response = None
+            try:
+                for chunk in parse_stream(active_response):
+                    if isinstance(chunk, dict) and chunk.get("type") == "stream_complete":
+                        stream_completed = True
+                        continue
+                    if isinstance(chunk, dict) and chunk.get("type") == "tool_confirmation":
+                        step_id = str(chunk.get("tool_step_id") or "").strip()
+                        urls = [
+                            str(url).strip()
+                            for url in (chunk.get("urls") or [])
+                            if str(url).strip()
+                        ]
+                        remember_pending_unsafe_url_steps(
+                            self,
+                            thread_id,
+                            [{"tool_step_id": step_id, "urls": urls}],
+                        )
+                        logger.info(
+                            "Captured transient unsafe URL confirmation from live stream",
+                            extra={
+                                "request_info": {
+                                    "event": "unsafe_url_confirmation_captured",
+                                    "thread_id": thread_id,
+                                    "tool_step_id": step_id,
+                                    "urls": urls,
+                                    "url_count": len(urls),
+                                }
+                            },
+                        )
+                        emitted = True
+                        if not auto_enabled:
+                            yield {
+                                "type": "external_url_confirmation_received",
                                 "thread_id": thread_id,
-                                "tool_step_id": chunk.get("tool_step_id"),
-                                "urls": chunk.get("urls") or [],
+                                "account": self.account_key,
+                                "tool_step_id": step_id,
+                                "tool_step_ids": list(
+                                    chunk.get("tool_step_ids") or ([step_id] if step_id else [])
+                                ),
+                                "urls": urls,
+                                "url_count": len(urls),
                             }
-                        },
-                    )
-                emitted = True
-                yield chunk
+                            yield chunk
+                            continue
+
+                        try:
+                            active_response.close()
+                        except Exception:
+                            pass
+                        for event in self._auto_continue_external_url_confirmation(
+                            thread_id=thread_id,
+                            confirmation_chunk=chunk,
+                        ):
+                            if (
+                                isinstance(event, dict)
+                                and event.get("type") == "external_url_auto_approved"
+                                and event.get("continuation", {}).get("stream_completed")
+                            ):
+                                stream_completed = True
+                            emitted = True
+                            yield event
+                        break
+
+                    emitted = True
+                    yield chunk
+            finally:
+                if active_response is not None:
+                    try:
+                        active_response.close()
+                    except Exception:
+                        pass
 
             if not stream_completed:
                 raise NotionUpstreamError(

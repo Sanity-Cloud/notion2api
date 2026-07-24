@@ -85,6 +85,25 @@ PORT = int(os.getenv("PORT", "8000"))
 ALLOW_UNSAFE_CORS = _env_flag("ALLOW_UNSAFE_CORS", default=False)
 ALLOWED_ORIGINS = parse_allowed_origins(os.getenv("ALLOWED_ORIGINS"), allow_unsafe_wildcard=ALLOW_UNSAFE_CORS)
 
+# External URL confirmations from Notion (connections.web.loadPage / urlSafety).
+# Notion2API treats these as protocol continuation requirements, not local access
+# gates. Authorization gating belongs outside this service.
+# EXTERNAL_URL_APPROVAL_POLICY: allow_all (default) | manual
+# AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS: automatically call allow-once continuation
+EXTERNAL_URL_APPROVAL_POLICY = (
+    os.getenv("EXTERNAL_URL_APPROVAL_POLICY")
+    or os.getenv("Notion__ExternalUrlApprovalPolicy")
+    or "allow_all"
+).strip().lower()
+AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS = _env_flag(
+    "AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS",
+    default=_env_flag("Notion__AutoContinueExternalUrlConfirmations", default=True),
+)
+EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES = max(
+    0,
+    int(os.getenv("EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES", "2") or "2"),
+)
+
 # APP_MODE: heavytextlite text standard
 APP_MODE = os.getenv("APP_MODE", "heavy").lower().strip()
 
