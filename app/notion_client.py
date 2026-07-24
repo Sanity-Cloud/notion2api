@@ -1154,6 +1154,45 @@ class NotionOpusAPI:
             )
         return True
 
+    def try_set_thread_title(self, thread_id: str, title: str) -> bool:
+        """Best-effort title update that never fails an accepted inference.
+
+        Notion may reject early title mutations with unsaved_transactions while the
+        thread is still materializing. Inference ownership remains the stream; title
+        failures are logged and deferred rather than aborting the chat job.
+        """
+        try:
+            return bool(self.set_thread_title(thread_id, title))
+        except NotionUpstreamError as exc:
+            excerpt = str(exc.response_excerpt or "")
+            unsaved = "unsaved_transactions" in excerpt
+            logger.warning(
+                "Notion thread title update skipped; continuing inference stream",
+                extra={
+                    "request_info": {
+                        "event": "thread_title_update_soft_failed",
+                        "thread_id": str(thread_id or "").strip(),
+                        "status_code": getattr(exc, "status_code", None),
+                        "retriable": bool(getattr(exc, "retriable", False)),
+                        "unsaved_transactions": unsaved,
+                        "response_excerpt": excerpt[:300],
+                    }
+                },
+            )
+            return False
+        except Exception:
+            logger.warning(
+                "Notion thread title update raised unexpectedly; continuing inference stream",
+                exc_info=True,
+                extra={
+                    "request_info": {
+                        "event": "thread_title_update_soft_failed",
+                        "thread_id": str(thread_id or "").strip(),
+                    }
+                },
+            )
+            return False
+
     def _auto_continue_external_url_confirmation(
         self,
         *,
@@ -1477,7 +1516,7 @@ class NotionOpusAPI:
             and thread_persistence["persist"]
             and not should_create_thread
         ):
-            self.set_thread_title(thread_id, requested_thread_title)
+            self.try_set_thread_title(thread_id, requested_thread_title)
 
         uploaded_attachments: list[UploadedAttachment] = []
         if attachments:
@@ -1665,8 +1704,10 @@ class NotionOpusAPI:
             # The thread exists once inference is accepted. Apply the explicit
             # title before consuming a potentially long model stream so the UI
             # never exposes Notion's prompt-derived placeholder for minutes.
+            # Title mutation is best-effort: unsaved_transactions must not abort
+            # an already-accepted inference stream.
             if requested_thread_title and thread_persistence["persist"]:
-                self.set_thread_title(thread_id, requested_thread_title)
+                self.try_set_thread_title(thread_id, requested_thread_title)
 
             emitted = False
             stream_completed = False
@@ -1791,7 +1832,7 @@ class NotionOpusAPI:
                     )
             else:
                 if requested_thread_title:
-                    self.set_thread_title(thread_id, requested_thread_title)
+                    self.try_set_thread_title(thread_id, requested_thread_title)
                 # text thread
                 # textNotion API text workflow text
                 # text thread textAI text
