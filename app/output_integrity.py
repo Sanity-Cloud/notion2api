@@ -22,6 +22,18 @@ GEOMETRIC_GROWTH_EXPANSIONS = 3
 _MALFORMED_NOTION_CITATION_RE = re.compile(
     r"(?is)(?:\[\^\{\{|\{\{notion-|notion-#{1,6}|\[\^[^\]\n]{0,200}$)"
 )
+_INTERNAL_TOOL_SYNTAX_RE = re.compile(
+    r"(?is)(?:"
+    r"\{\s*\"tool_call(?:_id)?\"\s*:|"
+    r"\{\s*\"function_call\"\s*:|"
+    r"\{\s*\"action_plan\"\s*:|"
+    r"\{\s*\"recipient\"\s*:\s*\"[^\"]+\"\s*,\s*\"parameters\"\s*:|"
+    r"<\s*tool_call\b[^>]*>|"
+    r"<\s*internal_orchestration\b[^>]*>|"
+    r"\"type\"\s*:\s*\"tool_call\"|"
+    r"\"call_id\"\s*:\s*\"call_[a-zA-Z0-9]+\""
+    r")"
+)
 _HEADING_RE = re.compile(r"(?m)^\s*#{1,6}\s+([^\n]{1,240})\s*$")
 
 
@@ -91,6 +103,7 @@ def assess_output_integrity(
     duplicate_ratio = duplicate_instances / len(paragraphs) if paragraphs else 0.0
 
     malformed_citations = bool(_MALFORMED_NOTION_CITATION_RE.search(normalized))
+    internal_tool_syntax = bool(_INTERNAL_TOOL_SYNTAX_RE.search(normalized))
     geometric_growth = _geometric_growth_detected(event_lengths)
 
     if response_chars > MAX_VISIBLE_RESPONSE_CHARS:
@@ -103,6 +116,8 @@ def assess_output_integrity(
         reasons.append("repeated_markdown_heading")
     if malformed_citations:
         reasons.append("malformed_notion_citation")
+    if internal_tool_syntax:
+        reasons.append("internal_tool_syntax_exposed")
     if geometric_growth:
         reasons.append("geometric_event_growth")
 
