@@ -268,6 +268,9 @@ class MessagesOutput(BaseModel):
     count: int = Field(default=0, description="Number of returned messages.")
     total_count: int = Field(default=0, description="Total local message count for the conversation.")
     db_path: str = Field(default="", description="Local Notion2API conversations database path.")
+    persistence_source: str = Field(default="conversation_db", description="Source of readback: 'conversation_db' or 'mcp_job_store'.")
+    durable_persisted: bool = Field(default=True, description="Whether messages are durably persisted in SQLite database.")
+    reconciliation_required: bool = Field(default=False, description="Whether SQLite database reconciliation is required.")
     messages: list[dict[str, Any]] = Field(default_factory=list, description="Messages in chronological order.")
     error: str | None = Field(default=None, description="Error summary if messages could not be read.")
 
@@ -280,6 +283,9 @@ class LastResponseOutput(BaseModel):
     response_text: str = Field(default="", description="Latest assistant visible response content.")
     message: dict[str, Any] | None = Field(default=None, description="Latest assistant message record, if found.")
     db_path: str = Field(default="", description="Local Notion2API conversations database path.")
+    persistence_source: str = Field(default="conversation_db", description="Source of readback: 'conversation_db' or 'mcp_job_store'.")
+    durable_persisted: bool = Field(default=True, description="Whether response is durably persisted in SQLite database.")
+    reconciliation_required: bool = Field(default=False, description="Whether SQLite database reconciliation is required.")
     error: str | None = Field(default=None, description="Error summary if lookup failed.")
 
 
@@ -3260,6 +3266,7 @@ def _read_local_messages(session_name: str | None = None, conversation_id: str |
             for row in rows
         ]
         messages.reverse()
+        fallback_used = False
         if not messages:
             jobs_state = _load_chat_job_state()
             all_jobs = jobs_state.get("jobs", {})
@@ -3274,8 +3281,20 @@ def _read_local_messages(session_name: str | None = None, conversation_id: str |
                                 messages.append({"id": 1, "role": "user", "content": prompt_text, "thinking": "", "created_at": created_ts - 1})
                             messages.append({"id": 2, "role": "assistant", "content": text, "thinking": "", "created_at": created_ts})
                             total = len(messages)
+                            fallback_used = True
                             break
-        return MessagesOutput(ok=True, session_name=key, conversation_id=resolved_id, count=len(messages), total_count=total, db_path=str(db_path), messages=messages)
+        return MessagesOutput(
+            ok=True,
+            session_name=key,
+            conversation_id=resolved_id,
+            count=len(messages),
+            total_count=total,
+            db_path=str(db_path),
+            persistence_source="mcp_job_store" if fallback_used else "conversation_db",
+            durable_persisted=not fallback_used,
+            reconciliation_required=fallback_used,
+            messages=messages,
+        )
     except Exception as exc:
         return MessagesOutput(ok=False, session_name=key, conversation_id=resolved_id, db_path=str(db_path), error=f"{type(exc).__name__}: {exc}")
 
@@ -3329,6 +3348,9 @@ def _read_last_local_response(session_name: str | None = None, conversation_id: 
                     response_text=c_text,
                     message=message,
                     db_path=str(db_path),
+                    persistence_source="mcp_job_store",
+                    durable_persisted=False,
+                    reconciliation_required=True,
                 )
             return LastResponseOutput(ok=True, found=False, session_name=key, conversation_id=resolved_id, db_path=str(db_path))
         message = {
@@ -3338,7 +3360,18 @@ def _read_last_local_response(session_name: str | None = None, conversation_id: 
             "thinking": str(row["thinking"] or ""),
             "created_at": int(row["created_at"] or 0),
         }
-        return LastResponseOutput(ok=True, found=True, session_name=key, conversation_id=resolved_id, response_text=message["content"], message=message, db_path=str(db_path))
+        return LastResponseOutput(
+            ok=True,
+            found=True,
+            session_name=key,
+            conversation_id=resolved_id,
+            response_text=message["content"],
+            message=message,
+            db_path=str(db_path),
+            persistence_source="conversation_db",
+            durable_persisted=True,
+            reconciliation_required=False,
+        )
     except Exception as exc:
         return LastResponseOutput(ok=False, found=False, session_name=key, conversation_id=resolved_id, db_path=str(db_path), error=f"{type(exc).__name__}: {exc}")
 

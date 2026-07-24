@@ -12,6 +12,8 @@ from app.conversation import ConversationManager
 from app.mcp_server import (
     _mark_chat_job_stale,
     _normalize_terminal_output,
+    _read_last_local_response,
+    _read_local_messages,
 )
 from app.output_integrity import assess_output_integrity
 from app.server import app
@@ -155,3 +157,26 @@ def test_quarantined_output_normalization():
     assert normalized["quarantined"] is True
     assert normalized["response_text"] == ""
     assert normalized["retry_safe"] is False
+
+
+def test_persistence_source_provenance_readback(monkeypatch, tmp_path):
+    """Verify that readback APIs explicitly report persistence_source, durable_persisted, and reconciliation_required."""
+    db_file = tmp_path / "provenance_test.db"
+    monkeypatch.setenv("DB_PATH", str(db_file))
+
+    manager = ConversationManager()
+    cid = manager.new_conversation(conversation_id="prov-conv")
+    manager.persist_round(cid, "Hello", "Hi there!")
+
+    resp = _read_last_local_response(conversation_id=cid)
+    assert resp.ok is True
+    assert resp.found is True
+    assert resp.persistence_source == "conversation_db"
+    assert resp.durable_persisted is True
+    assert resp.reconciliation_required is False
+
+    msgs = _read_local_messages(conversation_id=cid)
+    assert msgs.ok is True
+    assert msgs.persistence_source == "conversation_db"
+    assert msgs.durable_persisted is True
+    assert msgs.reconciliation_required is False
