@@ -19,6 +19,7 @@ from app.logger import logger
 from app.model_registry import is_supported_model, list_available_models
 from app.notion_client import NotionUpstreamError
 from app.request_control import controlled_chat_request
+from app.retry_policy import should_retry_upstream, upstream_max_attempts
 from app.attachments.normalizer import (
     PromptValidationError,
     normalize_chat_messages,
@@ -1550,7 +1551,7 @@ def _handle_lite_request(
     user_prompt = _prepare_messages_lite(req_body)
 
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    max_retries = max(3, len(pool.clients))
+    max_retries = upstream_max_attempts(len(pool.clients))
 
     for attempt in range(1, max_retries + 1):
         client = None
@@ -1706,7 +1707,9 @@ def _handle_lite_request(
                     }
                 },
             )
-            if attempt == max_retries or not exc.retriable:
+            if not should_retry_upstream(
+                retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
+            ):
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
             logger.error(
@@ -1828,7 +1831,7 @@ def _handle_standard_request(
 
     pool = request.app.state.account_pool
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    max_retries = max(3, len(pool.clients))
+    max_retries = upstream_max_attempts(len(pool.clients))
     client_type = _client_type_from_request(request)
 
     for attempt in range(1, max_retries + 1):
@@ -2040,7 +2043,9 @@ def _handle_standard_request(
                     }
                 },
             )
-            if attempt == max_retries or not exc.retriable:
+            if not should_retry_upstream(
+                retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
+            ):
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
             logger.error(
@@ -2351,7 +2356,7 @@ async def create_chat_completion(
                 )
 
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    max_retries = max(3, len(pool.clients))
+    max_retries = upstream_max_attempts(len(pool.clients))
 
     for attempt in range(1, max_retries + 1):
         client = None
@@ -2904,7 +2909,9 @@ async def create_chat_completion(
                     }
                 },
             )
-            if attempt == max_retries or not exc.retriable:
+            if not should_retry_upstream(
+                retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
+            ):
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
             logger.error(
