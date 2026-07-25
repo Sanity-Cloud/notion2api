@@ -18,6 +18,7 @@ from app.config import is_lite_mode
 from app.logger import logger
 from app.model_registry import is_supported_model, list_available_models
 from app.notion_client import NotionUpstreamError
+from app.request_control import controlled_chat_request
 from app.attachments.normalizer import (
     PromptValidationError,
     normalize_chat_messages,
@@ -2104,6 +2105,7 @@ def _handle_standard_request(
 
 
 @router.post("/chat/completions", tags=["chat"])
+@controlled_chat_request
 async def create_chat_completion(
     request: Request,
     req_body: ChatCompletionRequest,
