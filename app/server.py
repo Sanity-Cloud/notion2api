@@ -26,6 +26,7 @@ from app.core.errors import openai_error_payload
 from app.core.internal_callers import is_repo_ai_internal_request
 from app.limiter import limiter
 from app.logger import logger, setup_uvicorn_logging
+from app.request_control import RequestController
 
 
 apply_attachment_runtime_config()
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI):
 
     # text
     app.state.account_pool = AccountPool(ACCOUNTS)
+    app.state.request_control = RequestController.from_env()
     # Keep durable conversation storage available in every mode so chat-history
     # resume/fork can create real local conversations without forcing heavy mode.
     app.state.conversation_manager = ConversationManager()
