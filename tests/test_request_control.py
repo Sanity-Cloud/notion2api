@@ -1,9 +1,18 @@
 import asyncio
 from types import SimpleNamespace
 
+from fastapi import HTTPException
+
 import pytest
 
-from app.request_control import AdmissionRejected, RequestController, request_fingerprint
+from app.request_control import (
+    AdmissionRejected,
+    RequestController,
+    controlled_chat_request,
+    request_fingerprint,
+    safe_scope_label,
+    scoped_fingerprint,
+)
 
 
 @pytest.mark.asyncio
@@ -74,3 +83,48 @@ async def test_snapshot_reports_capacity_and_rejections():
     assert snapshot["max_concurrency"] == 1
     assert snapshot["duplicate_rejected_total"] == 1
     await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_client_http_exception_does_not_trip_circuit():
+    controller = RequestController(max_concurrency=1, failure_threshold=1)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(request_control=controller)), headers={})
+    body = SimpleNamespace(model_dump=lambda mode="json": {"model": "terra", "messages": []})
+
+    @controlled_chat_request
+    async def handler(request, req_body):
+        raise HTTPException(status_code=400, detail="invalid")
+
+    with pytest.raises(HTTPException):
+        await handler(request, body)
+    snapshot = await controller.snapshot()
+    assert snapshot["active"] == 0
+    assert snapshot["recent_failures"] == 0
+    assert not snapshot["circuit_open"]
+
+
+@pytest.mark.asyncio
+async def test_server_http_exception_counts_as_failure():
+    controller = RequestController(max_concurrency=1, failure_threshold=1)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(request_control=controller)), headers={})
+    body = SimpleNamespace(model_dump=lambda mode="json": {"model": "terra", "messages": []})
+
+    @controlled_chat_request
+    async def handler(request, req_body):
+        raise HTTPException(status_code=503, detail="upstream unavailable")
+
+    with pytest.raises(HTTPException):
+        await handler(request, body)
+    snapshot = await controller.snapshot()
+    assert snapshot["active"] == 0
+    assert snapshot["recent_failures"] == 1
+    assert snapshot["circuit_open"]
+
+
+def test_fingerprint_is_scoped_without_exposing_scope():
+    base = "a" * 64
+    first = scoped_fingerprint("session-a", base)
+    second = scoped_fingerprint("session-b", base)
+    assert first != second
+    assert "session-a" not in first
+    assert safe_scope_label("case-sensitive-session") != "case-sensitive-session"

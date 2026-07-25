@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Awaitable, Callable
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.logger import logger
@@ -76,6 +76,7 @@ class RequestController:
         self._semaphore = asyncio.Semaphore(self.max_concurrency)
         self._state_lock = asyncio.Lock()
         self._conversation_locks: dict[str, asyncio.Lock] = {}
+        self._conversation_refs: dict[str, int] = {}
         self._active_fingerprints: set[str] = set()
         self._failures: deque[float] = deque()
         self._open_until = 0.0
@@ -119,6 +120,7 @@ class RequestController:
                 )
             self._active_fingerprints.add(fingerprint)
             key_lock = self._conversation_locks.setdefault(conversation_key, asyncio.Lock())
+            self._conversation_refs[conversation_key] = self._conversation_refs.get(conversation_key, 0) + 1
 
         key_acquired = False
         global_acquired = False
@@ -134,6 +136,7 @@ class RequestController:
                 key_lock.release()
             async with self._state_lock:
                 self._active_fingerprints.discard(fingerprint)
+                self._drop_conversation_ref(conversation_key, key_lock)
                 self.rejected_total += 1
                 self.queue_timeout_total += 1
             raise AdmissionRejected(
@@ -148,6 +151,7 @@ class RequestController:
                 key_lock.release()
             async with self._state_lock:
                 self._active_fingerprints.discard(fingerprint)
+                self._drop_conversation_ref(conversation_key, key_lock)
             raise
 
         async with self._state_lock:
@@ -162,8 +166,16 @@ class RequestController:
         async with self._state_lock:
             self.active = max(0, self.active - 1)
             self._active_fingerprints.discard(lease.fingerprint)
-            if not lease.key_lock.locked() and not getattr(lease.key_lock, "_waiters", None):
-                self._conversation_locks.pop(lease.conversation_key, None)
+            self._drop_conversation_ref(lease.conversation_key, lease.key_lock)
+
+    def _drop_conversation_ref(self, conversation_key: str, key_lock: asyncio.Lock) -> None:
+        remaining = self._conversation_refs.get(conversation_key, 1) - 1
+        if remaining <= 0:
+            self._conversation_refs.pop(conversation_key, None)
+            if not key_lock.locked():
+                self._conversation_locks.pop(conversation_key, None)
+        else:
+            self._conversation_refs[conversation_key] = remaining
 
     async def record_failure(self) -> None:
         now = time.monotonic()
@@ -206,6 +218,10 @@ class RequestController:
             }
 
 
+def _hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def request_fingerprint(req_body: Any) -> str:
     if hasattr(req_body, "model_dump"):
         payload = req_body.model_dump(mode="json")
@@ -215,6 +231,14 @@ def request_fingerprint(req_body: Any) -> str:
         payload = req_body
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def scoped_fingerprint(conversation_key: str, fingerprint: str) -> str:
+    return _hash_text(f"{conversation_key}|{fingerprint}")
+
+
+def safe_scope_label(conversation_key: str) -> str:
+    return _hash_text(conversation_key)[:16]
 
 
 def conversation_key(request: Request, req_body: Any, fingerprint: str) -> str:
@@ -254,7 +278,15 @@ def controlled_chat_request(func: Callable[..., Awaitable[Any]]) -> Callable[...
         request = kwargs.get("request")
         req_body = kwargs.get("req_body")
         if request is None:
-            request = next((arg for arg in args if isinstance(arg, Request)), None)
+            request = next(
+                (
+                    arg
+                    for arg in args
+                    if isinstance(arg, Request)
+                    or (hasattr(arg, "app") and hasattr(arg, "headers"))
+                ),
+                None,
+            )
         if req_body is None and len(args) > 1:
             req_body = args[1]
         app = getattr(request, "app", None) if request else None
@@ -262,20 +294,26 @@ def controlled_chat_request(func: Callable[..., Awaitable[Any]]) -> Callable[...
         if controller is None or req_body is None:
             return await func(*args, **kwargs)
 
-        fingerprint = request_fingerprint(req_body)
-        key = conversation_key(request, req_body, fingerprint)
+        base_fingerprint = request_fingerprint(req_body)
+        key = conversation_key(request, req_body, base_fingerprint)
+        fingerprint = scoped_fingerprint(key, base_fingerprint)
         try:
             lease = await controller.acquire(key, fingerprint)
         except AdmissionRejected as exc:
             logger.warning(
                 "Inference request rejected by admission control",
-                extra={"request_info": {"event": "inference_admission_rejected", "code": exc.code, "conversation_key": key}},
+                extra={"request_info": {"event": "inference_admission_rejected", "code": exc.code, "conversation_scope": safe_scope_label(key)}},
             )
             return _rejection_response(exc)
 
         try:
             result = await func(*args, **kwargs)
         except asyncio.CancelledError:
+            await lease.release()
+            raise
+        except HTTPException as exc:
+            if exc.status_code == 429 or exc.status_code >= 500:
+                await controller.record_failure()
             await lease.release()
             raise
         except BaseException:
