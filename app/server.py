@@ -203,21 +203,24 @@ async def favicon():
     return Response(content=b"", media_type="image/x-icon", status_code=204)
 
 @app.get("/health", tags=["system"])
-def health_check(request: Request):
+async def health_check(request: Request):
     uptime = time.time() - request.app.state.start_time
     pool = request.app.state.account_pool
     status = pool.get_status_summary()
+    controller = getattr(request.app.state, "request_control", None)
+    request_control = await controller.snapshot() if controller is not None else {}
     return {
         "status": "ok",
         "accounts": status["active"],
         "accounts_total": status["total"],
         "accounts_cooling": status["cooling"],
-        "uptime": int(uptime)
+        "uptime": int(uptime),
+        "request_control": request_control,
     }
 
 @app.get("/healthz", tags=["system"])
-def healthz(request: Request):
-    return health_check(request)
+async def healthz(request: Request):
+    return await health_check(request)
 
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 

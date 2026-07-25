@@ -257,7 +257,8 @@ def controlled_chat_request(func: Callable[..., Awaitable[Any]]) -> Callable[...
             request = next((arg for arg in args if isinstance(arg, Request)), None)
         if req_body is None and len(args) > 1:
             req_body = args[1]
-        controller = getattr(getattr(request, "app", None).state, "request_control", None) if request else None
+        app = getattr(request, "app", None) if request else None
+        controller = getattr(getattr(app, "state", None), "request_control", None)
         if controller is None or req_body is None:
             return await func(*args, **kwargs)
 
@@ -274,6 +275,9 @@ def controlled_chat_request(func: Callable[..., Awaitable[Any]]) -> Callable[...
 
         try:
             result = await func(*args, **kwargs)
+        except asyncio.CancelledError:
+            await lease.release()
+            raise
         except BaseException:
             await controller.record_failure()
             await lease.release()
@@ -287,6 +291,9 @@ def controlled_chat_request(func: Callable[..., Awaitable[Any]]) -> Callable[...
                 try:
                     async for chunk in original_iterator:
                         yield chunk
+                except asyncio.CancelledError:
+                    failed = True
+                    raise
                 except BaseException:
                     failed = True
                     await controller.record_failure()

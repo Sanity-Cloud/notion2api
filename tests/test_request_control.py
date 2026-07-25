@@ -61,3 +61,16 @@ def test_fingerprint_is_stable_and_non_plaintext():
     assert first == second
     assert len(first) == 64
     assert "secret" not in first
+
+
+@pytest.mark.asyncio
+async def test_snapshot_reports_capacity_and_rejections():
+    controller = RequestController(max_concurrency=1, queue_timeout_seconds=0.01)
+    lease = await controller.acquire("session-a", "one")
+    with pytest.raises(AdmissionRejected):
+        await controller.acquire("session-a", "one")
+    snapshot = await controller.snapshot()
+    assert snapshot["active"] == 1
+    assert snapshot["max_concurrency"] == 1
+    assert snapshot["duplicate_rejected_total"] == 1
+    await lease.release()
