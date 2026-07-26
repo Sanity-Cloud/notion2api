@@ -301,11 +301,23 @@ class ChatJobOutput(BaseModel):
     endpoint: str = Field(default="", description="Backend endpoint used by the job.")
     created_at: int = Field(default=0, description="Unix epoch milliseconds when the job was created.")
     updated_at: int = Field(default=0, description="Unix epoch milliseconds when the job was last updated.")
-    response_text: str = Field(default="", description="Bounded completed-response preview unless include_response is true.")
-    response_chars: int = Field(default=0, description="Full completed-response character count.")
+    response_text: str = Field(default="", description="Bounded completed-response preview unless include_response is true. Empty when quarantined.")
+    response_chars: int = Field(default=0, description="Full completed-response character count, including generated-but-quarantined text.")
     response_truncated: bool = Field(default=False, description="Whether response_text is a bounded preview.")
     output_integrity: dict[str, Any] | None = Field(default=None, description="Bounded pre-persistence output-integrity receipt.")
     quarantined: bool = Field(default=False, description="Whether visible output was removed from normal conversation state.")
+    authoritative: bool = Field(
+        default=True,
+        description="Whether response_text is safe to treat as an authoritative assistant answer. False when quarantined.",
+    )
+    quarantined_response_available: bool = Field(
+        default=False,
+        description="Whether generated text was retained as quarantined evidence even though it was withheld from response_text.",
+    )
+    quarantined_response_text: str = Field(
+        default="",
+        description="Generated-but-quarantined text when include_quarantined/include_response is true. Not authoritative.",
+    )
     attachment_required: bool = Field(default=False, description="Whether the request required one or more verified attachments.")
     attachment_count: int = Field(default=0, description="Number of verified attachments submitted.")
     attachment_transfer_status: str = Field(default="not_requested", description="Attachment provenance state: verified, missing, or not_requested.")
@@ -1039,6 +1051,13 @@ def _responses_output_from_backend(
         "source": "responses_endpoint",
         "output_integrity": receipt,
         "attachment_provenance": provenance,
+        "generated_response_available": bool(
+            isinstance(receipt, dict) and int(receipt.get("response_chars") or 0) > 0
+        ),
+        "generated_response_chars": int(
+            receipt.get("response_chars") or 0
+        ) if isinstance(receipt, dict) else 0,
+        "delivery_state": "generated_but_quarantined",
     }
     return normalized
 
@@ -1604,6 +1623,7 @@ def _normalize_terminal_output(
         "output_integrity": receipt,
         "response": original,
     }
+    generated_chars = int(receipt.get("response_chars") or len(text) or 0)
     normalized.update(
         {
             "ok": False,
@@ -1611,15 +1631,21 @@ def _normalize_terminal_output(
             "status": "indeterminate_output",
             "retry_safe": False,
             "poll_hint": (
-                "Inspect quarantined evidence and reconcile the original request; "
-                "do not submit a new semantic request blindly."
+                "Generated text was quarantined. Poll notion2api_get_chat_job with "
+                "include_quarantined=true to inspect generated-but-quarantined evidence; "
+                "do not treat it as authoritative or submit a new semantic request blindly."
             ),
             "error": "OUTPUT_CONTAMINATED: assistant output was quarantined.",
             "response_text": "",
+            "authoritative": False,
+            "quarantined_response_available": generated_chars > 0,
             "raw": {
                 "quarantined": True,
                 "source": source,
                 "output_integrity": receipt,
+                "generated_response_available": generated_chars > 0,
+                "generated_response_chars": generated_chars,
+                "delivery_state": "generated_but_quarantined",
             },
         }
     )
@@ -2882,10 +2908,32 @@ async def _submit_or_resume_chat_job(
     )
 
 
+def _extract_quarantined_response_text(job: dict[str, Any]) -> str:
+    """Return generated text retained under quarantine evidence, if any."""
+
+    evidence = job.get("_quarantined_response")
+    if not isinstance(evidence, dict):
+        return ""
+    nested = evidence.get("response")
+    if isinstance(nested, dict):
+        text = _job_response_text(nested)
+        if text:
+            return text
+        nested_text = nested.get("response_text")
+        if isinstance(nested_text, str) and nested_text.strip():
+            return nested_text
+    integrity = evidence.get("output_integrity")
+    if isinstance(integrity, dict):
+        # Integrity receipts do not store text; fall through.
+        pass
+    return ""
+
+
 def _chat_job_output(
     request_id: str,
     include_last_response: bool = False,
     include_response: bool = False,
+    include_quarantined: bool = False,
     *,
     increment_poll: bool = True,
 ) -> ChatJobOutput:
@@ -2936,6 +2984,9 @@ def _chat_job_output(
         or (isinstance(response, dict) and response.get("quarantined"))
         or (isinstance(integrity, dict) and integrity.get("quarantine_required"))
     )
+    quarantined_full_text = _extract_quarantined_response_text(job) if quarantined else ""
+    quarantined_available = bool(quarantined and quarantined_full_text)
+    expose_quarantined = bool(include_quarantined or include_response) and quarantined_available
     full_response_text = "" if quarantined else str(
         job.get("response_text") or _job_response_text(response)
     )
@@ -2944,16 +2995,33 @@ def _chat_job_output(
         if include_response
         else full_response_text[:MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS]
     )
+    quarantined_response_text = (
+        quarantined_full_text
+        if expose_quarantined and include_response
+        else (
+            quarantined_full_text[:MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS]
+            if expose_quarantined
+            else ""
+        )
+    )
     response_chars = (
-        int(integrity.get("response_chars") or 0)
+        int(integrity.get("response_chars") or len(quarantined_full_text) or 0)
         if quarantined and isinstance(integrity, dict)
-        else len(full_response_text)
+        else (
+            len(quarantined_full_text)
+            if quarantined
+            else len(full_response_text)
+        )
     )
     raw_job = {
         key: value
         for key, value in job.items()
         if key not in {"response", "response_text", "_quarantined_response"}
     }
+    if quarantined:
+        raw_job["delivery_state"] = "generated_but_quarantined"
+        raw_job["quarantined_response_available"] = quarantined_available
+        raw_job["generated_response_chars"] = response_chars
     last_response = None
     if include_last_response and not quarantined:
         last = _read_last_local_response(
@@ -2961,6 +3029,28 @@ def _chat_job_output(
             conversation_id=str(job.get("conversation_id") or ""),
         )
         last_response = last.model_dump() if hasattr(last, "model_dump") else dict(last)
+
+    projected_response = None
+    if include_response and not quarantined:
+        projected_response = response
+    elif include_response and quarantined and isinstance(response, dict):
+        projected_response = {
+            **{
+                key: value
+                for key, value in response.items()
+                if key not in {"response_text", "raw"}
+            },
+            "response_text": "",
+            "authoritative": False,
+            "quarantined_response_available": quarantined_available,
+            "quarantined_response_text": quarantined_full_text if expose_quarantined else "",
+            "raw": {
+                "quarantined": True,
+                "delivery_state": "generated_but_quarantined",
+                "generated_response_chars": response_chars,
+                "include_quarantined": bool(include_quarantined or include_response),
+            },
+        }
 
     return ChatJobOutput(
         ok=True,
@@ -2976,9 +3066,16 @@ def _chat_job_output(
         updated_at=int(job.get("updated_at") or 0),
         response_text=response_text,
         response_chars=response_chars,
-        response_truncated=quarantined or len(response_text) < len(full_response_text),
+        response_truncated=(
+            (quarantined and expose_quarantined and len(quarantined_response_text) < len(quarantined_full_text))
+            or (not quarantined and len(response_text) < len(full_response_text))
+            or (quarantined and not expose_quarantined)
+        ),
         output_integrity=integrity,
         quarantined=quarantined,
+        authoritative=not quarantined,
+        quarantined_response_available=quarantined_available,
+        quarantined_response_text=quarantined_response_text,
         **_attachment_provenance_from_job(job),
         progress=job.get("progress") if isinstance(job.get("progress"), dict) else None,
         remote_chat_id=str(job.get("remote_chat_id") or job.get("notion_thread_id") or ""),
@@ -2987,7 +3084,7 @@ def _chat_job_output(
         stalled_for_seconds=float(job.get("stalled_for_seconds") or 0.0),
         dead_loop_suspected=bool(job.get("dead_loop_suspected")),
         cancel_recommended=bool(job.get("cancel_recommended")),
-        response=response if include_response and not quarantined else None,
+        response=projected_response,
         error=job.get("error") if isinstance(job.get("error"), str) else None,
         raw_job=raw_job,
         last_response=last_response,
@@ -3952,17 +4049,19 @@ def create_server(
     ) -> LastResponseOutput:
         return _read_last_local_response(session_name=session_name, conversation_id=conversation_id)
 
-    @server.tool(description="Inspect a retry-safe Notion2API MCP chat job. Returns bounded activity/tasks, remote chat id, and stall detection without exposing raw private reasoning.", structured_output=True)
+    @server.tool(description="Inspect a retry-safe Notion2API MCP chat job. Returns bounded activity/tasks, remote chat id, and stall detection without exposing raw private reasoning. When status is indeterminate_output/quarantined, set include_quarantined=true to read generated-but-quarantined text; it is not authoritative.", structured_output=True)
     async def notion2api_get_chat_job(
         request_id: str,
         include_last_response: bool = False,
         include_response: bool = False,
+        include_quarantined: bool = False,
         cancel_if_stalled: bool = False,
     ) -> ChatJobOutput:
         result = _chat_job_output(
             request_id=request_id,
             include_last_response=include_last_response,
             include_response=include_response,
+            include_quarantined=include_quarantined,
         )
         if (
             cancel_if_stalled

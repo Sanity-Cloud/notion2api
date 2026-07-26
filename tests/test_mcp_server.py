@@ -1341,6 +1341,9 @@ def test_backend_contaminated_output_is_quarantined_before_completion():
     assert result["response_text"] == ""
     assert result["quarantined"] is True
     assert result["retry_safe"] is False
+    assert result["quarantined_response_available"] is True
+    assert result["raw"]["delivery_state"] == "generated_but_quarantined"
+    assert result["raw"]["generated_response_chars"] == len(text)
     assert result["output_integrity"]["response_chars"] == len(text)
     assert "identical_paragraph_repetition" in result["output_integrity"]["reasons"]
     assert result["_quarantined_response"]["response"]["response_text"] == text
@@ -1390,18 +1393,45 @@ def test_legacy_completed_job_is_demoted_and_hidden_on_poll(monkeypatch):
 
     result = mcp_server._chat_job_output(
         "legacy-contaminated",
-        include_response=True,
+        include_response=False,
         include_last_response=True,
     )
 
     assert result.status == "indeterminate_output"
     assert result.response_text == ""
-    assert result.response is None
+    assert result.authoritative is False
     assert result.quarantined is True
+    assert result.quarantined_response_available is True
+    assert result.quarantined_response_text == ""
+    assert result.response is None
     assert result.response_chars == len(text)
     assert result.response_truncated is True
+    assert result.raw_job.get("delivery_state") == "generated_but_quarantined"
+    assert result.raw_job.get("quarantined_response_available") is True
     assert "_quarantined_response" not in result.raw_job
     assert persisted[0]["_quarantined_response"]["response"]["response_text"] == text
+
+    preview = mcp_server._chat_job_output(
+        "legacy-contaminated",
+        include_response=False,
+        include_last_response=False,
+        include_quarantined=True,
+        increment_poll=False,
+    )
+    assert preview.quarantined_response_text == text
+    assert preview.authoritative is False
+    assert preview.response_text == ""
+
+    full = mcp_server._chat_job_output(
+        "legacy-contaminated",
+        include_response=True,
+        include_quarantined=True,
+        increment_poll=False,
+    )
+    assert full.quarantined_response_text == text
+    assert full.response is not None
+    assert full.response["quarantined_response_text"] == text
+    assert full.response["authoritative"] is False
 
 
 
