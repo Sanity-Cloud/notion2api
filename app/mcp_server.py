@@ -23,6 +23,13 @@ from pydantic import BaseModel, Field
 from app.attachments.normalizer import validate_chat_messages, validate_prompt_text
 from app.output_hygiene import detect_visible_output_contamination
 from app.output_integrity import assess_output_integrity
+from app.hive_runtime import (
+    HiveMissionSnapshot,
+    HiveRuntimeError,
+    HiveWorkUnitSpec,
+    default_hive_runtime_db_path,
+    get_hive_runtime_store,
+)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -3973,6 +3980,127 @@ def create_server(
             model=model,
             provenance=provenance,
         )
+
+    def _hive_error_snapshot(exc: Exception, mission_id: str = "") -> HiveMissionSnapshot:
+        return HiveMissionSnapshot(
+            ok=False,
+            found=False,
+            db_path=str(default_hive_runtime_db_path()),
+            mission_id=mission_id,
+            error=str(exc),
+        )
+
+    @server.tool(description="Create a durable Hive mission with parallel worker lanes and conversation bindings.", structured_output=True)
+    async def notion2api_hive_create_mission(
+        title: str,
+        objective: str,
+        lifecycle_stage: str,
+        work_units: list[dict[str, Any]] | None = None,
+        authority_ceiling: str = "A3",
+        parent_context_id: str = "",
+        mission_id: str | None = None,
+        idempotency_key: str | None = None,
+        actor: str = "notion2api",
+    ) -> HiveMissionSnapshot:
+        try:
+            specs = [HiveWorkUnitSpec.model_validate(item) for item in (work_units or [])]
+            return get_hive_runtime_store().create_mission(
+                title=title,
+                objective=objective,
+                lifecycle_stage=lifecycle_stage,
+                work_units=specs,
+                authority_ceiling=authority_ceiling,
+                parent_context_id=parent_context_id,
+                mission_id=mission_id,
+                idempotency_key=idempotency_key,
+                actor=actor,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id or "")
+
+    @server.tool(description="Read one durable Hive mission, its worker lanes, events, and latest fan-in decision.", structured_output=True)
+    async def notion2api_hive_status(
+        mission_id: str,
+        event_limit: int = 200,
+        action_limit: int = 200,
+    ) -> HiveMissionSnapshot:
+        try:
+            return get_hive_runtime_store().get_mission(
+                mission_id, event_limit=event_limit, action_limit=action_limit
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id)
+
+    @server.tool(description="Append a typed Hive event or SyncPulse and optionally update one worker lane state.", structured_output=True)
+    async def notion2api_hive_append_event(
+        mission_id: str,
+        event_type: str,
+        sender: str,
+        payload: dict[str, Any] | None = None,
+        recipient: str = "swarm",
+        work_unit_id: str = "",
+        context_version: int = 0,
+        expected_mission_revision: int | None = None,
+        work_unit_status: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveMissionSnapshot:
+        try:
+            return get_hive_runtime_store().append_event(
+                mission_id=mission_id,
+                event_type=event_type,
+                sender=sender,
+                payload=payload,
+                recipient=recipient,
+                work_unit_id=work_unit_id,
+                context_version=context_version,
+                expected_mission_revision=expected_mission_revision,
+                work_unit_status=work_unit_status,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id)
+
+    @server.tool(description="Cancel a Hive mission cooperatively while preserving completed work and its evidence ledger.", structured_output=True)
+    async def notion2api_hive_cancel(
+        mission_id: str,
+        reason: str,
+        actor: str = "notion2api",
+        idempotency_key: str | None = None,
+    ) -> HiveMissionSnapshot:
+        try:
+            return get_hive_runtime_store().cancel_mission(
+                mission_id=mission_id,
+                reason=reason,
+                actor=actor,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id)
+
+    @server.tool(description="Record an Emerald City fan-in decision with evidence and preserved dissent.", structured_output=True)
+    async def notion2api_hive_fan_in(
+        mission_id: str,
+        status: str,
+        summary: str,
+        dissent: list[dict[str, Any]] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        actor: str = "emerald-city",
+        close_mission: bool = False,
+        idempotency_key: str | None = None,
+    ) -> HiveMissionSnapshot:
+        try:
+            return get_hive_runtime_store().fan_in(
+                mission_id=mission_id,
+                status=status,
+                summary=summary,
+                dissent=dissent,
+                evidence=evidence,
+                actor=actor,
+                close_mission=close_mission,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id)
 
     @server.tool(description="List named persistent Notion2API MCP chat sessions with local and remote identifiers.", structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:
