@@ -8,6 +8,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.attachments.errors import AttachmentError
 from app.logger import logger
+from app.governance import governance_receipt_from_client
 from app.notion_client import NotionUpstreamError
 from app.unsafe_url_continuation import (
     allow_pending_unsafe_urls_once,
@@ -91,6 +92,7 @@ class AccountInfoResponse(BaseModel):
     repo_ai_parent_page_id: str
     parent_page_accessible: bool
     context_page_id: str
+    governance: dict[str, Any] = Field(default_factory=dict)
 
 
 class AllowUnsafeUrlOnceRequest(BaseModel):
@@ -233,6 +235,7 @@ async def account_info(request: Request) -> AccountInfoResponse:
         repo_ai_parent_page_id=parent_page_id,
         parent_page_accessible=parent_accessible,
         context_page_id=client.context_page_id,
+        governance=governance_receipt_from_client(client),
     )
 
 

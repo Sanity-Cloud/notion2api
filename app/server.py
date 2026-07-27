@@ -20,7 +20,13 @@ from app.api.models import router as models_router
 from app.api.responses import router as responses_router
 from app.api.notion import router as notion_router
 from app.attachments.runtime_config import apply_attachment_runtime_config
-from app.config import ACCOUNTS, ALLOWED_ORIGINS, API_KEY, is_lite_mode, is_standard_mode
+from app.config import (
+    ALLOWED_ORIGINS,
+    API_KEY,
+    get_governed_accounts,
+    is_lite_mode,
+    is_standard_mode,
+)
 from app.conversation import ConversationManager
 from app.core.errors import openai_error_payload
 from app.core.internal_callers import is_repo_ai_internal_request
@@ -51,18 +57,49 @@ async def lifespan(app: FastAPI):
     setup_uvicorn_logging()
 
     # text
-    app.state.account_pool = AccountPool(ACCOUNTS)
+    governed_accounts = get_governed_accounts()
+    app.state.account_pool = AccountPool(governed_accounts)
     # Keep durable conversation storage available in every mode so chat-history
     # resume/fork can create real local conversations without forcing heavy mode.
     app.state.conversation_manager = ConversationManager()
 
     # text
     if is_lite_mode():
-        logger.info("Service starting up in LITE mode", extra={"request_info": {"event": "startup", "accounts": len(ACCOUNTS), "mode": "lite", "conversation_storage": True}})
+        logger.info(
+            "Service starting up in LITE mode",
+            extra={
+                "request_info": {
+                    "event": "startup",
+                    "accounts": len(governed_accounts),
+                    "mode": "lite",
+                    "conversation_storage": True,
+                }
+            },
+        )
     elif is_standard_mode():
-        logger.info("Service starting up in STANDARD mode", extra={"request_info": {"event": "startup", "accounts": len(ACCOUNTS), "mode": "standard", "conversation_storage": True}})
+        logger.info(
+            "Service starting up in STANDARD mode",
+            extra={
+                "request_info": {
+                    "event": "startup",
+                    "accounts": len(governed_accounts),
+                    "mode": "standard",
+                    "conversation_storage": True,
+                }
+            },
+        )
     else:
-        logger.info("Service starting up in HEAVY mode", extra={"request_info": {"event": "startup", "accounts": len(ACCOUNTS), "mode": "heavy", "conversation_storage": True}})
+        logger.info(
+            "Service starting up in HEAVY mode",
+            extra={
+                "request_info": {
+                    "event": "startup",
+                    "accounts": len(governed_accounts),
+                    "mode": "heavy",
+                    "conversation_storage": True,
+                }
+            },
+        )
 
     app.state.start_time = time.time()
     yield
@@ -89,12 +126,15 @@ app.add_middleware(
 # text Limiter
 app.state.limiter = limiter
 
+
 # text 429 text
 def custom_rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
         status_code=429,
         content={"error": "Too many requests, please try again later"},
     )
+
+
 app.add_exception_handler(RateLimitExceeded, custom_rate_limit_exceeded_handler)
 
 
@@ -128,17 +168,19 @@ async def generic_exception_handler(request: Request, exc: Exception):
         },
     )
 
+
 # Attachment deployment guard runs before body parsing in chat/response handlers.
 app.middleware("http")(attachment_deployment_guard)
+
 
 # text
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
     start_time = time.time()
-    
+
     # text
     skip_logging = request.url.path in ["/health", "/healthz", "/favicon.ico"]
-    
+
     try:
         response = await call_next(request)
         status_code = response.status_code
@@ -149,7 +191,7 @@ async def log_requests_middleware(request: Request, call_next):
     finally:
         process_time = time.time() - start_time
         client_ip = request.client.host if request.client else "unknown"
-        
+
         if not skip_logging:
             log_level = logger.error if status_code >= 400 else logger.info
             log_level(
@@ -160,12 +202,13 @@ async def log_requests_middleware(request: Request, call_next):
                         "path": request.url.path,
                         "ip": client_ip,
                         "status_code": status_code,
-                        "duration_ms": round(process_time * 1000, 2)
+                        "duration_ms": round(process_time * 1000, 2),
                     }
-                }
+                },
             )
-            
+
     return response
+
 
 # text API Key text
 @app.middleware("http")
@@ -175,7 +218,9 @@ async def api_key_auth(request: Request, call_next):
         # text OPTIONS text
         if request.url.path.startswith("/v1") and request.method != "OPTIONS":
             auth_header = request.headers.get("Authorization", "")
-            if not is_repo_ai_internal_request(request) and not _valid_bearer_token(auth_header, API_KEY):
+            if not is_repo_ai_internal_request(request) and not _valid_bearer_token(
+                auth_header, API_KEY
+            ):
                 return JSONResponse(
                     status_code=401,
                     content=openai_error_payload(
@@ -186,6 +231,7 @@ async def api_key_auth(request: Request, call_next):
                 )
     return await call_next(request)
 
+
 # text /v1
 app.include_router(chat_router, prefix="/v1")
 app.include_router(models_router, prefix="/v1")
@@ -195,10 +241,12 @@ app.include_router(features_router, prefix="/v1")
 app.include_router(responses_router, prefix="/v1")
 app.include_router(notion_router, prefix="/v1")
 
+
 # text
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return Response(content=b"", media_type="image/x-icon", status_code=204)
+
 
 @app.get("/health", tags=["system"])
 def health_check(request: Request):
@@ -210,20 +258,27 @@ def health_check(request: Request):
         "accounts": status["active"],
         "accounts_total": status["total"],
         "accounts_cooling": status["cooling"],
-        "uptime": int(uptime)
+        "uptime": int(uptime),
+        "governance": pool.get_governance_summary(),
     }
+
 
 @app.get("/healthz", tags=["system"])
 def healthz(request: Request):
     return health_check(request)
 
-frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+
+frontend_dir = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend"
+)
 
 
 def _frontend_js_response(filename: str):
     script_path = os.path.join(frontend_dir, "js", filename)
     if not os.path.exists(script_path):
-        return Response(content=b"", media_type="application/javascript", status_code=404)
+        return Response(
+            content=b"", media_type="application/javascript", status_code=404
+        )
     with open(script_path, "rb") as f:
         return Response(
             content=f.read(),
@@ -232,7 +287,7 @@ def _frontend_js_response(filename: str):
                 "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                 "Pragma": "no-cache",
                 "Expires": "0",
-            }
+            },
         )
 
 
@@ -302,6 +357,7 @@ def frontend_index(request: Request):
         html = html.replace("</body>", injection + "\n</body>")
 
     return Response(content=html, media_type="text/html")
+
 
 # text
 if os.path.exists(frontend_dir):

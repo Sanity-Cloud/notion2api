@@ -5,6 +5,7 @@ import time
 from typing import Dict, List
 
 from app.logger import logger
+from app.governance import governance_receipt_from_client
 from app.notion_client import NotionOpusAPI
 
 
@@ -84,6 +85,16 @@ class AccountPool:
                 "active": active,
                 "cooling": cooling,
             }
+
+    def get_governance_summary(self) -> dict:
+        receipts = [governance_receipt_from_client(client) for client in self.clients]
+        canonical = dict(receipts[0]) if receipts else {}
+        canonical["aligned"] = bool(receipts) and all(
+            receipt == receipts[0] and bool(receipt.get("aligned"))
+            for receipt in receipts
+        )
+        canonical["account_count"] = len(receipts)
+        return canonical
 
     def mark_failed(self, client: NotionOpusAPI, cooldown_seconds: int = 3) -> None:
         """Apply cooldown to the account that created a request client."""

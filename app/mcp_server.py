@@ -103,6 +103,7 @@ class HealthOutput(BaseModel):
     accounts_total: int | None = Field(default=None, description="Total configured account count.")
     accounts_cooling: int | None = Field(default=None, description="Number of accounts currently cooling down.")
     uptime: int | float | None = Field(default=None, description="Backend uptime, if reported.")
+    governance: dict[str, Any] = Field(default_factory=dict, description="Canonical governance/teamspace receipt.")
     raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend health response.")
 
 
@@ -137,6 +138,7 @@ class ChatOutput(BaseModel):
     caller_id: str = Field(default="", description="Stable identity of the system or agent that initiated the request.")
     caller_type: str = Field(default="", description="Caller class, such as repoai, chatgpt, or mcp.")
     caller_metadata: dict[str, Any] | None = Field(default=None, description="Bounded caller provenance supplied with the request.")
+    governance: dict[str, Any] = Field(default_factory=dict, description="Canonical governance/teamspace receipt applied by the backend.")
     backend_base_url: str = Field(default="", description="Canonical Notion2API backend URL used by this MCP wrapper.")
     timeout_seconds: float | None = Field(default=None, description="HTTP timeout used by the MCP wrapper for backend calls.")
     session_state_path: str = Field(default="", description="Path to the MCP session state file.")
@@ -205,6 +207,7 @@ class ResponsesOutput(BaseModel):
     caller_id: str = Field(default="")
     caller_type: str = Field(default="")
     caller_metadata: dict[str, Any] | None = Field(default=None)
+    governance: dict[str, Any] = Field(default_factory=dict)
     backend_base_url: str = Field(default="", description="Canonical Notion2API backend URL used by this MCP wrapper.")
     timeout_seconds: float | None = Field(default=None, description="HTTP timeout used by the MCP wrapper for backend calls.")
     session_state_path: str = Field(default="", description="Path to the MCP session state file.")
@@ -896,6 +899,24 @@ def _caller_trace(metadata: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _governance_trace(data: dict[str, Any]) -> dict[str, Any]:
+    model_metadata = (
+        data.get("model_metadata")
+        if isinstance(data.get("model_metadata"), dict)
+        else {}
+    )
+    governance = (
+        model_metadata.get("governance")
+        if isinstance(model_metadata.get("governance"), dict)
+        else data.get("governance")
+    )
+    return {
+        "governance": dict(governance)
+        if isinstance(governance, dict)
+        else {}
+    }
+
+
 def _model_identity_trace(
     data: dict[str, Any], requested_model: str
 ) -> dict[str, Any]:
@@ -1022,6 +1043,7 @@ def _responses_output_from_backend(
             else None
         ),
         **_model_identity_trace(data, model),
+        **_governance_trace(data),
         **_caller_trace(
             data.get("request_metadata")
             if isinstance(data.get("request_metadata"), dict)
@@ -1872,6 +1894,7 @@ def _chat_output_from_backend(
             else None
         ),
         **_model_identity_trace(data, model),
+        **_governance_trace(data),
         **_caller_trace(
             data.get("request_metadata")
             if isinstance(data.get("request_metadata"), dict)
@@ -3646,6 +3669,7 @@ def create_server(
             accounts_total=data.get("accounts_total"),
             accounts_cooling=data.get("accounts_cooling"),
             uptime=data.get("uptime"),
+            governance=dict(data.get("governance") or {}),
             raw=data,
         )
 

@@ -227,6 +227,35 @@ class NotionOpusAPI:
             or os.getenv("REPO_AI_NOTION_PARENT_PAGE_ID")
             or ""
         ).strip()
+        self.governance_contract_version = str(
+            account_config.get("governance_contract_version") or ""
+        ).strip()
+        self.governance_teamspace_id = str(
+            account_config.get("governance_teamspace_id") or self.space_id or ""
+        ).strip()
+        self.governance_authority_page_id = str(
+            account_config.get("governance_authority_page_id")
+            or self.context_page_id
+            or ""
+        ).strip()
+        self.documented_output_parent_page_id = str(
+            account_config.get("documented_output_parent_page_id")
+            or self.repo_ai_parent_page_id
+            or ""
+        ).strip()
+        self.procedural_feedback_parent_page_id = str(
+            account_config.get("procedural_feedback_parent_page_id") or ""
+        ).strip()
+        self.governance_operating_instruction = str(
+            account_config.get("governance_operating_instruction") or ""
+        ).strip()
+        self.governance_aligned = bool(
+            self.governance_contract_version
+            and self.governance_teamspace_id == self.space_id
+            and self.governance_authority_page_id == self.context_page_id
+            and self.documented_output_parent_page_id == self.repo_ai_parent_page_id
+            and self.procedural_feedback_parent_page_id
+        )
         self.cookies = account_config.get("cookies", {})
         if not isinstance(self.cookies, dict):
             self.cookies = {}

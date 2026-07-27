@@ -14,6 +14,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.core.errors import openai_error
 from app.core.internal_callers import is_repo_ai_internal_request
 from app.core.models import normalize_model_id
+from app.governance import (
+    combine_governance_instructions,
+    governance_receipt_from_client,
+    resolve_governed_context_page_id,
+)
 from app.conversation import (
     apply_notion_ai_options,
     compress_round_if_needed,
@@ -51,8 +56,15 @@ router = APIRouter()
 
 
 def _apply_notion_request_options(
-    transcript: list[dict[str, Any]], req_body: ChatCompletionRequest
+    transcript: list[dict[str, Any]],
+    req_body: ChatCompletionRequest,
+    client: Any | None = None,
 ) -> list[dict[str, Any]]:
+    instructions = (
+        combine_governance_instructions(client, req_body.notion_instructions)
+        if client is not None
+        else req_body.notion_instructions
+    )
     return apply_notion_ai_options(
         transcript,
         mode=req_body.notion_mode,
@@ -60,8 +72,36 @@ def _apply_notion_request_options(
         sources=req_body.notion_sources,
         web_access=req_body.web_access,
         persona=req_body.notion_persona,
-        instructions=req_body.notion_instructions,
+        instructions=instructions,
     )
+
+
+def _bind_governance_request_metadata(
+    req_body: ChatCompletionRequest, client: Any
+) -> dict[str, Any]:
+    metadata = dict(req_body.metadata or {}) if isinstance(req_body.metadata, dict) else {}
+    receipt = governance_receipt_from_client(client)
+    supplied = metadata.get("governance")
+    if isinstance(supplied, dict):
+        for key in (
+            "contract_version",
+            "teamspace_id",
+            "authority_page_id",
+            "documented_output_parent_page_id",
+            "procedural_feedback_parent_page_id",
+        ):
+            requested = str(supplied.get(key) or "").strip()
+            canonical = str(receipt.get(key) or "").strip()
+            if requested and requested != canonical:
+                openai_error(
+                    f"Request governance {key} conflicts with the canonical SanityCloud contract.",
+                    "governance_contract_mismatch",
+                    status_code=409,
+                    param=f"metadata.governance.{key}",
+                )
+    metadata["governance"] = receipt
+    req_body.metadata = metadata
+    return receipt
 
 
 def _requested_thread_title(req_body: ChatCompletionRequest) -> str | None:
@@ -323,12 +363,19 @@ def _emit_search_metadata_for_client(client_type: str) -> bool:
 
 
 def _request_context_page_id(req_body: ChatCompletionRequest, client: Any) -> str:
-    """Resolve a per-request page context without mutating the pooled client."""
+    """Resolve the canonical governance authority and reject context drift."""
     metadata = req_body.metadata if isinstance(req_body.metadata, dict) else {}
     requested = str(metadata.get("context_page_id") or "").strip()
-    if requested:
-        return requested
-    return str(getattr(client, "context_page_id", "") or "").strip()
+    try:
+        return resolve_governed_context_page_id(client, requested)
+    except ValueError as exc:
+        openai_error(
+            str(exc),
+            "governance_context_mismatch",
+            status_code=409,
+            param="metadata.context_page_id",
+        )
+        raise AssertionError("openai_error must raise") from exc
 
 
 def _request_computer_use_review(req_body: ChatCompletionRequest) -> bool:
@@ -919,6 +966,26 @@ def _response_model_metadata(
         or requested
         or ""
     ).strip()
+
+    governance = (
+        request_metadata.get("governance")
+        if isinstance(request_metadata, dict)
+        else None
+    )
+    if isinstance(governance, dict):
+        payload["governance"] = {
+            str(key): value
+            for key, value in governance.items()
+            if str(key)
+            in {
+                "contract_version",
+                "teamspace_id",
+                "authority_page_id",
+                "documented_output_parent_page_id",
+                "procedural_feedback_parent_page_id",
+                "aligned",
+            }
+        }
 
     caller = (
         request_metadata.get("caller") if isinstance(request_metadata, dict) else None
@@ -1745,6 +1812,7 @@ def _handle_lite_request(
         client = None
         try:
             client = pool.get_client()
+            _bind_governance_request_metadata(req_body, client)
 
             # Read poll configuration from headers if available
             poll_interval_hdr = request.headers.get("x-notion-poll-interval")
@@ -1762,7 +1830,7 @@ def _handle_lite_request(
 
             # text Lite transcripttext
             transcript = _apply_notion_request_options(
-                build_lite_transcript(user_prompt, req_body.model), req_body
+                build_lite_transcript(user_prompt, req_body.model), req_body, client
             )
 
             # text Notion APItext thread_idtext
@@ -2046,6 +2114,7 @@ def _handle_standard_request(
         client = None
         try:
             client = pool.get_client()
+            _bind_governance_request_metadata(req_body, client)
 
             # Read poll configuration from headers if available
             poll_interval_hdr = request.headers.get("x-notion-poll-interval")
@@ -2085,7 +2154,7 @@ def _handle_standard_request(
             }
             messages = cleaned_msgs
             transcript = _apply_notion_request_options(
-                build_standard_transcript(messages, req_body.model, account), req_body
+                build_standard_transcript(messages, req_body.model, account), req_body, client
             )
 
             # text Notion APItext thread_idtext Notion text
@@ -2627,6 +2696,7 @@ async def create_chat_completion(
         client = None
         try:
             client = pool.get_client()
+            _bind_governance_request_metadata(req_body, client)
             transcript_payload = manager.get_transcript_payload(
                 notion_client=client,
                 conversation_id=conversation_id,
@@ -2636,7 +2706,7 @@ async def create_chat_completion(
                 context_page_id=_request_context_page_id(req_body, client),
             )
             transcript = transcript_payload["transcript"]
-            transcript = _apply_notion_request_options(transcript, req_body)
+            transcript = _apply_notion_request_options(transcript, req_body, client)
             memory_degraded = bool(transcript_payload.get("memory_degraded"))
             memory_headers = {"X-Memory-Status": "degraded"} if memory_degraded else {}
 

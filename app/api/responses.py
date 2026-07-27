@@ -107,12 +107,25 @@ def _chat_completion_to_response(chat_payload: dict[str, Any], requested_model: 
     response_id = f"resp_{uuid.uuid4().hex}"
     message_id = f"msg_{uuid.uuid4().hex}"
 
+    model_metadata = (
+        dict(chat_payload.get("model_metadata"))
+        if isinstance(chat_payload.get("model_metadata"), dict)
+        else {}
+    )
+    governance = (
+        dict(model_metadata.get("governance"))
+        if isinstance(model_metadata.get("governance"), dict)
+        else {}
+    )
+
     return {
         "id": response_id,
         "object": "response",
         "created_at": created,
         "status": "completed",
         "model": model,
+        "model_metadata": model_metadata,
+        "governance": governance,
         "output": [
             {
                 "id": message_id,
@@ -186,6 +199,8 @@ async def create_response(
         stream=stream,
         temperature=payload.get("temperature"),
         conversation_id=payload.get("conversation_id"),
+        notion_instructions=payload.get("instructions"),
+        metadata=dict(payload.get("metadata") or {}),
     )
 
     # Preserve raw attachment data for the delegated chat handler without logging it.
