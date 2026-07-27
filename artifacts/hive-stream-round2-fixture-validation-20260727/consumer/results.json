@@ -1,0 +1,42 @@
+{
+  "schema_version": "hive-stream-round2-consumer-contracts/1",
+  "mission": "hive-stream-round2-fixture-validation-20260727",
+  "base_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+  "offline_only": true,
+  "consumers": {
+    "web_ui": {
+      "implementation": "frontend/js/chat/streaming.js via frontend/index.html",
+      "structured_error": "ignored",
+      "finish_reason": "ignored",
+      "content_filter_or_quarantine": "ignored",
+      "socket_eof": "success/ambiguous close",
+      "done": "recognized only as ignored payload",
+      "partial_visible_before_final": true,
+      "risk": ["false_success", "partial_content_contamination"]
+    },
+    "embed_ui": {
+      "implementation": "frontend/embed.html inline consume/submit",
+      "structured_error": "ignored",
+      "finish_reason": "ignored",
+      "content_filter_or_quarantine": "ignored",
+      "socket_eof": "success/ambiguous close; empty becomes No visible response received",
+      "done": "recognized only as ignored payload",
+      "partial_visible_before_final": true,
+      "risk": ["false_success", "silent_failure", "partial_content_contamination"]
+    },
+    "mcp_client": {
+      "implementation": "app/mcp_server.py Notion2APIClient.post_chat_stream",
+      "structured_error": "ignored",
+      "finish_reason": "ignored then synthesized as stop",
+      "content_filter_or_quarantine": "ignored; delta content retained",
+      "socket_eof": "reported success",
+      "done": "ignored and does not terminate parsing",
+      "line_data_handling": "uses response.aiter_lines; parses each data line independently; malformed JSON and non-data lines skipped; multiline event JSON is not reassembled",
+      "partial_visible_before_final": true,
+      "risk": ["false_success", "silent_failure", "partial_content_contamination"]
+    }
+  },
+  "replay_cases": ["clean_success", "structured_error_no_done", "content_filter_no_done", "character_limit_close", "chunk_limit_close", "ordinary_exception_before", "ordinary_exception_after_partial", "cancel_generator_close", "malformed_terminal", "missing_finish", "missing_done_socket_eof"],
+  "confirmed_blocking_defect": true,
+  "recommendation": "Separate minimal consumer patch: require terminal classification before success; surface stream_error/content_filter; reject EOF without a valid terminal; clear or quarantine partial UI/MCP content on terminal error."
+}
