@@ -1,0 +1,33 @@
+{
+  "receipt_schema": "hive-stream-round2-consumer-receipt/1",
+  "work_unit": "WU-R2-CONSUMERS",
+  "status": "COMPLETED",
+  "mission": "hive-stream-round2-fixture-validation-20260727",
+  "branch": "validate/r2-consumers-20260727",
+  "base_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+  "commit": "PENDING_AMEND",
+  "scope": "tests and evidence only; no consumer or product-code changes",
+  "offline_only": true,
+  "commands": [
+    {"command": "python -m pytest -q tests/stream_round2/consumer_contracts tests/test_mcp_server.py -k 'chat_stream_updates_progress_and_returns_final_content or consumer_contract or line_parser_contract'", "result": "23 passed, 52 deselected"},
+    {"command": "python -m pytest -q tests/stream_round2/consumer_contracts tests/test_stream_integrity_guard.py tests/test_stream_protocol.py tests/test_mcp_server.py -k 'not test_chat_job'", "result": "95 passed, 3 deselected"},
+    {"command": "python -m ruff check tests/stream_round2/consumer_contracts", "result": "passed (repository Ruff configuration reported no Python files under path)"},
+    {"command": "python -m compileall -q tests/stream_round2/consumer_contracts", "result": "passed"},
+    {"command": "UTF-8 decode/encode round trip over lane tests", "result": "passed: 2 files"},
+    {"command": "git diff --check", "result": "passed"}
+  ],
+  "hashes": {
+    "tests/stream_round2/consumer_contracts/test_consumer_contract_matrix.py": "0de01c01befd99cc8e84f2609a2f7d57d85df5c0a47e34ccd4b6300dc5823cb7",
+    "tests/stream_round2/consumer_contracts/test_mcp_line_parser_contract.py": "3e3c16e5ed72f2577fdec399270a927f83d8dd68460e8085bb01a6f6d88cffde",
+    "consumer/results.json": "0818cd6ab19fce439c6c00dc821a88f1968b901d068d27ca99e4df2d0e20a16a",
+    "consumer/analysis.md": "b64d6cc68fbcd2b36f7615ba56541d2292077f10194d8c04ee5da5b7dc7f99b9"
+  },
+  "defect": {
+    "confirmed": true,
+    "minimal_failing_test": "strict xfail: test_mcp_must_not_report_success_for_socket_eof_without_terminal",
+    "finding": "MCP treats EOF, stream_error, and content_filter as success and synthesizes finish_reason=stop; web/embed do not classify terminal errors or EOF."
+  },
+  "risks": ["false_success", "silent_failure", "partial_content_contamination"],
+  "dissent": "Browser evidence is source-faithful offline replay rather than browser smoke; no smoke was run.",
+  "recommendation": "Separate consumer-only terminal-state patch: classify structured terminal events, require valid finish plus DONE for success, stop parsing after DONE, and clear/quarantine partial content on terminal error."
+}
