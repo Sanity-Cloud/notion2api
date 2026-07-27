@@ -1,5 +1,7 @@
 import json
+import math
 import re
+from datetime import datetime
 from typing import Any, Generator
 
 import requests
@@ -77,7 +79,11 @@ def _strip_lang_tags(text: str, in_tag: list[bool]) -> str:
 
         lang_start = text.find("<lang", i)
         close_start = text.find("</lang>", i)
-        candidates = [(pos, typ) for pos, typ in [(lang_start, "open"), (close_start, "close")] if pos != -1]
+        candidates = [
+            (pos, typ)
+            for pos, typ in [(lang_start, "open"), (close_start, "close")]
+            if pos != -1
+        ]
         if not candidates:
             result.append(text[i:])
             break
@@ -122,7 +128,6 @@ def _clean_notion_markup(text: str) -> str:
     return text
 
 
-
 def _strip_primary_attr_fragments(text: str, in_primary_attr: list[bool]) -> str:
     """Strip fragmented `primary=...` attribute pieces leaked by stream chunks."""
     out: list[str] = []
@@ -135,7 +140,7 @@ def _strip_primary_attr_fragments(text: str, in_primary_attr: list[bool]) -> str
                 in_primary_attr[0] = False
                 i += 1
                 continue
-            if ch.isalpha() or ch in '-_="\'/: ':
+            if ch.isalpha() or ch in "-_=\"'/: ":
                 i += 1
                 continue
             in_primary_attr[0] = False
@@ -153,8 +158,8 @@ def _strip_primary_attr_fragments(text: str, in_primary_attr: list[bool]) -> str
         while j < len(text) and text[j].isspace():
             j += 1
 
-        if j < len(text) and text[j] not in ("=", "\"", "'"):
-            out.append(text[start:m.end()])
+        if j < len(text) and text[j] not in ("=", '"', "'"):
+            out.append(text[start : m.end()])
             i = m.end()
             continue
 
@@ -163,7 +168,7 @@ def _strip_primary_attr_fragments(text: str, in_primary_attr: list[bool]) -> str
             while j < len(text) and text[j].isspace():
                 j += 1
 
-        if j < len(text) and text[j] in ("\"", "'"):
+        if j < len(text) and text[j] in ('"', "'"):
             quote = text[j]
             j += 1
             while j < len(text) and (text[j].isalpha() or text[j] in "-_"):
@@ -184,6 +189,7 @@ def _strip_primary_attr_fragments(text: str, in_primary_attr: list[bool]) -> str
         i = j
 
     return "".join(out)
+
 
 def _normalize_path(patch: dict[str, Any]) -> str:
     for key in ("path", "p", "pointer", "at"):
@@ -320,9 +326,19 @@ def _collect_search_metadata(value: Any, out: dict[str, Any]) -> None:
                     _append_source(
                         out,
                         {
-                            "title": item.get("title") or item.get("name") or item.get("sourceTitle") or "",
-                            "url": item.get("url") or item.get("href") or item.get("link") or item.get("sourceUrl") or "",
-                            "snippet": item.get("snippet") or item.get("summary") or item.get("description") or "",
+                            "title": item.get("title")
+                            or item.get("name")
+                            or item.get("sourceTitle")
+                            or "",
+                            "url": item.get("url")
+                            or item.get("href")
+                            or item.get("link")
+                            or item.get("sourceUrl")
+                            or "",
+                            "snippet": item.get("snippet")
+                            or item.get("summary")
+                            or item.get("description")
+                            or "",
                         },
                     )
                 elif isinstance(item, str):
@@ -331,7 +347,9 @@ def _collect_search_metadata(value: Any, out: dict[str, Any]) -> None:
         if isinstance(lowered.get("urls"), list):
             for url_item in lowered["urls"]:
                 if isinstance(url_item, str) and url_item.strip():
-                    _append_source(out, {"title": url_item.strip(), "url": url_item.strip()})
+                    _append_source(
+                        out, {"title": url_item.strip(), "url": url_item.strip()}
+                    )
 
         url_val = lowered.get("url") or lowered.get("href") or lowered.get("link")
         if isinstance(url_val, str):
@@ -397,7 +415,11 @@ def _looks_like_search_patch(patch: dict[str, Any]) -> bool:
         nested_type = str(patch_v.get("type", "") or "").lower()
 
     effective_type = patch_type or nested_type
-    if effective_type and effective_type != "text" and any(token in effective_type for token in SEARCH_TYPE_KEYWORDS):
+    if (
+        effective_type
+        and effective_type != "text"
+        and any(token in effective_type for token in SEARCH_TYPE_KEYWORDS)
+    ):
         return True
 
     path = _normalize_path(patch).lower()
@@ -431,14 +453,14 @@ def _extract_text_from_patch(patch: dict[str, Any]) -> str:
                         text_parts.append(str(item.get("content", "")))
                 content = "".join(text_parts)
         elif isinstance(patch_v, dict) and "content" in patch_v:
-            # text value block texto:"a" /s/N/value/- → {type:"text", content:"..."}
+            # text value block texto:"a" /s/N/value/- â†’ {type:"text", content:"..."}
             raw = patch_v.get("content")
             if isinstance(raw, str):
                 content = raw
 
     elif patch_op == "x" and "v" in patch:
         content = patch["v"] if isinstance(patch["v"], str) else ""
-    
+
     elif patch_op == "p" and "v" in patch:
         # text
         path = _normalize_path(patch)
@@ -453,7 +475,9 @@ def _looks_like_search_json_fragment(text: str) -> bool:
     if not stripped.startswith("{"):
         return False
 
-    if '"default"' in stripped and ('"questions"' in stripped or '"queries"' in stripped):
+    if '"default"' in stripped and (
+        '"questions"' in stripped or '"queries"' in stripped
+    ):
         return True
 
     return (
@@ -471,11 +495,12 @@ def _looks_like_tool_call_json_fragment(text: str) -> bool:
     stripped = text.strip().lower()
     if not stripped.startswith("{"):
         return False
-    return (
-        '"command"' in stripped
-        and ('"replacecontent"' in stripped or '"newstr"' in stripped or '"pageurl"' in stripped or '"block_id"' in stripped)
+    return '"command"' in stripped and (
+        '"replacecontent"' in stripped
+        or '"newstr"' in stripped
+        or '"pageurl"' in stripped
+        or '"block_id"' in stripped
     )
-
 
 
 def _extract_search_data_from_json_text(text: str) -> dict[str, Any]:
@@ -555,7 +580,9 @@ def _extract_markdown_chat_patch_text(patch: dict[str, Any]) -> tuple[str, str] 
         and isinstance(patch_v, dict)
         and str(patch_v.get("type", "") or "").lower() == "markdown-chat"
     ):
-        cleaned = _clean_extracted_text(_extract_markdown_chat_text(patch_v.get("value")))
+        cleaned = _clean_extracted_text(
+            _extract_markdown_chat_text(patch_v.get("value"))
+        )
         if cleaned:
             return ("final_content", cleaned)
 
@@ -592,7 +619,9 @@ def _extract_model_metadata_from_step(
     for part in step.get("value", []) if isinstance(step.get("value"), list) else []:
         if not isinstance(part, dict):
             continue
-        notion_model_name = notion_model_name or _non_empty_str(part.get("notionModelName"))
+        notion_model_name = notion_model_name or _non_empty_str(
+            part.get("notionModelName")
+        )
         model_provider = model_provider or _non_empty_str(part.get("modelProvider"))
     # `step.model` is often the requested/route model, not proof of the model
     # that actually produced the response. Only `notionModelName` is treated
@@ -611,12 +640,14 @@ def _extract_model_metadata_from_step(
     if actual_model:
         out["actual_model"] = actual_model
         out["actual_model_source"] = "notionModelName"
-        # Do not set actual_model_verified here — notionModelName may just
+        # Do not set actual_model_verified here â€” notionModelName may just
         # echo the requested model.  Verification is deferred to
         # _response_model_metadata which compares against the request.
     elif notion_step_model:
         out["actual_model_verified"] = False
-        out["actual_model_unverified_reason"] = "Only step.model was observed; it may be the requested route, not the responder."
+        out["actual_model_unverified_reason"] = (
+            "Only step.model was observed; it may be the requested route, not the responder."
+        )
     if isinstance(inner_value, dict):
         data = inner_value.get("data")
         if isinstance(data, dict):
@@ -633,7 +664,9 @@ def _extract_model_metadata_from_step(
     return {k: v for k, v in out.items() if v not in (None, "", [], {})}
 
 
-def _extract_final_content_from_record_map(data: dict[str, Any]) -> dict[str, Any] | None:
+def _extract_final_content_from_record_map(
+    data: dict[str, Any],
+) -> dict[str, Any] | None:
     record_map = data.get("recordMap")
     if not isinstance(record_map, dict):
         return None
@@ -706,7 +739,11 @@ def _extract_final_content_from_record_map(data: dict[str, Any]) -> dict[str, An
                     "event": "final_content_filtered",
                     "original_count": original_count,
                     "filtered_count": len(candidates),
-                    "removed_types": [c["step_type"] for c in candidates if c["step_type"] not in high_priority_types],
+                    "removed_types": [
+                        c["step_type"]
+                        for c in candidates
+                        if c["step_type"] not in high_priority_types
+                    ],
                 }
             },
         )
@@ -742,14 +779,16 @@ def _extract_final_content_from_record_map(data: dict[str, Any]) -> dict[str, An
         "source_type": str(best.get("step_type", "") or "unknown"),
         "source_message_id": str(best.get("message_id", "") or ""),
         "source_length": int(best.get("length", 0)),
-        "model_metadata": best.get("model_metadata") if isinstance(best.get("model_metadata"), dict) else {},
+        "model_metadata": best.get("model_metadata")
+        if isinstance(best.get("model_metadata"), dict)
+        else {},
     }
 
 
 def _classify_segment_type(effective_type: str) -> str:
     """
     text o:"a" patch text type text
-    text——text Notion text typetext
+    textâ€”â€”text Notion text typetext
     """
     if not effective_type:
         return SEG_CONTENT
@@ -849,7 +888,9 @@ def _extract_tool_confirmation(step: Any) -> dict[str, Any] | None:
         return None
 
     state = str(step.get("state") or "").strip().lower()
-    requested = bool(step.get("requestedConfirmation")) or state == "confirmation:requested"
+    requested = (
+        bool(step.get("requestedConfirmation")) or state == "confirmation:requested"
+    )
     confirmations = step.get("pendingConfirmations")
     if not requested or not isinstance(confirmations, list):
         return None
@@ -874,7 +915,9 @@ def _extract_tool_confirmation(step: Any) -> dict[str, Any] | None:
     if not step_id:
         return None
     if not urls:
-        args = tool_input.get("args") if isinstance(tool_input.get("args"), dict) else {}
+        args = (
+            tool_input.get("args") if isinstance(tool_input.get("args"), dict) else {}
+        )
         candidate = str(args.get("url") or "").strip()
         if candidate:
             urls.append(candidate)
@@ -903,7 +946,9 @@ def _extract_tool_confirmation(step: Any) -> dict[str, Any] | None:
         return None
 
     state = str(step.get("state") or "").strip().lower()
-    requested = bool(step.get("requestedConfirmation")) or state == "confirmation:requested"
+    requested = (
+        bool(step.get("requestedConfirmation")) or state == "confirmation:requested"
+    )
     confirmations = step.get("pendingConfirmations")
     if not requested or not isinstance(confirmations, list):
         return None
@@ -928,7 +973,9 @@ def _extract_tool_confirmation(step: Any) -> dict[str, Any] | None:
     if not step_id:
         return None
     if not urls:
-        args = tool_input.get("args") if isinstance(tool_input.get("args"), dict) else {}
+        args = (
+            tool_input.get("args") if isinstance(tool_input.get("args"), dict) else {}
+        )
         candidate = str(args.get("url") or "").strip()
         if candidate:
             urls.append(candidate)
@@ -944,13 +991,47 @@ def _extract_tool_confirmation(step: Any) -> dict[str, Any] | None:
     }
 
 
-def _stream_completion_event(patch: dict[str, Any]) -> dict[str, Any] | None:
-    """Return an explicit completion event for Notion's terminal metadata patch."""
-    patch_path = _normalize_path(patch)
-    if patch_path.rsplit("/", 1)[-1].lower() != "finishedat":
+_FINISHED_AT_PATCH_PATH_RE = re.compile(r"^/s/(?:\d+|-)/finishedAt$", re.IGNORECASE)
+_COMPLETION_ENVELOPE_TYPES = frozenset(
+    {"status", "stream-status", "stream_status", "completion", "complete"}
+)
+
+
+def _normalize_finished_at(value: Any) -> Any | None:
+    """Return a validated Notion completion timestamp or ``None``.
+
+    Notion has emitted both epoch values and ISO-8601 strings. Booleans,
+    containers, zero/negative epochs, and arbitrary strings are never valid
+    completion evidence.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value if math.isfinite(value) and value > 0 else None
+    if not isinstance(value, str):
         return None
 
-    finished_at = patch.get("v")
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if candidate.isdigit():
+        return candidate if int(candidate) > 0 else None
+
+    iso_candidate = candidate[:-1] + "+00:00" if candidate.endswith("Z") else candidate
+    try:
+        datetime.fromisoformat(iso_candidate)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _stream_completion_event(patch: dict[str, Any]) -> dict[str, Any] | None:
+    """Return completion only for a validated segment ``finishedAt`` patch."""
+    patch_path = _normalize_path(patch)
+    if not _FINISHED_AT_PATCH_PATH_RE.fullmatch(patch_path):
+        return None
+
+    finished_at = _normalize_finished_at(patch.get("v"))
     if finished_at is None:
         return None
 
@@ -960,21 +1041,26 @@ def _stream_completion_event(patch: dict[str, Any]) -> dict[str, Any] | None:
         "segment_index": _extract_segment_index(patch_path),
     }
 
-def _find_finished_at(value: Any) -> Any:
-    """Return a non-empty Notion completion timestamp from nested stream data."""
+
+def _envelope_completion_event(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Return completion from a recognized status envelope only.
+
+    This deliberately avoids recursive key-name search: content, tool output,
+    and unrelated metadata may legally contain a field named ``finishedAt``.
+    """
+    data_type = str(data.get("type", "") or "").strip().lower()
+    if data_type not in _COMPLETION_ENVELOPE_TYPES:
+        return None
+
+    candidates = [data.get("finishedAt"), data.get("finished_at")]
+    value = data.get("value")
     if isinstance(value, dict):
-        for key, nested in value.items():
-            if str(key).replace("_", "").lower() == "finishedat" and nested not in (None, "", False):
-                return nested
-        for nested in value.values():
-            found = _find_finished_at(nested)
-            if found not in (None, "", False):
-                return found
-    elif isinstance(value, list):
-        for nested in value:
-            found = _find_finished_at(nested)
-            if found not in (None, "", False):
-                return found
+        candidates.extend((value.get("finishedAt"), value.get("finished_at")))
+
+    for candidate in candidates:
+        finished_at = _normalize_finished_at(candidate)
+        if finished_at is not None:
+            return {"type": "stream_complete", "finished_at": finished_at}
     return None
 
 
@@ -985,7 +1071,7 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
       - {"type": "search",   "data": {...}}    text
       - {"type": "thinking", "text": "..."}    text
 
-    text——textSegment Registrytext
+    textâ€”â€”textSegment Registrytext
       Notion text o:"a" + path="/s/-" text patch text
       text v.type textagent-inference / agent-tool-result / text text
       text
@@ -1005,12 +1091,16 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
     # texto:"a" /s/- text pending dicttext
     # text o:"x" /s/N/... text o:"a" /s/N/... text N text
     # text pending text agent-inference/thinking text
-    segment_types: dict[int, str] = {}            # notion_index → SEG_THINKING / SEG_TOOL / SEG_CONTENT
-    value_types: dict[tuple[int, int], str] = {}  # (notion_index, val_index) → text
-    next_val_id: dict[int, int] = {}              # notion_index → text value block text
+    segment_types: dict[
+        int, str
+    ] = {}  # notion_index â†’ SEG_THINKING / SEG_TOOL / SEG_CONTENT
+    value_types: dict[tuple[int, int], str] = {}  # (notion_index, val_index) â†’ text
+    next_val_id: dict[int, int] = {}  # notion_index â†’ text value block text
 
     # pendingtexto:"a" /s/- text Notion text index text
-    _pending_segments: list[dict] = []  # [{seg_class, value_types_local, next_val_id_local}]
+    _pending_segments: list[
+        dict
+    ] = []  # [{seg_class, value_types_local, next_val_id_local}]
     completion_emitted = False
 
     for line in response.iter_lines(decode_unicode=True):
@@ -1024,20 +1114,24 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
         if any(token in lowered_line for token in LINE_DEBUG_KEYWORDS):
             logger.debug(
                 "NDJSON debug line",
-                extra={"request_info": {"event": "notion_ndjson_debug_line", "line": line[:4000]}},
+                extra={
+                    "request_info": {
+                        "event": "notion_ndjson_debug_line",
+                        "line": line[:4000],
+                    }
+                },
             )
 
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
             continue
-
-        finished_at = _find_finished_at(data)
-        if finished_at not in (None, "", False) and not completion_emitted:
-            completion_emitted = True
-            yield {"type": "stream_complete", "finished_at": finished_at}
-
         data_type = str(data.get("type", "") or "").lower()
+        if not completion_emitted:
+            completion_event = _envelope_completion_event(data)
+            if completion_event is not None:
+                completion_emitted = True
+                yield completion_event
 
         if data_type == "record-map":
             final_payload = _extract_final_content_from_record_map(data)
@@ -1049,9 +1143,15 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
             continue
 
         if data_type == "markdown-chat":
-            cleaned = _clean_extracted_text(_extract_markdown_chat_text(data.get("value")))
+            cleaned = _clean_extracted_text(
+                _extract_markdown_chat_text(data.get("value"))
+            )
             if cleaned:
-                yield {"type": "final_content", "text": cleaned, "source_type": "markdown-chat-event"}
+                yield {
+                    "type": "final_content",
+                    "text": cleaned,
+                    "source_type": "markdown-chat-event",
+                }
             continue
 
         if data_type != "patch":
@@ -1070,16 +1170,21 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
             patch_v = patch.get("v")
             patch_path = _normalize_path(patch)
             patch_seg = _extract_segment_index(patch_path)
-
-            completion_event = _stream_completion_event(patch)
-            if completion_event is not None:
-                yield completion_event
+            if not completion_emitted:
+                completion_event = _stream_completion_event(patch)
+                if completion_event is not None:
+                    completion_emitted = True
+                    yield completion_event
 
             markdown_chat_patch = _extract_markdown_chat_patch_text(patch)
             if markdown_chat_patch is not None:
                 event_type, event_text = markdown_chat_patch
                 if event_type == "final_content":
-                    yield {"type": event_type, "text": event_text, "source_type": "markdown-chat-patch"}
+                    yield {
+                        "type": event_type,
+                        "text": event_text,
+                        "source_type": "markdown-chat-patch",
+                    }
                 else:
                     yield {"type": event_type, "text": event_text}
                 continue
@@ -1093,7 +1198,7 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
 
             # ========== texto:"a" text ==========
             path_stripped = patch_path.strip("/")
-            is_new_toplevel_segment = (patch_op == "a" and path_stripped == "s/-")
+            is_new_toplevel_segment = patch_op == "a" and path_stripped == "s/-"
 
             # text patch text patch text
             patch_role: str | None = None
@@ -1115,18 +1220,22 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                                 local_next_val_id = idx + 1
                                 item_content = item.get("content")
                                 if isinstance(item_content, str) and item_content:
-                                    initial_value_events.append((item_class, item_content))
+                                    initial_value_events.append(
+                                        (item_class, item_content)
+                                    )
 
                 if 0 not in local_value_types:
                     local_value_types[0] = seg_class
                     local_next_val_id = max(local_next_val_id, 1)
 
                 # text pending text o:"x" /s/N text index
-                _pending_segments.append({
-                    "seg_class": seg_class,
-                    "value_types": local_value_types,
-                    "next_val_id": local_next_val_id,
-                })
+                _pending_segments.append(
+                    {
+                        "seg_class": seg_class,
+                        "value_types": local_value_types,
+                        "next_val_id": local_next_val_id,
+                    }
+                )
 
                 # text patch text value[0] text
                 patch_role = local_value_types.get(0, seg_class)
@@ -1137,7 +1246,9 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                 # The step dict (patch_v) carries `model` which reveals the
                 # actual responder, especially for silent model swaps.
                 if isinstance(patch_v, dict) and patch_v.get("model"):
-                    _seg_meta = _extract_model_metadata_from_step(patch_v, message_id="")
+                    _seg_meta = _extract_model_metadata_from_step(
+                        patch_v, message_id=""
+                    )
                     if isinstance(_seg_meta, dict) and _seg_meta:
                         yield {"type": "model_metadata", "data": _seg_meta}
 
@@ -1167,7 +1278,14 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                 # o:"a" text path text /s/-text /s/2/value/-text
                 # text pending text
                 if patch_seg not in segment_types and _pending_segments:
-                    _bind_pending_segment(patch_seg, _pending_segments, segment_types, value_types, next_val_id, patch_path)
+                    _bind_pending_segment(
+                        patch_seg,
+                        _pending_segments,
+                        segment_types,
+                        value_types,
+                        next_val_id,
+                        patch_path,
+                    )
 
                 if patch_seg not in segment_types:
                     segment_types[patch_seg] = _classify_segment_type(effective_type)
@@ -1175,7 +1293,11 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                 # text /s/N/value/<idx|-> text
                 value_add_idx = _extract_value_add_index(patch_path)
                 if value_add_idx is not None:
-                    vid = next_val_id.get(patch_seg, 0) if value_add_idx < 0 else value_add_idx
+                    vid = (
+                        next_val_id.get(patch_seg, 0)
+                        if value_add_idx < 0
+                        else value_add_idx
+                    )
                     next_val_id[patch_seg] = max(next_val_id.get(patch_seg, 0), vid + 1)
                     val_class = _classify_segment_type(effective_type)
                     value_types[(patch_seg, vid)] = val_class
@@ -1184,8 +1306,19 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                     in_primary_attr[0] = False
 
             # ========== text pending texto:"x" text ==========
-            if patch_seg is not None and patch_seg not in segment_types and _pending_segments:
-                _bind_pending_segment(patch_seg, _pending_segments, segment_types, value_types, next_val_id, patch_path)
+            if (
+                patch_seg is not None
+                and patch_seg not in segment_types
+                and _pending_segments
+            ):
+                _bind_pending_segment(
+                    patch_seg,
+                    _pending_segments,
+                    segment_types,
+                    value_types,
+                    next_val_id,
+                    patch_path,
+                )
 
             # ========== text patch text ==========
             if patch_role is not None:
@@ -1194,7 +1327,11 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
             else:
                 # o:"x" text value block text segment text
                 val_idx = _extract_value_index(patch_path)
-                if val_idx is not None and patch_seg is not None and (patch_seg, val_idx) in value_types:
+                if (
+                    val_idx is not None
+                    and patch_seg is not None
+                    and (patch_seg, val_idx) in value_types
+                ):
                     seg_owner = value_types[(patch_seg, val_idx)]
                     logger.debug(
                         "Patch role from value_types",
@@ -1220,7 +1357,10 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                                 "patch_seg": patch_seg,
                                 "val_idx": val_idx,
                                 "seg_owner": seg_owner,
-                                "value_types_missing": (patch_seg, val_idx) not in value_types if val_idx is not None else None,
+                                "value_types_missing": (patch_seg, val_idx)
+                                not in value_types
+                                if val_idx is not None
+                                else None,
                                 "patch_path": patch_path,
                             }
                         },
@@ -1250,8 +1390,17 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
             # ========== text ==========
             # /content replace patch can finalize broken lang attributes.
             # Reset state here to avoid swallowing following normal text.
-            if patch_op == "p" and "/content" in patch_path and isinstance(patch_v, str):
-                if ">" in patch_v or "\n" in patch_v or "\r" in patch_v or not patch_v.strip():
+            if (
+                patch_op == "p"
+                and "/content" in patch_path
+                and isinstance(patch_v, str)
+            ):
+                if (
+                    ">" in patch_v
+                    or "\n" in patch_v
+                    or "\r" in patch_v
+                    or not patch_v.strip()
+                ):
                     in_lang_tag[0] = False
                     in_primary_attr[0] = False
 
@@ -1284,7 +1433,9 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
 
             # ========== text JSON text ==========
             stripped = cleaned.strip()
-            if stripped and (search_json_depth > 0 or _looks_like_search_json_fragment(stripped)):
+            if stripped and (
+                search_json_depth > 0 or _looks_like_search_json_fragment(stripped)
+            ):
                 search_json_buffer += cleaned
                 search_json_depth += stripped.count("{") - stripped.count("}")
                 if search_json_depth <= 0:
@@ -1296,7 +1447,9 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                 continue
 
             # ========== Tool Call JSON text ==========
-            if stripped and (tool_json_depth > 0 or _looks_like_tool_call_json_fragment(stripped)):
+            if stripped and (
+                tool_json_depth > 0 or _looks_like_tool_call_json_fragment(stripped)
+            ):
                 tool_json_buffer += cleaned
                 tool_json_depth += stripped.count("{") - stripped.count("}")
                 if tool_json_depth <= 0:
@@ -1318,7 +1471,3 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                 yield {"type": "thinking", "text": cleaned}
             else:
                 yield {"type": "content", "text": cleaned}
-
-
-
-

@@ -1,0 +1,47 @@
+services:
+  notion2api-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: notion2api-sandbox:${SANDBOX_IMAGE_TAG:-local}
+    container_name: notion2api_sandbox
+    restart: "no"
+    ports:
+      - "127.0.0.1:${SANDBOX_PORT:-18120}:8000"
+    environment:
+      NOTION_ACCOUNTS_FILE: /run/secrets/notion_accounts
+      NOTION_SANDBOX_REQUIRE_EXPLICIT_REMOTE: "true"
+      API_KEY_FILE: /run/secrets/sandbox_api_key
+      DB_PATH: /app/data/conversations.db
+      PYTHONUNBUFFERED: "1"
+      TZ: America/Chicago
+    secrets:
+      - notion_accounts
+      - sandbox_api_key
+    volumes:
+      - ${SANDBOX_DATA_DIR:?SANDBOX_DATA_DIR is required}:/app/data
+      - ${SANDBOX_LOG_DIR:?SANDBOX_LOG_DIR is required}:/app/logs
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+secrets:
+  notion_accounts:
+    file: ${SANDBOX_ACCOUNTS_FILE:?SANDBOX_ACCOUNTS_FILE is required}
+  sandbox_api_key:
+    file: ${SANDBOX_API_KEY_FILE:?SANDBOX_API_KEY_FILE is required}

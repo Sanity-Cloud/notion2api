@@ -3,7 +3,10 @@ import json
 import pytest
 
 from app import stream_parser_safe
-from app.api.chat import _create_lite_stream_generator, _create_standard_stream_generator
+from app.api.chat import (
+    _create_lite_stream_generator,
+    _create_standard_stream_generator,
+)
 from app.stream_parser import parse_stream
 
 
@@ -19,7 +22,11 @@ class DummyResponse:
 def test_buffered_thinking_is_not_promoted_after_final_content(monkeypatch):
     def fake_parse_stream(_response):
         yield {"type": "thinking", "text": "The user is asking for a greeting."}
-        yield {"type": "final_content", "text": "Hello.", "source_type": "agent-inference"}
+        yield {
+            "type": "final_content",
+            "text": "Hello.",
+            "source_type": "agent-inference",
+        }
 
     monkeypatch.setattr(stream_parser_safe, "_parse_stream", fake_parse_stream)
 
@@ -40,20 +47,24 @@ def test_buffered_thinking_fallback_remains_for_legacy_answer_segments(monkeypat
 
 
 def test_mixed_initial_value_array_keeps_thinking_out_of_visible_content():
-    line = json.dumps({
-        "type": "patch",
-        "v": [{
-            "o": "a",
-            "p": "/s/-",
-            "v": {
-                "type": "agent-inference",
-                "value": [
-                    {"type": "thinking", "content": "Private reasoning."},
-                    {"type": "text", "content": "Visible answer."},
-                ],
-            },
-        }],
-    })
+    line = json.dumps(
+        {
+            "type": "patch",
+            "v": [
+                {
+                    "o": "a",
+                    "p": "/s/-",
+                    "v": {
+                        "type": "agent-inference",
+                        "value": [
+                            {"type": "thinking", "content": "Private reasoning."},
+                            {"type": "text", "content": "Visible answer."},
+                        ],
+                    },
+                }
+            ],
+        }
+    )
 
     assert list(parse_stream(DummyResponse([line]))) == [
         {"type": "thinking", "text": "Private reasoning."},
@@ -65,15 +76,19 @@ def test_mixed_initial_value_array_keeps_thinking_out_of_visible_content():
 
 
 def test_parser_emits_completion_only_for_finished_at_patch():
-    response = DummyResponse([
-        json.dumps({
-            "type": "patch",
-            "v": [
-                {"o": "x", "p": "/s/1/value/0/content", "v": "answer"},
-                {"o": "a", "p": "/s/1/finishedAt", "v": 1782249965672},
-            ],
-        })
-    ])
+    response = DummyResponse(
+        [
+            json.dumps(
+                {
+                    "type": "patch",
+                    "v": [
+                        {"o": "x", "p": "/s/1/value/0/content", "v": "answer"},
+                        {"o": "a", "p": "/s/1/finishedAt", "v": 1782249965672},
+                    ],
+                }
+            )
+        ]
+    )
 
     events = list(parse_stream(response))
 
@@ -123,14 +138,16 @@ def test_stream_parser_safe_yields_unique_thinking(monkeypatch):
     """Verify stream_parser_safe appends thinking content if it is not duplicate of content."""
     mock_items = [
         {"type": "thinking", "text": "This is Kimi's actual detailed answer."},
-        {"type": "content", "text": "[1] Sources."}
+        {"type": "content", "text": "[1] Sources."},
     ]
-    monkeypatch.setattr(stream_parser_safe, "_parse_stream", lambda res: iter(mock_items))
+    monkeypatch.setattr(
+        stream_parser_safe, "_parse_stream", lambda res: iter(mock_items)
+    )
     res = list(stream_parser_safe.parse_stream(DummyResponse()))
-    
+
     event_types = [item["type"] for item in res]
     assert "content" in event_types
-    
+
     texts = [item.get("text", "") for item in res if item["type"] == "content"]
     assert "[1] Sources." in texts
     assert "\n\nThis is Kimi's actual detailed answer." in texts
@@ -140,11 +157,80 @@ def test_stream_parser_safe_suppresses_duplicate_thinking(monkeypatch):
     """Verify stream_parser_safe suppresses thinking if it is identical to yielded content."""
     mock_items = [
         {"type": "thinking", "text": "This is identical answer."},
-        {"type": "content", "text": "This is identical answer."}
+        {"type": "content", "text": "This is identical answer."},
     ]
-    monkeypatch.setattr(stream_parser_safe, "_parse_stream", lambda res: iter(mock_items))
+    monkeypatch.setattr(
+        stream_parser_safe, "_parse_stream", lambda res: iter(mock_items)
+    )
     res = list(stream_parser_safe.parse_stream(DummyResponse()))
-    
+
     texts = [item.get("text", "") for item in res if item["type"] == "content"]
     assert len(texts) == 1
     assert texts[0] == "This is identical answer."
+
+
+def test_parser_rejects_unscoped_nested_finished_at():
+    line = json.dumps(
+        {
+            "type": "content",
+            "value": {"metadata": {"finishedAt": "2026-07-27T12:00:00Z"}},
+        }
+    )
+    assert not any(
+        event.get("type") == "stream_complete"
+        for event in parse_stream(DummyResponse([line]))
+    )
+
+
+def test_parser_emits_only_one_valid_completion_across_envelope_and_patch():
+    lines = [
+        json.dumps(
+            {
+                "type": "status",
+                "value": {"finishedAt": "2026-07-27T12:00:00Z"},
+            }
+        ),
+        json.dumps(
+            {
+                "type": "patch",
+                "v": [{"o": "a", "p": "/s/1/finishedAt", "v": 1785153600000}],
+            }
+        ),
+    ]
+    completions = [
+        event
+        for event in parse_stream(DummyResponse(lines))
+        if event.get("type") == "stream_complete"
+    ]
+    assert completions == [
+        {"type": "stream_complete", "finished_at": "2026-07-27T12:00:00Z"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "invalid_value", [None, False, True, 0, -1, "", "pending", [], {}]
+)
+def test_parser_rejects_invalid_finished_at_values(invalid_value):
+    line = json.dumps(
+        {
+            "type": "patch",
+            "v": [{"o": "a", "p": "/s/1/finishedAt", "v": invalid_value}],
+        }
+    )
+    assert not any(
+        event.get("type") == "stream_complete"
+        for event in parse_stream(DummyResponse([line]))
+    )
+
+
+def test_parser_rejects_finished_at_patch_outside_segment_path():
+    line = json.dumps(
+        {
+            "type": "patch",
+            "v": [{"o": "a", "p": "/metadata/finishedAt", "v": 1785153600000}],
+        }
+    )
+    assert not any(
+        event.get("type") == "stream_complete"
+        for event in parse_stream(DummyResponse([line]))
+    )
