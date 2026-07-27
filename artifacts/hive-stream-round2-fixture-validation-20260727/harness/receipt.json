@@ -1,0 +1,30 @@
+{
+  "receipt_schema_version": "hive-stream-round2-harness-receipt/1",
+  "mission_id": "hive-stream-round2-fixture-validation-20260727",
+  "work_unit": "WU-R2-HARNESS",
+  "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+  "branch": "validate/stream-round2-fixtures-20260727",
+  "commit": "PENDING",
+  "scope": "deterministic offline harness only; full fixture matrix not executed",
+  "files": [
+    "tests/stream_round2/harness.py",
+    "tests/stream_round2/fixture_schema.json",
+    "tests/stream_round2/test_harness.py",
+    "artifacts/hive-stream-round2-fixture-validation-20260727/harness/fixture_schema.json",
+    "artifacts/hive-stream-round2-fixture-validation-20260727/harness/analysis.md"
+  ],
+  "checks": [
+    {"command": "python -m pytest tests/stream_round2/test_harness.py -q", "result": "9 passed"},
+    {"command": "python -m pytest tests/test_stream_protocol.py tests/test_stream_integrity_guard.py tests/test_stream_parser_safe.py -q", "result": "45 passed"},
+    {"command": "python -m ruff check tests/stream_round2", "result": "passed"},
+    {"command": "python -m compileall -q tests/stream_round2", "result": "passed"},
+    {"command": "git diff --check && git diff --cached --check", "result": "passed"},
+    {"command": "UTF-8 strict source encoding check excluding __pycache__", "result": "passed"}
+  ],
+  "risks": [
+    "The full fixture matrix and HTTP smoke lane were intentionally not run.",
+    "Guarded-stream fixtures require an isolated dummy account environment to import the local application; no credentials or provider calls were used.",
+    "Existing untracked scripts/round2_stream_fixture_harness.py is outside this work unit and excluded from the commit."
+  ],
+  "next_dependencies": ["WU-R2-CONSUMER", "WU-R2-ENCODING", "WU-R2-FRAMING", "WU-R2-MATRIX", "WU-R2-HTTP-SMOKE"]
+}

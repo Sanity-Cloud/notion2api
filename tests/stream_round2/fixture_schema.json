@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hive-stream-round2-fixture-result/1",
+  "type": "object",
+  "required": ["schema_version", "fixture_id", "repetition", "base_commit", "parser_version", "physical_fragments", "raw_bytes", "logical_chunks", "expected_outcome", "actual_outcome", "actual_code", "response_sha256", "raw_sha256", "semantic_counts", "transport_counts", "terminal", "done_presence", "source_accounting", "client_interpretation", "deterministic_replay"],
+  "properties": {
+    "schema_version": {"const": "hive-stream-round2-fixture-result/1"},
+    "fixture_id": {"type": "string"}, "repetition": {"type": "integer", "minimum": 1},
+    "base_commit": {"type": "string"}, "parser_version": {"type": "string"},
+    "physical_fragments": {"type": "array"}, "raw_bytes": {"type": "integer", "minimum": 0},
+    "logical_chunks": {"type": "array"}, "expected_outcome": {"type": "string"},
+    "actual_outcome": {"type": "string"}, "actual_code": {"type": "string"},
+    "response_sha256": {"type": "string"}, "raw_sha256": {"type": "string"},
+    "semantic_counts": {"type": "object"}, "transport_counts": {"type": "object"},
+    "terminal": {"type": "object"}, "done_presence": {"type": "boolean"},
+    "source_accounting": {"type": "object"}, "client_interpretation": {"type": "string"},
+    "deterministic_replay": {"enum": ["pending", "reproducible", "replay_divergence"]}
+  }
+}
