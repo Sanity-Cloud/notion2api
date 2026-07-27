@@ -1,0 +1,256 @@
+{
+  "authoritative_correction_commit": "7de68ae",
+  "baseline": {
+    "behavioral_differences": [],
+    "records": 96,
+    "sha256": "a39b055a3caa8bf4356f060b1305c3160cb2f1945d1a50b5f81ccd9ba4183d52"
+  },
+  "boundary_stress": {
+    "all_closed_once": true,
+    "max_pulls": 4,
+    "records": [
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-finite-9",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "finite",
+        "threshold": 9
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-finite-10",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "finite",
+        "threshold": 10
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-finite-11",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "finite",
+        "threshold": 11
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-finite-2",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "stream_missing_finish",
+        "pulls": 3,
+        "source": "finite",
+        "threshold": 2
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-finite-3",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "stream_missing_finish",
+        "pulls": 4,
+        "source": "finite",
+        "threshold": 3
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-finite-4",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 4,
+        "source": "finite",
+        "threshold": 4
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-infinite-9",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "infinite",
+        "threshold": 9
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-infinite-10",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "infinite",
+        "threshold": 10
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-infinite-11",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "infinite",
+        "threshold": 11
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-infinite-2",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 4,
+        "source": "infinite",
+        "threshold": 2
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-infinite-3",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 4,
+        "source": "infinite",
+        "threshold": 3
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-infinite-4",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 4,
+        "source": "infinite",
+        "threshold": 4
+      }
+    ],
+    "runs": 12
+  },
+  "checks": [
+    {
+      "command": "python -m pytest tests/stream_round2/test_fixture_harness.py -q",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "stdout_tail": ".........                                                                [100%]\n9 passed in 0.46s\n"
+    },
+    {
+      "command": "ruff check tests/stream_round2/harness.py tests/stream_round2/test_fixture_harness.py",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "stdout_tail": "All checks passed!\n"
+    },
+    {
+      "command": "python -m compileall -q tests/stream_round2/harness.py",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "stdout_tail": ""
+    },
+    {
+      "command": "python -c \"import json,pathlib; [json.loads(p.read_text(encoding='utf-8')) for p in pathlib.Path('artifacts/hive-stream-round2-fixture-validation-20260727/results').glob('*.json')]\"",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "stdout_tail": ""
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "stdout_tail": ""
+    }
+  ],
+  "checks_passed": true,
+  "close_failure": {
+    "all_cleanup_failures": true,
+    "all_close_error_isolated": true,
+    "all_underlying_success": true,
+    "deterministic": true,
+    "pull_counts": [
+      4
+    ],
+    "runs": 10
+  },
+  "independent_validation": {
+    "baseline_comparison": {
+      "baseline_records": 96,
+      "behavior_differences": [],
+      "expanded_compared_records": 96,
+      "pass": true
+    },
+    "provenance": {
+      "base_commit_alias": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+      "harness_content_commit": "de2eff0c8192c2ae4242f57da8b883dc34a6df1f",
+      "harness_gate_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+      "lane_head": "7de68aeef6b587437814cce9fcf90fb0edc31edb",
+      "subject_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+    },
+    "raw_hash_validation": {
+      "mismatches": [],
+      "pass": true,
+      "records": 320
+    },
+    "response_hash_validation": {
+      "mismatches": [],
+      "pass": true,
+      "records": 320
+    }
+  },
+  "issues": {
+    "baseline_behavior_differences": [],
+    "classification_drift": [],
+    "double_close": [],
+    "false_success": [],
+    "missing_cleanup": [],
+    "raw_hash_mismatches": [],
+    "replay_divergence": [],
+    "response_hash_mismatches": [],
+    "unbounded_pulls": []
+  },
+  "matrix": {
+    "fixtures": 32,
+    "json": "fixture-matrix.json",
+    "jsonl": "fixture-matrix.jsonl",
+    "records": 320,
+    "repetitions": 10,
+    "summary": "summary.json"
+  },
+  "prohibited_actions": {
+    "deploy": false,
+    "merge": false,
+    "network": false,
+    "providers": false,
+    "services": false,
+    "smoke": false
+  },
+  "provenance": {
+    "base_commit_alias": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "harness_content_commit": "de2eff0c8192c2ae4242f57da8b883dc34a6df1f",
+    "harness_gate_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+    "lane_head": "7de68aeef6b587437814cce9fcf90fb0edc31edb",
+    "subject_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+  },
+  "recommendation": "do_not_proceed_product_gate_failed_smoke_held",
+  "run_id": "hive-stream-round2-fixture-validation-20260727",
+  "status": "COMPLETED",
+  "supersedes_stop_record_commit": "25eee7c",
+  "timestamp_utc": "2026-07-27T18:16:44.174763+00:00",
+  "work_unit": "WU-R2-MATRIX",
+  "wu_completion": "COMPLETED after durable expanded results and validation"
+}
