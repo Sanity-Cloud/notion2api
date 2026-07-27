@@ -1,0 +1,186 @@
+{
+  "authorization": {
+    "controlled_pilot_authorized": false,
+    "controlled_pilot_eligible": true,
+    "deploy_authorized": false,
+    "merge_authorized": false
+  },
+  "blockers": [],
+  "candidate": {
+    "branch": "integrate/r2-stream-contract-20260727",
+    "integration_tested_head": "0dd285a8bb7fda1fa15e0a760703fd549bc83992",
+    "review_basis_head": "7849f21f4f8593121d8eb8fda930be173ca36be2",
+    "worktree": "X:\\Code\\.worktrees\\notion2api-r2-integration-20260727"
+  },
+  "decision": "PASS_WITH_OPEN_RISKS",
+  "evidence": {
+    "browser_receipt": {
+      "commit": "23fb895b1778145446e91edcf82117f73f540c90",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/consumer-browser/receipt.md",
+      "sha256": "8dbe22c02db910d57a66fab3607bb9f8c44c166f85cb81c19de9233958938d56"
+    },
+    "cleanup_matrix": {
+      "commit": "c2f204a62ad228c4063fb7547be3c21822d0a45b",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/cleanup-remediation/summary.json",
+      "sha256": "31624c23a80f6e4c5d393c77ac73f68ae890b1a888e257d79ea3e8c201ef981f"
+    },
+    "diagnostic_matrix": {
+      "commit": "0dd285a8bb7fda1fa15e0a760703fd549bc83992",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/results/summary.json",
+      "sha256": "694aaf418e48a3dd2ca3476fbd5bac811b9df0477b9be78b013c548a2ecdf2be"
+    },
+    "integration_validation": {
+      "commit": "7849f21f4f8593121d8eb8fda930be173ca36be2",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/integration-validation/receipt.json",
+      "sha256": "c78ad4bfcfe4d5be0c7a4995ab19187d643d5dbd27bc498c58d9fcd8bcd65d06"
+    },
+    "isolated_smoke": {
+      "commit": "5484a460824473cb5e73450d82d463827ae105d4",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/smoke/receipt.json",
+      "sha256": "ac9d34405a1c2356084c40d197d040fbf752ea1c0cc392773983e4c60d7eec7f"
+    },
+    "mcp_receipt": {
+      "commit": "999c251aebf44884208faadf91efe3f3c2457e37",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/consumer-mcp/receipt.md",
+      "sha256": "748b87d1a35537602e0da462add899207edcb61ceab3ad65301b7e9722e097cf"
+    }
+  },
+  "evidence_gap_resolution": [
+    {
+      "gap": "320 diagnostic matrix was not on the integration branch",
+      "resolution": "Committed the complete matrix and receipts as 0dd285a",
+      "verified": true
+    },
+    {
+      "gap": "182 integration-test count lacked a committed receipt",
+      "resolution": "Committed raw outputs and receipt as 7849f21",
+      "verified": true
+    }
+  ],
+  "hygiene": {
+    "bundled_terminal_helper_definitions": 1,
+    "diff_check": "passed",
+    "modular_terminal_helper_definitions": 1,
+    "old_mcp_synthesized_stop_branch": false,
+    "stale_xfails": 0,
+    "utf8_no_bom": true
+  },
+  "next_authorized_gate": "A separately authorized controlled pilot using the isolated candidate, bounded harmless workload, explicit rollback, and retained receipts. Merge and deployment remain prohibited.",
+  "open_risks": [
+    "done-before-finish is classified by post-terminal precedence; the explicit terminal-order branch is unreachable for that transition",
+    "multiline SSE and physical-byte fragment framing remain below the current logical-line adapter contract",
+    "the production guard Iterable[str] boundary does not establish raw-byte reassembly semantics",
+    "no real browser-engine smoke and no provider-backed smoke were performed",
+    "terminal logic remains duplicated across modular, bundled, and embed consumers, leaving future drift risk despite executable/source-contract tests"
+  ],
+  "preserved_dissent": [
+    {
+      "position": "DONE-before-finish may be called terminal-order-invalid by a broader protocol interpretation; current implementation treats later content/finish as post-terminal",
+      "topic": "terminal precedence"
+    },
+    {
+      "position": "multiline SSE and physical fragments are valid concerns at lower transport layers but are outside the current logical-line adapter",
+      "topic": "framing layer"
+    },
+    {
+      "position": "loopback Node parsing is not equivalent to a real browser engine or provider path",
+      "topic": "pilot evidence"
+    }
+  ],
+  "provenance": {
+    "browser_consumer": [
+      "d36bf78a4e32aff1cb169d667e570979e9bedc5a",
+      "c20e772a7d60da436922ae2160c71c3307dc6a3c",
+      "23fb895b1778145446e91edcf82117f73f540c90"
+    ],
+    "cleanup_product": [
+      "c2f204a62ad228c4063fb7547be3c21822d0a45b",
+      "154e41727752d111e964a1d9216143d536a52bee"
+    ],
+    "consumer_contract_transition": "849b17c9309436e4c538e5ffb5167eae8d65c093",
+    "diagnostic_matrix_attachment": "0dd285a8bb7fda1fa15e0a760703fd549bc83992",
+    "harness_content": "de2eff0c8192c2ae4242f57da8b883dc34a6df1f",
+    "harness_gate": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+    "integration_validation_receipt": "7849f21f4f8593121d8eb8fda930be173ca36be2",
+    "mcp_consumer": "999c251aebf44884208faadf91efe3f3c2457e37",
+    "qualified_fields": [
+      "cleanup-remediation provenance subject_commit remains the Round 1 product subject and must be read with cleanup product commits",
+      "the original consumer receipt is historical defect evidence, superseded by MCP and browser remediation receipts",
+      "the 320-run matrix is pre-cleanup diagnostic evidence and retains product_gate_pass=false",
+      "smoke gate PASS is not merge or deployment authorization"
+    ],
+    "round1_subject": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "smoke": "5484a460824473cb5e73450d82d463827ae105d4"
+  },
+  "review": "independent Round 2 fan-in with post-review evidence resolution",
+  "schema_version": "round2-independent-review/2",
+  "timestamp_utc": "2026-07-27T18:53:13.657853+00:00",
+  "verified_contracts": {
+    "browser_consumers": {
+      "abort_error_preserved": true,
+      "duplicate_helper_definitions": false,
+      "partial_failure_committed_to_history": false,
+      "same_terminal_contract": true,
+      "status": "PASS",
+      "surfaces": [
+        "modular",
+        "bundled-index",
+        "embed"
+      ]
+    },
+    "cleanup": {
+      "cancellation_propagates": true,
+      "classification": "stream_source_cleanup_failed",
+      "cleanup_exactly_once": true,
+      "code": "ERR_STREAM_SOURCE_CLEANUP",
+      "done_emitted": false,
+      "primary_error_precedence": true,
+      "status": "PASS",
+      "visible_buffer_released": false
+    },
+    "isolated_http_smoke": {
+      "actual_guard": true,
+      "actual_http_sse": true,
+      "actual_mcp_consumer": true,
+      "actual_modular_browser_parser": true,
+      "existing_services_touched": false,
+      "provider_calls": false,
+      "scope": "127.0.0.1 ephemeral port",
+      "server_stopped": true,
+      "status": "PASS"
+    },
+    "mcp_consumer": {
+      "partial_success_projection": false,
+      "post_done_processing": false,
+      "status": "PASS",
+      "structured_errors_fail": true,
+      "success_requires": "exactly one supported finish reason followed by [DONE]",
+      "synthesized_stop": false
+    }
+  },
+  "verified_counts": {
+    "browser_real_parser": "passed",
+    "cleanup_remediation_matrix": {
+      "fail": 0,
+      "false_success": 0,
+      "handled_cleanup_failures": 3,
+      "needs_adjudication": 9,
+      "pass": 87,
+      "product_gate_pass": true,
+      "records": 96,
+      "unhandled_cleanup_failures": 0
+    },
+    "diagnostic_matrix": {
+      "context": "pre-cleanup diagnostic; ten failures are deliberate cleanup failures",
+      "fail": 10,
+      "fixtures": 32,
+      "needs_adjudication": 30,
+      "nondeterministic": 0,
+      "pass": 280,
+      "records": 320,
+      "repetitions": 10
+    },
+    "integration_python_tests": 182,
+    "isolated_http_cases": 3
+  }
+}

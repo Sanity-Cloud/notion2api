@@ -1,0 +1,150 @@
+{
+  "candidate": {
+    "branch": "integrate/r2-stream-contract-20260727",
+    "review_basis_head": "7849f21f4f8593121d8eb8fda930be173ca36be2"
+  },
+  "counts": {
+    "browser_real_parser": "passed",
+    "cleanup_remediation_matrix": {
+      "fail": 0,
+      "false_success": 0,
+      "handled_cleanup_failures": 3,
+      "needs_adjudication": 9,
+      "pass": 87,
+      "product_gate_pass": true,
+      "records": 96,
+      "unhandled_cleanup_failures": 0
+    },
+    "diagnostic_matrix": {
+      "context": "pre-cleanup diagnostic; ten failures are deliberate cleanup failures",
+      "fail": 10,
+      "fixtures": 32,
+      "needs_adjudication": 30,
+      "nondeterministic": 0,
+      "pass": 280,
+      "records": 320,
+      "repetitions": 10
+    },
+    "integration_python_tests": 182,
+    "isolated_http_cases": 3
+  },
+  "decision": "PASS_WITH_OPEN_RISKS",
+  "decisions": [
+    "Accept cleanup, MCP, and browser remediations as the integrated candidate",
+    "Accept the 320-run diagnostic matrix as pre-remediation evidence, not current product-gate state",
+    "Accept the 96-run cleanup matrix and 182-test integration receipt as current validation evidence",
+    "Advance only to a separately authorized controlled pilot; do not merge or deploy"
+  ],
+  "dissent": [
+    {
+      "position": "DONE-before-finish may be called terminal-order-invalid by a broader protocol interpretation; current implementation treats later content/finish as post-terminal",
+      "topic": "terminal precedence"
+    },
+    {
+      "position": "multiline SSE and physical fragments are valid concerns at lower transport layers but are outside the current logical-line adapter",
+      "topic": "framing layer"
+    },
+    {
+      "position": "loopback Node parsing is not equivalent to a real browser engine or provider path",
+      "topic": "pilot evidence"
+    }
+  ],
+  "evidence": {
+    "browser_receipt": {
+      "commit": "23fb895b1778145446e91edcf82117f73f540c90",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/consumer-browser/receipt.md",
+      "sha256": "8dbe22c02db910d57a66fab3607bb9f8c44c166f85cb81c19de9233958938d56"
+    },
+    "cleanup_matrix": {
+      "commit": "c2f204a62ad228c4063fb7547be3c21822d0a45b",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/cleanup-remediation/summary.json",
+      "sha256": "31624c23a80f6e4c5d393c77ac73f68ae890b1a888e257d79ea3e8c201ef981f"
+    },
+    "diagnostic_matrix": {
+      "commit": "0dd285a8bb7fda1fa15e0a760703fd549bc83992",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/results/summary.json",
+      "sha256": "694aaf418e48a3dd2ca3476fbd5bac811b9df0477b9be78b013c548a2ecdf2be"
+    },
+    "integration_validation": {
+      "commit": "7849f21f4f8593121d8eb8fda930be173ca36be2",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/integration-validation/receipt.json",
+      "sha256": "c78ad4bfcfe4d5be0c7a4995ab19187d643d5dbd27bc498c58d9fcd8bcd65d06"
+    },
+    "isolated_smoke": {
+      "commit": "5484a460824473cb5e73450d82d463827ae105d4",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/smoke/receipt.json",
+      "sha256": "ac9d34405a1c2356084c40d197d040fbf752ea1c0cc392773983e4c60d7eec7f"
+    },
+    "mcp_receipt": {
+      "commit": "999c251aebf44884208faadf91efe3f3c2457e37",
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/consumer-mcp/receipt.md",
+      "sha256": "748b87d1a35537602e0da462add899207edcb61ceab3ad65301b7e9722e097cf"
+    }
+  },
+  "gates": {
+    "browser_consumers": true,
+    "cleanup_product": true,
+    "controlled_pilot_authorized": false,
+    "controlled_pilot_eligible": true,
+    "deploy_authorized": false,
+    "diagnostic_matrix": true,
+    "harness": true,
+    "independent_review": true,
+    "integration_validation": true,
+    "isolated_http_smoke": true,
+    "mcp_consumer": true,
+    "merge_authorized": false
+  },
+  "lifecycle_stage": "Validate",
+  "mission_id": "hive-stream-round2-fixture-validation-20260727",
+  "next_gate": {
+    "conditions": [
+      "isolated candidate service",
+      "bounded harmless workload",
+      "observability and structured receipts",
+      "explicit rollback",
+      "no implicit merge or deployment"
+    ],
+    "name": "Controlled Pilot",
+    "requires_explicit_authorization": true
+  },
+  "outcomes": [
+    "false-success cleanup path closed",
+    "MCP and browser consumers require explicit terminal success",
+    "isolated end-to-end loopback smoke passed",
+    "evidence gaps resolved and provenance qualified"
+  ],
+  "process_self_evaluation": {
+    "corrections": [
+      "decomposed by contract boundary",
+      "cancelled stale jobs before further polling",
+      "reconciled concurrent commits before acceptance",
+      "committed raw test and matrix evidence to close review gaps"
+    ],
+    "effective": [
+      "parallel diagnostic lanes with disjoint worktrees",
+      "bounded MCP remediation delegation",
+      "single consolidated validation commands",
+      "artifact-first checkpoints and cancellation of nonproductive jobs"
+    ],
+    "inefficient": [
+      "initial broad consumer and cleanup jobs produced no durable output",
+      "browser delegation created concurrent duplicate helper work",
+      "review job missed artifact checkpoints before late write"
+    ]
+  },
+  "review_artifacts": {
+    "final-review.json": "14820ef741483dc60ddf8f1a2532548d31051c26349b92c919ba53c26eb9d4da",
+    "final-review.md": "a00b296cf5ba327cff327363b9a0681a8dc69509507f00d06a8b1f561a286c50"
+  },
+  "risks": [
+    "done-before-finish is classified by post-terminal precedence; the explicit terminal-order branch is unreachable for that transition",
+    "multiline SSE and physical-byte fragment framing remain below the current logical-line adapter contract",
+    "the production guard Iterable[str] boundary does not establish raw-byte reassembly semantics",
+    "no real browser-engine smoke and no provider-backed smoke were performed",
+    "terminal logic remains duplicated across modular, bundled, and embed consumers, leaving future drift risk despite executable/source-contract tests"
+  ],
+  "schema_version": "round2-fan-in/1",
+  "status": "COMPLETED_WITH_OPEN_RISKS",
+  "timestamp_utc": "2026-07-27T18:53:14.172287+00:00"
+}
