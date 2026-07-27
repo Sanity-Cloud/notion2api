@@ -1362,15 +1362,15 @@ window.NotionAI.Chat.Streaming = {
   },
   async processStream(response,aiWrapper,searchState,thinkingText,fullAiReply,model) {
     const reader=response.body.getReader(),decoder=new TextDecoder('utf-8');let buf='';
-    const modelState={metadata:null,displayName:null,requestedModel:model};
-    while(true){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const evts=buf.split('\n\n');buf=evts.pop()||'';
+    const modelState={metadata:null,displayName:null,requestedModel:model,terminal:{seenFinish:false,finishReason:'',seenDone:false,error:null}};
+    while(true){const{done,value}=await reader.read();if(done||modelState.terminal.seenDone||modelState.terminal.error)break;buf+=decoder.decode(value,{stream:true});const evts=buf.split('\n\n');buf=evts.pop()||'';
       for(const eb of evts){for(let line of eb.split('\n')){line=line.trim();if(!line.startsWith('data:'))continue;const p=line.slice(5).trim();const r=this.consumePayload(p,aiWrapper,searchState,thinkingText,fullAiReply,modelState);if(r.thinkingText!==undefined)thinkingText=r.thinkingText;if(r.fullAiReply!==undefined)fullAiReply=r.fullAiReply}}}
     if(buf.trim().startsWith('data:')){const p=buf.trim().slice(5).trim();const r=this.consumePayload(p,aiWrapper,searchState,thinkingText,fullAiReply,modelState);if(r.thinkingText!==undefined)thinkingText=r.thinkingText;if(r.fullAiReply!==undefined)fullAiReply=r.fullAiReply}
-    return{fullAiReply,thinkingText,searchState,modelMetadata:modelState.metadata,modelDisplayName:modelState.displayName};
+    if(modelState.terminal.error||!modelState.terminal.seenFinish||!modelState.terminal.seenDone){window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper,'',false);const e=new Error(modelState.terminal.error?.message||'Stream ended before a successful terminal.');e.errorCode=modelState.terminal.error?.code||'ERR_STREAM_MISSING_DONE';throw e}return{fullAiReply,thinkingText,searchState,modelMetadata:modelState.metadata,modelDisplayName:modelState.displayName,finishReason:modelState.terminal.finishReason};
   },
   consumePayload(payload,aiWrapper,searchState,thinkingText,fullAiReply,modelState=null) {
-    if(!payload||payload==='[DONE]')return{thinkingText,fullAiReply};
-    let d;try{d=JSON.parse(payload)}catch(e){return{thinkingText,fullAiReply}}
+    const t=modelState?.terminal;if(t?.seenDone||t?.error||!payload)return{thinkingText,fullAiReply};if(payload==='[DONE]'){if(t.seenFinish)t.seenDone=true;else t.error={code:'ERR_STREAM_MISSING_FINISH',message:'Stream closed before a successful finish reason.'};return{thinkingText,fullAiReply}};
+    let d;try{d=JSON.parse(payload)}catch(e){return{thinkingText,fullAiReply}}const choice=d?.choices?.[0]||{},finish=choice.finish_reason;if(d?.type==='stream_error'||d?.object==='error'){t.error=d.error||{code:'ERR_STREAM_ERROR',message:'Provider reported a stream error.'};return{thinkingText,fullAiReply}}if(finish){if(['stop','length','tool_calls','function_call'].includes(finish)&&!t.seenFinish){t.seenFinish=true;t.finishReason=finish}else t.error={code:'ERR_STREAM_TERMINAL',message:'Provider ended the stream with '+finish+'.'};return{thinkingText,fullAiReply}}
     if(d?.type==='model_metadata'){
       const metadata=(d.model_metadata&&typeof d.model_metadata==='object')?d.model_metadata:((d.data&&typeof d.data==='object')?d.data:{});
       const requested=modelState?.requestedModel||d.model||metadata.requested_model||'';

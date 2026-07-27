@@ -711,6 +711,7 @@ class Notion2APIClient:
         return _json_or_error(response)
 
     async def post_chat_stream(self, path: str, payload: dict[str, Any], on_progress: Any) -> dict[str, Any]:
+        """Consume an SSE response only after an explicit successful terminal."""
         stream_payload = dict(payload)
         stream_payload["stream"] = True
         content_parts: list[str] = []
@@ -719,6 +720,20 @@ class Notion2APIClient:
         response_model = str(payload.get("model") or "")
         event_count = 0
         last_update = 0.0
+        seen_finish = False
+        finish_reason = ""
+        seen_done = False
+        terminal_error: dict[str, str] | None = None
+
+        def fail(code: str, error_type: str, message: str, event: dict[str, Any] | None = None) -> None:
+            nonlocal terminal_error
+            if terminal_error is None:
+                terminal_error = {"code": code, "type": error_type, "message": message}
+                source = event.get("error") if isinstance(event, dict) else None
+                if isinstance(source, dict):
+                    terminal_error["code"] = str(source.get("code") or code)
+                    terminal_error["type"] = str(source.get("type") or error_type)
+                    terminal_error["message"] = str(source.get("message") or message)
 
         headers = self._headers()
         headers["Accept"] = "text/event-stream"
@@ -738,8 +753,14 @@ class Notion2APIClient:
                     if not line.startswith("data:"):
                         continue
                     raw = line[5:].strip()
-                    if not raw or raw == "[DONE]":
+                    if not raw:
                         continue
+                    if raw == "[DONE]":
+                        if not seen_finish:
+                            fail("ERR_STREAM_MISSING_FINISH", "stream_missing_finish", "Stream closed with [DONE] before a successful finish reason.")
+                        elif terminal_error is None:
+                            seen_done = True
+                        break
                     try:
                         event = json.loads(raw)
                     except ValueError:
@@ -749,44 +770,47 @@ class Notion2APIClient:
                     response_model = str(event.get("model") or response_model)
                     if isinstance(event.get("model_metadata"), dict):
                         model_metadata.update(event["model_metadata"])
+                    if event.get("type") == "stream_error" or event.get("object") == "error":
+                        fail("ERR_STREAM_ERROR", "stream_error", "Provider reported a stream error.", event)
+                        break
                     choices = event.get("choices")
-                    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-                        continue
-                    delta = choices[0].get("delta")
-                    if not isinstance(delta, dict):
-                        continue
+                    choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+                    observed_finish = str(choice.get("finish_reason") or "").strip()
+                    if observed_finish:
+                        if observed_finish in {"error", "content_filter"}:
+                            fail("ERR_STREAM_" + observed_finish.upper(), "stream_" + observed_finish, "Provider ended the stream with " + observed_finish + ".", event)
+                            break
+                        if observed_finish not in {"stop", "length", "tool_calls", "function_call"}:
+                            fail("ERR_STREAM_FINISH_REASON", "stream_finish_reason_invalid", "Stream used an unsupported finish reason: " + observed_finish + ".", event)
+                            break
+                        if seen_finish:
+                            fail("ERR_STREAM_DUPLICATE_FINISH", "stream_duplicate_terminal", "Stream emitted more than one successful finish reason.", event)
+                            break
+                        seen_finish = True
+                        finish_reason = observed_finish
+                    delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
                     content = delta.get("content")
                     reasoning = delta.get("reasoning_content") or delta.get("thinking")
                     if isinstance(content, str) and content:
                         content_parts.append(content)
                     if isinstance(reasoning, str) and reasoning:
-                        reasoning_buffer = (reasoning_buffer + reasoning)[
-                            -MAX_PROGRESS_REASONING_CHARS:
-                        ]
+                        reasoning_buffer = (reasoning_buffer + reasoning)[-MAX_PROGRESS_REASONING_CHARS:]
                     if content or reasoning:
                         event_count += 1
                         now = time.monotonic()
                         if now - last_update >= 0.75:
-                            on_progress(
-                                reasoning_buffer,
-                                "".join(content_parts),
-                                event_count,
-                                False,
-                            )
+                            on_progress(reasoning_buffer, "".join(content_parts), event_count, False)
                             last_update = now
 
+        if terminal_error is None and not seen_done:
+            fail("ERR_STREAM_MISSING_DONE", "stream_missing_done", "Stream reached EOF before a successful finish reason followed by [DONE].")
+        terminal_state = {"seen_finish": seen_finish, "finish_reason": finish_reason or None, "seen_done": seen_done}
+        if terminal_error is not None:
+            partial = "".join(content_parts)
+            return {"ok": False, "status_code": 200, "model": response_model, "actual_model": str(model_metadata.get("actual_model") or ""), "model_metadata": model_metadata or None, "error": terminal_error, "terminal_state": terminal_state, "partial_content": {"chars": len(partial), "preview": partial[:MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS]} if partial else None}
         on_progress(reasoning_buffer, "".join(content_parts), event_count, True)
-        # Persist only the final visible answer. Raw reasoning is used transiently
-        # to derive the bounded progress snapshot and is never stored in MCP jobs.
         message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
-        return {
-            "ok": True,
-            "status_code": 200,
-            "model": response_model,
-            "actual_model": str(model_metadata.get("actual_model") or ""),
-            "model_metadata": model_metadata or None,
-            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
-        }
+        return {"ok": True, "status_code": 200, "model": response_model, "actual_model": str(model_metadata.get("actual_model") or ""), "model_metadata": model_metadata or None, "terminal_state": terminal_state, "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}]}
 
 
 def _json_or_error(response: httpx.Response) -> dict[str, Any]:

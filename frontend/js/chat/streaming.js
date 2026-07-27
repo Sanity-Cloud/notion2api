@@ -133,12 +133,12 @@ window.NotionAI.Chat.Streaming = {
     async processStream(response, aiWrapper, searchState, thinkingText, fullAiReply, model) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');
-        const modelState = { metadata: null, displayName: null, requestedModel: model };
+        const modelState = { metadata: null, displayName: null, requestedModel: model, terminal: { seenFinish: false, finishReason: '', seenDone: false, error: null } };
         let sseBuffer = '';
 
         while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done || modelState.terminal.seenDone || modelState.terminal.error) break;
 
             sseBuffer += decoder.decode(value, { stream: true });
             const events = sseBuffer.split('\n\n');
@@ -175,13 +175,16 @@ window.NotionAI.Chat.Streaming = {
             }
         }
 
-        return {
-            fullAiReply,
-            thinkingText,
-            searchState,
-            modelMetadata: modelState.metadata,
-            modelDisplayName: modelState.displayName
-        };
+        const terminal = modelState.terminal;
+        if (terminal.error || !terminal.seenFinish || !terminal.seenDone) {
+            const error = terminal.error || { code: 'ERR_STREAM_MISSING_DONE', type: 'stream_missing_done', message: 'Stream ended before a successful finish reason followed by [DONE].' };
+            window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper, '', false);
+            const err = new Error(error.message);
+            err.errorCode = error.code;
+            err.errorDetail = error.type;
+            throw err;
+        }
+        return { fullAiReply, thinkingText, searchState, modelMetadata: modelState.metadata, modelDisplayName: modelState.displayName, finishReason: terminal.finishReason };
     },
 
     /**
@@ -194,7 +197,11 @@ window.NotionAI.Chat.Streaming = {
      * @returns {Object} Updated state
      */
     consumePayload(payload, aiWrapper, searchState, thinkingText, fullAiReply, modelState = null) {
-        if (!payload || payload === '[DONE]') {
+        const terminal = modelState?.terminal;
+        if (terminal?.seenDone || terminal?.error || !payload) return { thinkingText, fullAiReply };
+        if (payload === '[DONE]') {
+            if (!terminal?.seenFinish) terminal.error = { code: 'ERR_STREAM_MISSING_FINISH', type: 'stream_missing_finish', message: 'Stream closed with [DONE] before a successful finish reason.' };
+            else terminal.seenDone = true;
             return { thinkingText, fullAiReply };
         }
 
@@ -202,6 +209,21 @@ window.NotionAI.Chat.Streaming = {
         try {
             dataObj = JSON.parse(payload);
         } catch (e) {
+            return { thinkingText, fullAiReply };
+        }
+
+        const choice = dataObj?.choices?.[0];
+        const finishReason = typeof choice?.finish_reason === 'string' ? choice.finish_reason : '';
+        if (dataObj?.type === 'stream_error' || dataObj?.object === 'error') {
+            const error = dataObj.error || {};
+            terminal.error = { code: error.code || 'ERR_STREAM_ERROR', type: error.type || 'stream_error', message: error.message || 'Provider reported a stream error.' };
+            return { thinkingText, fullAiReply };
+        }
+        if (finishReason) {
+            if (finishReason === 'error' || finishReason === 'content_filter') terminal.error = { code: 'ERR_STREAM_' + finishReason.toUpperCase(), type: 'stream_' + finishReason, message: 'Provider ended the stream with ' + finishReason + '.' };
+            else if (!['stop', 'length', 'tool_calls', 'function_call'].includes(finishReason)) terminal.error = { code: 'ERR_STREAM_FINISH_REASON', type: 'stream_finish_reason_invalid', message: 'Unsupported finish reason: ' + finishReason + '.' };
+            else if (terminal.seenFinish) terminal.error = { code: 'ERR_STREAM_DUPLICATE_FINISH', type: 'stream_duplicate_terminal', message: 'Stream emitted more than one successful finish reason.' };
+            else { terminal.seenFinish = true; terminal.finishReason = finishReason; }
             return { thinkingText, fullAiReply };
         }
 
