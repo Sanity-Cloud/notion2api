@@ -1,7 +1,4 @@
-"""Offline replay contract matrix for the bundled SSE consumers.
-
-This lane records current behavior; it intentionally does not modify consumers.
-"""
+"""Historical replay evidence plus live remediation contract checks."""
 from __future__ import annotations
 
 import json
@@ -60,7 +57,7 @@ def replay_data_only(chunks):
 
 
 @pytest.mark.parametrize("name,chunks", CASES.items())
-def test_replay_matrix_records_browser_terminal_blindness(name, chunks):
+def test_historical_replay_matrix_preserves_pre_fix_observations(name, chunks):
     observation = replay_data_only(chunks)
     # streaming.js and embed.html consume data payloads but do not classify stream_error,
     # finish_reason, hygiene, or absent [DONE]. EOF itself is completion for both loops.
@@ -71,23 +68,30 @@ def test_replay_matrix_records_browser_terminal_blindness(name, chunks):
         assert observation["visible"] == ""
 
 
-def test_web_ui_source_contract_has_no_terminal_or_structured_error_branch():
-    assert "if (!payload || payload === '[DONE]')" in STREAMING
-    assert "dataObj?.type === 'stream_error'" not in STREAMING
-    assert "finish_reason" not in STREAMING
-    assert "reader.read();\n            if (done) break;" in STREAMING
+def test_web_ui_source_contract_enforces_terminal_and_structured_errors():
+    assert "createTerminalState()" in STREAMING
+    assert "validateTerminalState(terminalState)" in STREAMING
+    assert "dataObj.type === 'stream_error'" in STREAMING
+    assert "finish_reason" in STREAMING
+    assert "finishCount !== 1" in STREAMING
+    assert "while (!terminalState.done && !terminalState.failure)" in STREAMING
+    assert "updateAIMessage(aiWrapper, '', false)" in STREAMING
 
 
-def test_embed_source_contract_has_no_terminal_or_structured_error_branch():
-    assert "if(!payload||payload==='[DONE]')return" in EMBED
-    assert "stream_error" not in EMBED
-    assert "finish_reason" not in EMBED
-    assert "if(done)break" in EMBED
-    assert "No visible response received." in EMBED
+def test_embed_source_contract_enforces_terminal_and_structured_errors():
+    assert "createTerminalState()" in EMBED
+    assert "data.type==='stream_error'" in EMBED
+    assert "finish_reason" in EMBED
+    assert "terminal.finishCount!==1" in EMBED
+    assert "while(!terminal.done&&!terminal.failure)" in EMBED
+    assert "status.textContent=error.name==='AbortError'?'Cancelled':'Failed'" in EMBED
 
 
-def test_mcp_source_contract_explicitly_ignores_done_and_terminal_fields():
+def test_mcp_source_contract_requires_observed_finish_and_done():
     assert 'async for line in response.aiter_lines()' in MCP
-    assert 'if not raw or raw == "[DONE]":\n                        continue' in MCP
-    assert 'choices[0].get("finish_reason")' not in MCP
-    assert '"finish_reason": "stop"' in MCP
+    assert 'if raw == "[DONE]":' in MCP
+    assert 'done_received = True' in MCP
+    assert 'finish_reason = choice.get("finish_reason")' in MCP
+    assert 'observed_finish_reason in successful_finishes' in MCP
+    assert '"finish_reason": observed_finish_reason' in MCP
+    assert '"ok": False' in MCP
