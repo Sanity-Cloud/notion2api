@@ -3625,10 +3625,13 @@ def create_server(
         instructions=(
             identity_instruction
             + f"Use these tools to call the user's private local {server_name} service. "
-            "Start with notion2api_health or notion2api_list_models if service status or model IDs are uncertain. "
+            + f"Start with {_tool_name('notion2api_health')} or {_tool_name('notion2api_list_models')} "
+            "if service status or model IDs are uncertain. "
             "Omit session_name to generate a descriptive unique session for new work; legacy 'op' values are also auto-generated. "
-            "Chat submissions return immediately. Poll notion2api_get_chat_job and report its progress snapshot without exposing raw private reasoning. "
-            "For ChatGPT uploads, stage one top-level file at a time with notion2api_stage_file; never pass /mnt/data paths through attachments. "
+            + f"Chat submissions return immediately. Poll {_tool_name('notion2api_get_chat_job')} and report its progress snapshot "
+            "without exposing raw private reasoning. "
+            + f"For ChatGPT uploads, stage one top-level file at a time with {_tool_name('notion2api_stage_file')}; "
+            "never pass /mnt/data paths through attachments. "
             "Do not claim document-grounded completion unless attachment_transfer_status is verified and attachment_count is nonzero."
         ),
         host=host,

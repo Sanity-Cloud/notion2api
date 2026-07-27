@@ -71,6 +71,11 @@ def test_aigentbee_profile_exposes_only_aigentbee_machine_methods(monkeypatch):
     assert not any(name.startswith("notion2api_") for name in names)
     assert "aigentbee_hive_create_mission" in names
     assert "aigentbee_chat" in names
+    assert "aigentbee_health" in server.instructions
+    assert "aigentbee_list_models" in server.instructions
+    assert "aigentbee_get_chat_job" in server.instructions
+    assert "aigentbee_stage_file" in server.instructions
+    assert "notion2api_" not in server.instructions
 
 
 def test_primary_profile_retains_notion2api_machine_methods(monkeypatch):
