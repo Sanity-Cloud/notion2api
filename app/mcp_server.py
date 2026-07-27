@@ -711,6 +711,7 @@ class Notion2APIClient:
         return _json_or_error(response)
 
     async def post_chat_stream(self, path: str, payload: dict[str, Any], on_progress: Any) -> dict[str, Any]:
+        """Consume an SSE chat stream only when its terminal protocol is complete."""
         stream_payload = dict(payload)
         stream_payload["stream"] = True
         content_parts: list[str] = []
@@ -719,6 +720,47 @@ class Notion2APIClient:
         response_model = str(payload.get("model") or "")
         event_count = 0
         last_update = 0.0
+        successful_finishes = {"stop", "length", "tool_calls", "function_call"}
+        observed_finish_reason: str | None = None
+        done_received = False
+        failure: dict[str, Any] | None = None
+
+        def partial_metadata() -> dict[str, Any]:
+            partial = "".join(content_parts)
+            return {
+                "char_count": len(partial),
+                "sha256": hashlib.sha256(partial.encode("utf-8")).hexdigest(),
+                "event_count": event_count,
+            }
+
+        def failure_result(code: str, message: str, *, error: Any = None, error_type: str = "stream_terminal_error", retriable: Any = None) -> dict[str, Any]:
+            details: dict[str, Any] = {"code": code, "type": error_type, "message": message}
+            if isinstance(error, dict):
+                for key in ("code", "type", "message", "retriable"):
+                    if error.get(key) not in (None, ""):
+                        details[key] = error[key]
+            elif isinstance(error, str) and error.strip():
+                details["message"] = error.strip()
+            if retriable is not None:
+                details["retriable"] = retriable
+            terminal_state = {
+                "success": False,
+                "finish_reason": observed_finish_reason,
+                "successful_finish_count": 1 if observed_finish_reason in successful_finishes else 0,
+                "done_received": done_received,
+                "code": code,
+            }
+            return {
+                "ok": False,
+                "status_code": 200,
+                "model": response_model,
+                "actual_model": str(model_metadata.get("actual_model") or ""),
+                "model_metadata": model_metadata or None,
+                "error": details,
+                "terminal_state": terminal_state,
+                "partial_content": partial_metadata(),
+                "choices": [],
+            }
 
         headers = self._headers()
         headers["Accept"] = "text/event-stream"
@@ -738,8 +780,11 @@ class Notion2APIClient:
                     if not line.startswith("data:"):
                         continue
                     raw = line[5:].strip()
-                    if not raw or raw == "[DONE]":
+                    if not raw:
                         continue
+                    if raw == "[DONE]":
+                        done_received = True
+                        break
                     try:
                         event = json.loads(raw)
                     except ValueError:
@@ -749,10 +794,49 @@ class Notion2APIClient:
                     response_model = str(event.get("model") or response_model)
                     if isinstance(event.get("model_metadata"), dict):
                         model_metadata.update(event["model_metadata"])
+                    if event.get("object") == "error" or event.get("type") == "stream_error" or event.get("error") is not None:
+                        failure = {
+                            "code": "stream_error",
+                            "message": "The upstream stream reported an error.",
+                            "error": event.get("error"),
+                            "error_type": str(event.get("type") or event.get("object") or "stream_error"),
+                            "retriable": event.get("retriable"),
+                        }
+                        break
                     choices = event.get("choices")
                     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
                         continue
-                    delta = choices[0].get("delta")
+                    choice = choices[0]
+                    finish_reason = choice.get("finish_reason")
+                    if finish_reason is not None:
+                        finish_reason = str(finish_reason)
+                        if finish_reason in {"error", "content_filter"}:
+                            observed_finish_reason = finish_reason
+                            failure = {
+                                "code": finish_reason,
+                                "message": f"The upstream stream ended with finish_reason={finish_reason}.",
+                                "error": choice.get("error") or event.get("error"),
+                                "error_type": "finish_reason",
+                                "retriable": choice.get("retriable", event.get("retriable")),
+                            }
+                            break
+                        if finish_reason not in successful_finishes:
+                            observed_finish_reason = finish_reason
+                            failure = {
+                                "code": "unrecognized_finish_reason",
+                                "message": f"The upstream stream used unsupported finish_reason={finish_reason}.",
+                                "error_type": "finish_reason",
+                            }
+                            break
+                        if observed_finish_reason is not None:
+                            failure = {
+                                "code": "multiple_finish_reasons",
+                                "message": "The upstream stream emitted more than one successful finish_reason.",
+                                "error_type": "terminal_protocol_error",
+                            }
+                            break
+                        observed_finish_reason = finish_reason
+                    delta = choice.get("delta")
                     if not isinstance(delta, dict):
                         continue
                     content = delta.get("content")
@@ -760,24 +844,23 @@ class Notion2APIClient:
                     if isinstance(content, str) and content:
                         content_parts.append(content)
                     if isinstance(reasoning, str) and reasoning:
-                        reasoning_buffer = (reasoning_buffer + reasoning)[
-                            -MAX_PROGRESS_REASONING_CHARS:
-                        ]
+                        reasoning_buffer = (reasoning_buffer + reasoning)[-MAX_PROGRESS_REASONING_CHARS:]
                     if content or reasoning:
                         event_count += 1
                         now = time.monotonic()
                         if now - last_update >= 0.75:
-                            on_progress(
-                                reasoning_buffer,
-                                "".join(content_parts),
-                                event_count,
-                                False,
-                            )
+                            on_progress(reasoning_buffer, "".join(content_parts), event_count, False)
                             last_update = now
 
+        if failure is not None:
+            return failure_result(**failure)
+        if not (done_received and observed_finish_reason in successful_finishes):
+            return failure_result(
+                "incomplete_terminal_state",
+                "EOF arrived before one successful finish_reason followed by [DONE].",
+                error_type="terminal_protocol_error",
+            )
         on_progress(reasoning_buffer, "".join(content_parts), event_count, True)
-        # Persist only the final visible answer. Raw reasoning is used transiently
-        # to derive the bounded progress snapshot and is never stored in MCP jobs.
         message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
         return {
             "ok": True,
@@ -785,8 +868,15 @@ class Notion2APIClient:
             "model": response_model,
             "actual_model": str(model_metadata.get("actual_model") or ""),
             "model_metadata": model_metadata or None,
-            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+            "terminal_state": {
+                "success": True,
+                "finish_reason": observed_finish_reason,
+                "successful_finish_count": 1,
+                "done_received": True,
+            },
+            "choices": [{"index": 0, "message": message, "finish_reason": observed_finish_reason}],
         }
+
 
 
 def _json_or_error(response: httpx.Response) -> dict[str, Any]:

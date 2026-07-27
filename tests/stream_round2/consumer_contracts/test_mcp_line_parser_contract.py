@@ -1,4 +1,4 @@
-"""Replay the actual MCP SSE client with an offline httpx transport."""
+"""Replay the MCP SSE client terminal-state contract with an offline transport."""
 from __future__ import annotations
 
 import asyncio
@@ -18,19 +18,9 @@ def event(content=None, finish=None, **extra):
     return "data: " + json.dumps(payload)
 
 
-CASES = {
-    "clean": [event("hello"), event(finish="stop"), "data: [DONE]"],
-    "stream_error_no_done": ["data: " + json.dumps({"type": "stream_error", "error": {"code": "ERR"}, "choices": [{"delta": {}, "finish_reason": "error"}]})],
-    "content_filter_no_done": [event("secret"), event(finish="content_filter")],
-    "malformed_missing_done": ["data: {not-json", event("partial"), event(finish="stop")],
-    "socket_eof_partial": [event("partial")],
-    "blank_and_non_data": [": comment", "event: message", "", event("kept")],
-}
-
-
-def replay(monkeypatch, lines):
+def replay(monkeypatch, lines, headers=None):
     body = ("\n".join(lines) + "\n").encode()
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body))
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, headers={"content-type": "text/event-stream", **(headers or {})}, content=body))
     real = httpx.AsyncClient
 
     class OfflineClient(real):
@@ -44,29 +34,57 @@ def replay(monkeypatch, lines):
     return result, updates
 
 
-@pytest.mark.parametrize("name,lines", CASES.items())
-def test_mcp_line_data_replay_current_behavior(monkeypatch, name, lines):
+@pytest.mark.parametrize("finish", ["stop", "length", "tool_calls", "function_call"])
+def test_mcp_accepts_each_successful_finish_reason_after_done(monkeypatch, finish):
+    result, updates = replay(monkeypatch, [event("hello"), event(finish=finish), "data: [DONE]"])
+    assert result["ok"] is True
+    assert result["choices"][0]["message"]["content"] == "hello"
+    assert result["choices"][0]["finish_reason"] == finish
+    assert result["terminal_state"] == {"success": True, "finish_reason": finish, "successful_finish_count": 1, "done_received": True}
+    assert [update for update in updates if update[-1] is True] == [("", "hello", 1, True)]
+
+
+@pytest.mark.parametrize("lines", [
+    ["data: " + json.dumps({"type": "stream_error", "error": {"code": "ERR", "message": "before"}})],
+    [event("partial"), "data: " + json.dumps({"type": "stream_error", "error": {"code": "ERR", "message": "after", "retriable": True}})],
+    [event("secret"), event(finish="content_filter")],
+    [event("partial"), event(finish="error")],
+    [event("partial")],
+    [event("partial"), event(finish="stop")],
+    ["data: [DONE]"],
+])
+def test_mcp_rejects_incomplete_or_error_terminal_states(monkeypatch, lines):
     result, updates = replay(monkeypatch, lines)
-    expected = {"clean": "hello", "stream_error_no_done": "", "content_filter_no_done": "secret", "malformed_missing_done": "partial", "socket_eof_partial": "partial", "blank_and_non_data": "kept"}[name]
+    assert result["ok"] is False
+    assert result["status_code"] == 200
+    assert result["choices"] == []
+    assert result["error"]["code"]
+    assert result["terminal_state"]["success"] is False
+    assert result["partial_content"]["char_count"] in {0, 6, 7}
+    assert not [update for update in updates if update[-1] is True]
+
+
+def test_mcp_ignores_post_done_frames_and_preserves_metadata(monkeypatch):
+    result, updates = replay(
+        monkeypatch,
+        [event("kept", model="event-model", model_metadata={"actual_model": "actual", "event": "yes"}), event(finish="stop"), "data: [DONE]", event("ignored"), event(finish="error")],
+        {"X-Conversation-Id": "conversation-123", "X-Notion-Thread-Id": "thread-123"},
+    )
     assert result["ok"] is True
-    assert result["choices"][0]["message"]["content"] == expected
-    assert result["choices"][0]["finish_reason"] == "stop"
-    assert updates[-1][-1] is True
+    assert result["model"] == "event-model"
+    assert result["actual_model"] == "actual"
+    assert result["model_metadata"] == {"actual_model": "actual", "event": "yes", "conversation_id": "conversation-123", "notion_thread_id": "thread-123", "remote_chat_id": "thread-123"}
+    assert result["choices"][0]["message"]["content"] == "kept"
+    assert len([update for update in updates if update[-1] is True]) == 1
 
 
-def test_mcp_uses_independent_lines_not_sse_event_blocks(monkeypatch):
-    result, _ = replay(monkeypatch, ['data: {"choices":[{"delta":{"content":"a"}', 'data: "b"},"finish_reason":null}]}'])
-    assert result["choices"][0]["message"]["content"] == ""
-
-
-def test_mcp_does_not_recognize_done_or_terminal_semantics(monkeypatch):
-    result, _ = replay(monkeypatch, ["data: [DONE]", event("after_done"), event(finish="error")])
+def test_mcp_ignores_malformed_and_non_dict_frames_but_requires_terminal(monkeypatch):
+    result, _ = replay(monkeypatch, ["data: {bad", "data: []", event("kept"), event(finish="stop"), "data: [DONE]"])
     assert result["ok"] is True
-    assert result["choices"][0]["message"]["content"] == "after_done"
-    assert result["choices"][0]["finish_reason"] == "stop"
+    assert result["choices"][0]["message"]["content"] == "kept"
 
 
-@pytest.mark.xfail(strict=True, reason="confirmed consumer defect: EOF without a valid terminal is synthesized as successful stop")
 def test_mcp_must_not_report_success_for_socket_eof_without_terminal(monkeypatch):
     result, _ = replay(monkeypatch, [event("partial")])
     assert result["ok"] is False
+    assert result["error"]["code"] == "incomplete_terminal_state"

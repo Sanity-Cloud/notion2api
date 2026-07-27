@@ -344,7 +344,10 @@ def test_chat_stream_updates_progress_and_returns_final_content(monkeypatch):
     assert "reasoning_content" not in result["choices"][0]["message"]
     assert result["model_metadata"]["conversation_id"] == "conversation-123"
     assert result["model_metadata"]["notion_thread_id"] == "thread-123"
+    assert result["choices"][0]["finish_reason"] == "stop"
+    assert result["terminal_state"]["done_received"] is True
     assert updates[-1] == ("Reviewing records.\n- [ ] Apply edits", "Done", 2, True)
+    assert len([update for update in updates if update[-1] is True]) == 1
 
 
 def test_chat_job_recovers_persisted_completion_after_backend_503(monkeypatch):
