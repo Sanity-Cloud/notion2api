@@ -1,0 +1,14 @@
+{
+  "false_success_violations": 0,
+  "fixture_count": 32,
+  "gate_pass": true,
+  "harness_implementation_failures": 0,
+  "nondeterministic_repetitions": 0,
+  "result_counts": {
+    "needs_adjudication": 9,
+    "pass": 87
+  },
+  "run_id": "hive-stream-round2-fixture-validation-20260727",
+  "schema_version": "hive-stream-round2-harness/2",
+  "total_runs": 96
+}

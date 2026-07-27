@@ -1,30 +1,42 @@
 {
-  "receipt_schema_version": "hive-stream-round2-harness-receipt/1",
-  "mission_id": "hive-stream-round2-fixture-validation-20260727",
+  "schema_version": "hive-stream-round2-harness-receipt/1",
   "work_unit": "WU-R2-HARNESS",
+  "status": "COMPLETED",
   "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
-  "branch": "validate/stream-round2-fixtures-20260727",
-  "commit": "PENDING",
-  "scope": "deterministic offline harness only; full fixture matrix not executed",
-  "files": [
-    "tests/stream_round2/harness.py",
-    "tests/stream_round2/fixture_schema.json",
-    "tests/stream_round2/test_harness.py",
-    "artifacts/hive-stream-round2-fixture-validation-20260727/harness/fixture_schema.json",
-    "artifacts/hive-stream-round2-fixture-validation-20260727/harness/analysis.md"
-  ],
-  "checks": [
-    {"command": "python -m pytest tests/stream_round2/test_harness.py -q", "result": "9 passed"},
-    {"command": "python -m pytest tests/test_stream_protocol.py tests/test_stream_integrity_guard.py tests/test_stream_parser_safe.py -q", "result": "45 passed"},
-    {"command": "python -m ruff check tests/stream_round2", "result": "passed"},
-    {"command": "python -m compileall -q tests/stream_round2", "result": "passed"},
-    {"command": "git diff --check && git diff --cached --check", "result": "passed"},
-    {"command": "UTF-8 strict source encoding check excluding __pycache__", "result": "passed"}
-  ],
-  "risks": [
-    "The full fixture matrix and HTTP smoke lane were intentionally not run.",
-    "Guarded-stream fixtures require an isolated dummy account environment to import the local application; no credentials or provider calls were used.",
-    "Existing untracked scripts/round2_stream_fixture_harness.py is outside this work unit and excluded from the commit."
-  ],
-  "next_dependencies": ["WU-R2-CONSUMER", "WU-R2-ENCODING", "WU-R2-FRAMING", "WU-R2-MATRIX", "WU-R2-HTTP-SMOKE"]
+  "draft_evidence": {
+    "path": "artifacts/hive-stream-round2-fixture-validation-20260727/fixture-matrix.json",
+    "preserved": true,
+    "initial_runs": 78,
+    "initial_mismatches": 15
+  },
+  "corrected_results": {
+    "fixtures": 32,
+    "repetitions": 3,
+    "runs": 96,
+    "pass": 87,
+    "needs_adjudication": 9,
+    "fail": 0,
+    "harness_implementation_failures": 0,
+    "nondeterministic_repetitions": 0,
+    "false_success_violations": 0,
+    "gate_pass": true
+  },
+  "adjudication": {
+    "spec_disagreement_runs": 3,
+    "unsupported_framing_runs": 6,
+    "product_questions": [
+      "DONE-before-finish reaches post-terminal-content before terminal-order validation.",
+      "Multiline data and physical fragmentation currently classify as stream_empty_visible_output rather than malformed-only."
+    ]
+  },
+  "outputs": ["fixture-matrix.json", "fixture-matrix.jsonl", "summary.json", "analysis.md", "receipt.json"],
+  "checks": {
+    "focused_harness_tests": "9 passed",
+    "inherited_stream_tests": "23 passed",
+    "ruff": "passed",
+    "compileall": "passed",
+    "git_diff_check": "passed",
+    "encoding_guard": "passed"
+  },
+  "recommendation": "Release to next lane for adjudication only; no product change is authorized by this harness receipt."
 }
