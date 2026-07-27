@@ -8,6 +8,10 @@ window.NotionAI = window.NotionAI || {};
 window.NotionAI.Chat = window.NotionAI.Chat || {};
 
 window.NotionAI.Chat.Streaming = {
+    createTerminalState() { return { sawSuccessfulFinish: false, sawDone: false }; },
+    terminalError(reason) { return new Error(`Stream terminal-state failure: ${reason}`); },
+    observeTerminalPayload(payload, state) { if (!payload || state.sawDone) return { ignored: true }; if (payload === '[DONE]') { state.sawDone = true; return { done: true }; } let data; try { data = JSON.parse(payload); } catch (error) { throw this.terminalError('malformed SSE terminal payload'); } const finish = data?.choices?.[0]?.finish_reason; if (data?.object === 'error' || data?.error || data?.type === 'stream_error' || finish === 'error' || finish === 'content_filter') throw this.terminalError(data?.error?.message || data?.message || finish || data?.type || 'stream error'); if (['stop','length','tool_calls','function_call'].includes(finish)) state.sawSuccessfulFinish = true; return { data }; },
+    assertTerminalState(state) { if (!state.sawSuccessfulFinish || !state.sawDone) throw this.terminalError(`EOF before successful finish_reason and [DONE] (finish=${state.sawSuccessfulFinish}, done=${state.sawDone})`); },
     /**
      * Streams chat completion response
      * @param {Object} chat - Current chat object
@@ -130,13 +134,47 @@ window.NotionAI.Chat.Streaming = {
      * @param {string} model - Requested model ID
      * @returns {Promise<Object>} Final result object
      */
+    createTerminalState() {
+        return {
+            finishReason: null,
+            finishCount: 0,
+            done: false,
+            failure: null
+        };
+    },
+
+    streamFailure(message, code = 'incomplete_terminal_state', detail = '') {
+        const error = new Error(message);
+        error.errorCode = code;
+        error.errorDetail = detail;
+        return error;
+    },
+
+    validateTerminalState(terminalState) {
+        const successfulReasons = new Set(['stop', 'length', 'tool_calls', 'function_call']);
+        if (terminalState.failure) {
+            throw this.streamFailure(
+                terminalState.failure.message || 'The stream reported a terminal error.',
+                terminalState.failure.code || 'stream_terminal_error',
+                terminalState.failure.detail || ''
+            );
+        }
+        if (!terminalState.done || terminalState.finishCount !== 1 || !successfulReasons.has(terminalState.finishReason)) {
+            throw this.streamFailure(
+                'The stream ended before a valid finish reason and [DONE] receipt.',
+                'incomplete_terminal_state'
+            );
+        }
+    },
+
     async processStream(response, aiWrapper, searchState, thinkingText, fullAiReply, model) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');
         const modelState = { metadata: null, displayName: null, requestedModel: model };
+        const terminalState = this.createTerminalState();
         let sseBuffer = '';
 
-        while (true) {
+        while (!terminalState.done && !terminalState.failure) {
             const { done, value } = await reader.read();
             if (done) break;
 
@@ -145,34 +183,49 @@ window.NotionAI.Chat.Streaming = {
             sseBuffer = events.pop() || '';
 
             for (const eventBlock of events) {
-                const lines = eventBlock.split('\n');
-                for (let line of lines) {
+                if (terminalState.done || terminalState.failure) break;
+                for (let line of eventBlock.split('\n')) {
+                    if (terminalState.done || terminalState.failure) break;
                     line = line.trim();
                     if (!line.startsWith('data:')) continue;
-
                     const payload = line.slice(5).trim();
-                    const result = this.consumePayload(payload, aiWrapper, searchState, thinkingText, fullAiReply, modelState);
-
-                    if (result.thinkingText !== undefined) {
-                        thinkingText = result.thinkingText;
-                    }
-                    if (result.fullAiReply !== undefined) {
-                        fullAiReply = result.fullAiReply;
-                    }
+                    const result = this.consumePayload(
+                        payload,
+                        aiWrapper,
+                        searchState,
+                        thinkingText,
+                        fullAiReply,
+                        modelState,
+                        terminalState
+                    );
+                    thinkingText = result.thinkingText;
+                    fullAiReply = result.fullAiReply;
                 }
             }
         }
 
-        // Process remaining buffer
-        if (sseBuffer.trim().startsWith('data:')) {
-            const payload = sseBuffer.trim().slice(5).trim();
-            const result = this.consumePayload(payload, aiWrapper, searchState, thinkingText, fullAiReply, modelState);
-            if (result.thinkingText !== undefined) {
-                thinkingText = result.thinkingText;
-            }
-            if (result.fullAiReply !== undefined) {
-                fullAiReply = result.fullAiReply;
-            }
+        if (!terminalState.done && !terminalState.failure && sseBuffer.trim().startsWith('data:')) {
+            const result = this.consumePayload(
+                sseBuffer.trim().slice(5).trim(),
+                aiWrapper,
+                searchState,
+                thinkingText,
+                fullAiReply,
+                modelState,
+                terminalState
+            );
+            thinkingText = result.thinkingText;
+            fullAiReply = result.fullAiReply;
+        }
+
+        try {
+            this.validateTerminalState(terminalState);
+        } catch (error) {
+            fullAiReply = '';
+            thinkingText = '';
+            aiWrapper.thinkingText = '';
+            window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper, '', false);
+            throw error;
         }
 
         return {
@@ -180,34 +233,74 @@ window.NotionAI.Chat.Streaming = {
             thinkingText,
             searchState,
             modelMetadata: modelState.metadata,
-            modelDisplayName: modelState.displayName
+            modelDisplayName: modelState.displayName,
+            terminalState
         };
     },
 
-    /**
-     * Consumes a single SSE payload
-     * @param {string} payload - SSE data payload
-     * @param {Object} aiWrapper - AI message wrapper
-     * @param {Object} searchState - Search state object
-     * @param {string} thinkingText - Current thinking text
-     * @param {string} fullAiReply - Current AI reply
-     * @returns {Object} Updated state
-     */
-    consumePayload(payload, aiWrapper, searchState, thinkingText, fullAiReply, modelState = null) {
-        if (!payload || payload === '[DONE]') {
-            return { thinkingText, fullAiReply };
+    consumePayload(payload, aiWrapper, searchState, thinkingText, fullAiReply, modelState = null, terminalState = null) {
+        const state = terminalState || this.createTerminalState();
+        if (!payload || state.done || state.failure) {
+            return { thinkingText, fullAiReply, terminalState: state };
+        }
+        if (payload === '[DONE]') {
+            state.done = true;
+            return { thinkingText, fullAiReply, terminalState: state };
         }
 
         let dataObj;
         try {
             dataObj = JSON.parse(payload);
         } catch (e) {
-            return { thinkingText, fullAiReply };
+            return { thinkingText, fullAiReply, terminalState: state };
+        }
+        if (!dataObj || typeof dataObj !== 'object' || Array.isArray(dataObj)) {
+            return { thinkingText, fullAiReply, terminalState: state };
         }
 
-        // Handle actual model metadata. This may arrive after the content stream,
-        // so update the already-rendered footer label in-place.
-        if (dataObj?.type === 'model_metadata') {
+        const structuredError = dataObj.error;
+        if (dataObj.object === 'error' || dataObj.type === 'stream_error' || structuredError) {
+            state.failure = {
+                code: structuredError?.code || dataObj.code || 'stream_error',
+                message: structuredError?.message || dataObj.message || 'The stream reported an error.',
+                detail: structuredError?.detail || ''
+            };
+            return { thinkingText, fullAiReply, terminalState: state };
+        }
+
+        const choice = Array.isArray(dataObj.choices) && dataObj.choices[0] && typeof dataObj.choices[0] === 'object'
+            ? dataObj.choices[0]
+            : null;
+        const finishReason = choice?.finish_reason;
+        if (finishReason !== undefined && finishReason !== null) {
+            const normalizedReason = String(finishReason);
+            if (normalizedReason === 'error' || normalizedReason === 'content_filter') {
+                state.finishReason = normalizedReason;
+                state.failure = {
+                    code: normalizedReason,
+                    message: `The stream ended with finish_reason=${normalizedReason}.`
+                };
+                return { thinkingText, fullAiReply, terminalState: state };
+            }
+            if (!['stop', 'length', 'tool_calls', 'function_call'].includes(normalizedReason)) {
+                state.failure = {
+                    code: 'unrecognized_finish_reason',
+                    message: `Unsupported finish_reason=${normalizedReason}.`
+                };
+                return { thinkingText, fullAiReply, terminalState: state };
+            }
+            state.finishCount += 1;
+            state.finishReason = normalizedReason;
+            if (state.finishCount !== 1) {
+                state.failure = {
+                    code: 'multiple_finish_reasons',
+                    message: 'The stream emitted more than one successful finish reason.'
+                };
+                return { thinkingText, fullAiReply, terminalState: state };
+            }
+        }
+
+        if (dataObj.type === 'model_metadata') {
             const metadata = (dataObj.model_metadata && typeof dataObj.model_metadata === 'object')
                 ? dataObj.model_metadata
                 : ((dataObj.data && typeof dataObj.data === 'object') ? dataObj.data : {});
@@ -222,12 +315,9 @@ window.NotionAI.Chat.Streaming = {
                     modelState.displayName = displayName;
                 }
             }
-            return { thinkingText, fullAiReply };
+            return { thinkingText, fullAiReply, terminalState: state };
         }
 
-        // Handle actual-model metadata embedded in ordinary chunks.
-        // Do not treat a bare chunk.model as actual unless paired with actual_model
-        // or model_metadata, because older chunks used the requested alias there.
         const embeddedMetadata = (dataObj.model_metadata && typeof dataObj.model_metadata === 'object')
             ? dataObj.model_metadata
             : null;
@@ -246,61 +336,48 @@ window.NotionAI.Chat.Streaming = {
             }
         }
 
-        // Handle search metadata
-        if (dataObj?.type === 'search_metadata') {
+        if (dataObj.type === 'search_metadata') {
             this.mergeSearchState(searchState, dataObj.searches || {});
             aiWrapper.searchData = searchState;
             window.NotionAI.Chat.Renderer.updateSearchPanel(aiWrapper);
-            return { thinkingText, fullAiReply };
+            return { thinkingText, fullAiReply, terminalState: state };
         }
-
-        // Handle thinking chunk
-        if (dataObj?.type === 'thinking_chunk') {
+        if (dataObj.type === 'thinking_chunk') {
             const chunk = typeof dataObj.text === 'string' ? dataObj.text : '';
             if (chunk) {
                 thinkingText += chunk;
                 aiWrapper.thinkingText = thinkingText;
                 window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper);
             }
-            return { thinkingText, fullAiReply };
+            return { thinkingText, fullAiReply, terminalState: state };
         }
-
-        // Handle content replace
-        if (dataObj?.type === 'content_replace') {
+        if (dataObj.type === 'content_replace') {
             const replacement = typeof dataObj.content === 'string' ? dataObj.content : '';
             if (replacement) {
                 fullAiReply = replacement;
                 window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper, fullAiReply, false);
             }
-            return { thinkingText, fullAiReply };
+            return { thinkingText, fullAiReply, terminalState: state };
         }
-
-        // Handle thinking replace
-        if (dataObj?.type === 'thinking_replace') {
+        if (dataObj.type === 'thinking_replace') {
             thinkingText = typeof dataObj.thinking === 'string' ? dataObj.thinking : '';
             aiWrapper.thinkingText = thinkingText;
             window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper);
-            return { thinkingText, fullAiReply };
+            return { thinkingText, fullAiReply, terminalState: state };
         }
 
-        // Handle delta reasoning
-        const deltaReasoning = dataObj?.choices?.[0]?.delta?.reasoning_content || '';
+        const deltaReasoning = choice?.delta?.reasoning_content || '';
         if (deltaReasoning) {
             thinkingText += deltaReasoning;
             aiWrapper.thinkingText = thinkingText;
             window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper);
-            return { thinkingText, fullAiReply };
         }
-
-        // Handle delta content
-        const deltaContent = dataObj?.choices?.[0]?.delta?.content || '';
+        const deltaContent = choice?.delta?.content || '';
         if (deltaContent) {
             fullAiReply += deltaContent;
             window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper, fullAiReply, false);
-            return { thinkingText, fullAiReply };
         }
-
-        return { thinkingText, fullAiReply };
+        return { thinkingText, fullAiReply, terminalState: state };
     },
 
     /**

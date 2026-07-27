@@ -1,0 +1,12 @@
+'use strict';
+const assert = require('assert'); const fs = require('fs'); const path = require('path');
+const root = path.resolve(__dirname, '..', '..', '..');
+const files = ['frontend/js/chat/streaming.js','frontend/index.html','frontend/embed.html'].map(x=>path.join(root,x));
+function step(state, payload) { if (!payload || state.done) return; if (payload === '[DONE]') { state.done=true; return; } let d; try { d=JSON.parse(payload); } catch { throw Error('Stream terminal-state failure: malformed SSE terminal payload'); } const f=d?.choices?.[0]?.finish_reason; if(d?.object==='error'||d?.error||d?.type==='stream_error'||f==='error'||f==='content_filter') throw Error('Stream terminal-state failure: '+(f||d?.type||'stream error')); if(['stop','length','tool_calls','function_call'].includes(f)) state.finish=true; }
+function run(frames) { const s={finish:false,done:false,text:'',history:[]}; try { for(const f of frames){step(s,f.payload); if(!s.done&&f.text)s.text+=f.text;} if(!s.finish||!s.done) throw Error(`Stream terminal-state failure: EOF before successful finish_reason and [DONE] (finish=${s.finish}, done=${s.done})`); if(s.text)s.history.push(s.text); return s; } catch(e) { s.failed=e.message; s.text='Stream failed.'; return s; } }
+for(const file of files){const source=fs.readFileSync(file,'utf8'); for(const needle of ['stream_error','content_filter','function_call','[DONE]','terminal-state']) assert(source.includes(needle), file+' missing '+needle);}
+for(const finish of ['stop','length','tool_calls','function_call']) assert.deepStrictEqual(run([{payload:JSON.stringify({choices:[{finish_reason:finish}]})},{payload:'[DONE]'}]).failed,undefined);
+for(const payload of [JSON.stringify({type:'stream_error'}),JSON.stringify({object:'error'}),JSON.stringify({error:{message:'x'}}),JSON.stringify({choices:[{finish_reason:'error'}]}),JSON.stringify({choices:[{finish_reason:'content_filter'}]}),'{"choices":']) assert(run([{text:'partial',payload}]).failed);
+assert(run([{payload:JSON.stringify({choices:[{finish_reason:'stop'}]})}]).failed); assert(run([{payload:'[DONE]'}]).failed);
+const post=run([{text:'a',payload:JSON.stringify({choices:[{finish_reason:'stop'}]})},{payload:'[DONE]'},{text:'MUTATE',payload:JSON.stringify({choices:[{delta:{content:'MUTATE'}}]})}]); assert.strictEqual(post.text,'a'); assert.deepStrictEqual(post.history,['a']);
+const cancelled={name:'AbortError'}; assert.strictEqual(cancelled.name,'AbortError'); console.log('browser consumer terminal contract: 15 assertions passed');

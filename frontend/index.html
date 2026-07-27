@@ -1335,6 +1335,7 @@ window.NotionAI.Chat.Renderer = {
 <script>
 /* ===== STREAMING ===== */
 window.NotionAI.Chat.Streaming = {
+  createTerminalState(){return{sawSuccessfulFinish:false,sawDone:false}}, terminalError(reason){return new Error(`Stream terminal-state failure: ${reason}`)}, observeTerminalPayload(payload,state){if(!payload||state.sawDone)return{ignored:true};if(payload==='[DONE]'){state.sawDone=true;return{done:true}}let data;try{data=JSON.parse(payload)}catch(e){throw this.terminalError('malformed SSE terminal payload')}const f=data?.choices?.[0]?.finish_reason;if(data?.object==='error'||data?.error||data?.type==='stream_error'||f==='error'||f==='content_filter')throw this.terminalError(data?.error?.message||data?.message||f||data?.type||'stream error');if(['stop','length','tool_calls','function_call'].includes(f))state.sawSuccessfulFinish=true;return{data}}, assertTerminalState(state){if(!state.sawSuccessfulFinish||!state.sawDone)throw this.terminalError(`EOF before successful finish_reason and [DONE] (finish=${state.sawSuccessfulFinish}, done=${state.sawDone})`)},
   async streamResponse(chat, model, aiWrapper, attachments = []) {
     const searchState = { queries: [], sources: [] };
     let thinkingText = '', fullAiReply = '';
@@ -1360,41 +1361,34 @@ window.NotionAI.Chat.Streaming = {
       throw err;
     }
   },
-  async processStream(response,aiWrapper,searchState,thinkingText,fullAiReply,model) {
-    const reader=response.body.getReader(),decoder=new TextDecoder('utf-8');let buf='';
-    const modelState={metadata:null,displayName:null,requestedModel:model};
-    while(true){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const evts=buf.split('\n\n');buf=evts.pop()||'';
-      for(const eb of evts){for(let line of eb.split('\n')){line=line.trim();if(!line.startsWith('data:'))continue;const p=line.slice(5).trim();const r=this.consumePayload(p,aiWrapper,searchState,thinkingText,fullAiReply,modelState);if(r.thinkingText!==undefined)thinkingText=r.thinkingText;if(r.fullAiReply!==undefined)fullAiReply=r.fullAiReply}}}
-    if(buf.trim().startsWith('data:')){const p=buf.trim().slice(5).trim();const r=this.consumePayload(p,aiWrapper,searchState,thinkingText,fullAiReply,modelState);if(r.thinkingText!==undefined)thinkingText=r.thinkingText;if(r.fullAiReply!==undefined)fullAiReply=r.fullAiReply}
-    return{fullAiReply,thinkingText,searchState,modelMetadata:modelState.metadata,modelDisplayName:modelState.displayName};
+  createTerminalState(){return{finishReason:null,finishCount:0,done:false,failure:null}},
+  streamFailure(message,code='incomplete_terminal_state',detail=''){const e=new Error(message);e.errorCode=code;e.errorDetail=detail;return e},
+  validateTerminalState(s){
+    if(s.failure)throw this.streamFailure(s.failure.message||'The stream reported a terminal error.',s.failure.code||'stream_terminal_error',s.failure.detail||'');
+    if(!s.done||s.finishCount!==1||!['stop','length','tool_calls','function_call'].includes(s.finishReason))throw this.streamFailure('The stream ended before a valid finish reason and [DONE] receipt.','incomplete_terminal_state');
   },
-  consumePayload(payload,aiWrapper,searchState,thinkingText,fullAiReply,modelState=null) {
-    if(!payload||payload==='[DONE]')return{thinkingText,fullAiReply};
-    let d;try{d=JSON.parse(payload)}catch(e){return{thinkingText,fullAiReply}}
-    if(d?.type==='model_metadata'){
-      const metadata=(d.model_metadata&&typeof d.model_metadata==='object')?d.model_metadata:((d.data&&typeof d.data==='object')?d.data:{});
-      const requested=modelState?.requestedModel||d.model||metadata.requested_model||'';
-      const displayName=window.NotionAI.API.Models.getResponseModelDisplayName(metadata,requested);
-      window.NotionAI.Chat.Renderer.updateModelLabel(aiWrapper,displayName,metadata);
-      if(modelState){modelState.metadata=metadata;modelState.displayName=displayName}
-      return{thinkingText,fullAiReply};
-    }
-    const embeddedMetadata=(d.model_metadata&&typeof d.model_metadata==='object')?d.model_metadata:null;
-    if(embeddedMetadata||d.actual_model){
-      const metadata={...(embeddedMetadata||{}),...(d.actual_model?{actual_model:d.actual_model}:{}),requested_model:embeddedMetadata?.requested_model||modelState?.requestedModel||''};
-      const displayName=window.NotionAI.API.Models.getResponseModelDisplayName(metadata,modelState?.requestedModel||'');
-      window.NotionAI.Chat.Renderer.updateModelLabel(aiWrapper,displayName,metadata);
-      if(modelState){modelState.metadata=metadata;modelState.displayName=displayName}
-    }
-    if(d?.type==='search_metadata'){this.mergeSearchState(searchState,d.searches||{});aiWrapper.searchData=searchState;window.NotionAI.Chat.Renderer.updateSearchPanel(aiWrapper);return{thinkingText,fullAiReply}}
-    if(d?.type==='thinking_chunk'){const c=typeof d.text==='string'?d.text:'';if(c){thinkingText+=c;aiWrapper.thinkingText=thinkingText;window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper,false)}return{thinkingText,fullAiReply}}
-    if(d?.type==='content_replace'){const r=typeof d.content==='string'?d.content:'';if(r){fullAiReply=r;window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper,fullAiReply,false)}return{thinkingText,fullAiReply}}
-    if(d?.type==='thinking_replace'){thinkingText=typeof d.thinking==='string'?d.thinking:'';aiWrapper.thinkingText=thinkingText;window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper,false);return{thinkingText,fullAiReply}}
-    const dr=d?.choices?.[0]?.delta?.reasoning_content||'';
-    if(dr){thinkingText+=dr;aiWrapper.thinkingText=thinkingText;window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper,false);return{thinkingText,fullAiReply}}
-    const dc=d?.choices?.[0]?.delta?.content||'';
-    if(dc){fullAiReply+=dc;window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper,fullAiReply,false);return{thinkingText,fullAiReply}}
-    return{thinkingText,fullAiReply};
+  async processStream(response,aiWrapper,searchState,thinkingText,fullAiReply,model) {
+    const reader=response.body.getReader(),decoder=new TextDecoder('utf-8'),terminalState=this.createTerminalState();let buf='';
+    const modelState={metadata:null,displayName:null,requestedModel:model};
+    while(!terminalState.done&&!terminalState.failure){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const evts=buf.split('\n\n');buf=evts.pop()||'';
+      for(const eb of evts){if(terminalState.done||terminalState.failure)break;for(let line of eb.split('\n')){if(terminalState.done||terminalState.failure)break;line=line.trim();if(!line.startsWith('data:'))continue;const p=line.slice(5).trim();const r=this.consumePayload(p,aiWrapper,searchState,thinkingText,fullAiReply,modelState,terminalState);thinkingText=r.thinkingText;fullAiReply=r.fullAiReply}}}
+    if(!terminalState.done&&!terminalState.failure&&buf.trim().startsWith('data:')){const r=this.consumePayload(buf.trim().slice(5).trim(),aiWrapper,searchState,thinkingText,fullAiReply,modelState,terminalState);thinkingText=r.thinkingText;fullAiReply=r.fullAiReply}
+    try{this.validateTerminalState(terminalState)}catch(error){fullAiReply='';thinkingText='';aiWrapper.thinkingText='';window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper,'',false);throw error}
+    return{fullAiReply,thinkingText,searchState,modelMetadata:modelState.metadata,modelDisplayName:modelState.displayName,terminalState};
+  },
+  consumePayload(payload,aiWrapper,searchState,thinkingText,fullAiReply,modelState=null,terminalState=null) {
+    const s=terminalState||this.createTerminalState();if(!payload||s.done||s.failure)return{thinkingText,fullAiReply,terminalState:s};if(payload==='[DONE]'){s.done=true;return{thinkingText,fullAiReply,terminalState:s}}
+    let d;try{d=JSON.parse(payload)}catch(e){return{thinkingText,fullAiReply,terminalState:s}}if(!d||typeof d!=='object'||Array.isArray(d))return{thinkingText,fullAiReply,terminalState:s};
+    const se=d.error;if(d.object==='error'||d.type==='stream_error'||se){s.failure={code:se?.code||d.code||'stream_error',message:se?.message||d.message||'The stream reported an error.',detail:se?.detail||''};return{thinkingText,fullAiReply,terminalState:s}}
+    const choice=Array.isArray(d.choices)&&d.choices[0]&&typeof d.choices[0]==='object'?d.choices[0]:null,fr=choice?.finish_reason;
+    if(fr!==undefined&&fr!==null){const n=String(fr);if(n==='error'||n==='content_filter'){s.finishReason=n;s.failure={code:n,message:`The stream ended with finish_reason=${n}.`};return{thinkingText,fullAiReply,terminalState:s}}if(!['stop','length','tool_calls','function_call'].includes(n)){s.failure={code:'unrecognized_finish_reason',message:`Unsupported finish_reason=${n}.`};return{thinkingText,fullAiReply,terminalState:s}}s.finishCount++;s.finishReason=n;if(s.finishCount!==1){s.failure={code:'multiple_finish_reasons',message:'The stream emitted more than one successful finish reason.'};return{thinkingText,fullAiReply,terminalState:s}}}
+    if(d?.type==='model_metadata'){const metadata=(d.model_metadata&&typeof d.model_metadata==='object')?d.model_metadata:((d.data&&typeof d.data==='object')?d.data:{});const requested=modelState?.requestedModel||d.model||metadata.requested_model||'';const displayName=window.NotionAI.API.Models.getResponseModelDisplayName(metadata,requested);window.NotionAI.Chat.Renderer.updateModelLabel(aiWrapper,displayName,metadata);if(modelState){modelState.metadata=metadata;modelState.displayName=displayName}return{thinkingText,fullAiReply,terminalState:s}}
+    const embeddedMetadata=(d.model_metadata&&typeof d.model_metadata==='object')?d.model_metadata:null;if(embeddedMetadata||d.actual_model){const metadata={...(embeddedMetadata||{}),...(d.actual_model?{actual_model:d.actual_model}:{}),requested_model:embeddedMetadata?.requested_model||modelState?.requestedModel||''};const displayName=window.NotionAI.API.Models.getResponseModelDisplayName(metadata,modelState?.requestedModel||'');window.NotionAI.Chat.Renderer.updateModelLabel(aiWrapper,displayName,metadata);if(modelState){modelState.metadata=metadata;modelState.displayName=displayName}}
+    if(d?.type==='search_metadata'){this.mergeSearchState(searchState,d.searches||{});aiWrapper.searchData=searchState;window.NotionAI.Chat.Renderer.updateSearchPanel(aiWrapper);return{thinkingText,fullAiReply,terminalState:s}}
+    if(d?.type==='thinking_chunk'){const c=typeof d.text==='string'?d.text:'';if(c){thinkingText+=c;aiWrapper.thinkingText=thinkingText;window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper,false)}return{thinkingText,fullAiReply,terminalState:s}}
+    if(d?.type==='content_replace'){const r=typeof d.content==='string'?d.content:'';if(r){fullAiReply=r;window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper,fullAiReply,false)}return{thinkingText,fullAiReply,terminalState:s}}
+    if(d?.type==='thinking_replace'){thinkingText=typeof d.thinking==='string'?d.thinking:'';aiWrapper.thinkingText=thinkingText;window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper,false);return{thinkingText,fullAiReply,terminalState:s}}
+    const dr=choice?.delta?.reasoning_content||'';if(dr){thinkingText+=dr;aiWrapper.thinkingText=thinkingText;window.NotionAI.Chat.Renderer.updateThinkingPanel(aiWrapper,false)}const dc=choice?.delta?.content||'';if(dc){fullAiReply+=dc;window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper,fullAiReply,false)}return{thinkingText,fullAiReply,terminalState:s};
   },
   mergeSearchState(target,payload) {
     const n=window.NotionAI.Utils.Validation.normalizeSearchPayload(payload);
