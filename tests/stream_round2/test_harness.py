@@ -1,88 +1,90 @@
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
-from tests.stream_round2.harness import (
-    SCHEMA_VERSION,
-    Fixture,
-    atomic_write_jsonl_and_summary,
-    replay_fixture,
-)
-
-BASE = "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+from tests.stream_round2 import harness
 
 
-def frame(content=None, finish=None):
-    delta = {} if content is None else {"content": content}
-    return "data: " + json.dumps({"choices": [{"delta": delta, "finish_reason": finish}]}) + "\n\n"
+def rows_for(fixture_id: str):
+    rows, _ = harness.run()
+    return [row for row in rows if row["fixture_id"] == fixture_id]
 
 
-def fixture(fixture_id="clean", **kwargs):
-    defaults = {
-        "fixture_id": fixture_id,
-        "mode": "tracker",
-        "physical_fragments": (frame("hello"), frame(finish="stop"), "data: [DONE]\n\n"),
-        "logical_chunks": ({"chunk_id": "content", "kind": "sse", "fragment_indexes": [0]},),
-        "expected_outcome": "success",
+def test_full_schema_and_stable_repetitions():
+    rows, _ = harness.run()
+    required = {
+        "schema_version", "fixture_id", "repetition", "execution_id", "run_id", "base_commit",
+        "parser_version", "mode", "raw_frame_encoding", "raw_bytes", "raw_hash", "logical_chunks",
+        "expected_semantic_intent", "expected_outcome", "expected_code", "observed_outcome",
+        "observed_code", "underlying_stream_outcome", "operational_outcome", "transport_counts",
+        "semantic_counts", "visible_chars", "response_hash", "finish_count", "done_count",
+        "input_done_presence", "emitted_done_presence", "pull_count", "close_count", "close_error",
+        "socket_iteration_completed", "propagated_exception", "client_interpretation", "stop_condition",
+        "adjudication_state", "adjudication_note", "invariant_comparison", "deterministic_replay_status", "result",
     }
-    defaults.update(kwargs)
-    return Fixture(**defaults)
+    assert len(rows) == 96
+    assert required <= rows[0].keys()
+    assert {row["deterministic_replay_status"] for row in rows} == {"reproducible"}
 
 
-def test_schema_record_contains_versioned_required_round2_fields():
-    record = replay_fixture(fixture("unicode", physical_fragments=(frame("ðŸŒŠe\u0301"), frame(finish="stop"), b"data: [DONE]\n\n")), base_commit=BASE)[0]
-    required = {"fixture_id", "repetition", "base_commit", "parser_version", "physical_fragments", "raw_bytes", "logical_chunks", "expected_outcome", "actual_outcome", "actual_code", "response_sha256", "raw_sha256", "semantic_counts", "transport_counts", "terminal", "done_presence", "source_accounting", "client_interpretation", "deterministic_replay"}
-    assert record["schema_version"] == SCHEMA_VERSION
-    assert required <= record.keys()
-    assert record["done_presence"] is True
-    assert record["raw_bytes"] > 0
+def test_guard_receipts_done_separation_and_limits():
+    before = rows_for("ordinary-exception-before-content")[0]
+    finite = rows_for("finite-source")[0]
+    limited = rows_for("chunk-limit")[0]
+    assert before["client_interpretation"] == "error_receipt"
+    assert before["observed_outcome"] == "stream_empty_no_terminal"
+    assert not before["emitted_done_presence"]
+    assert finite["input_done_presence"] and finite["emitted_done_presence"]
+    assert finite["close_count"] == 1
+    assert limited["stop_condition"] == "guard_limit" and limited["pull_count"] >= 3
 
 
-def test_replay_requires_three_runs_and_compares_invariants():
-    records = replay_fixture(fixture(), base_commit=BASE)
-    assert len(records) == 3
-    assert {row["deterministic_replay"] for row in records} == {"reproducible"}
-    assert len({row["response_sha256"] for row in records}) == 1
-    with pytest.raises(ValueError):
-        replay_fixture(fixture(), base_commit=BASE, repetitions=2)
+def test_cleanup_hard_stop_and_propagation_are_preserved():
+    close = rows_for("close-failure")[0]
+    cancelled = rows_for("asyncio-cancelled")[0]
+    generator_exit = rows_for("generator-exit")[0]
+    assert close["underlying_stream_outcome"] == "success"
+    assert close["operational_outcome"] == "cleanup_failure"
+    assert close["close_count"] == 1 and close["result"] == "fail"
+    assert cancelled["propagated_exception"] == asyncio.CancelledError.__name__
+    assert generator_exit["propagated_exception"] == GeneratorExit.__name__
 
 
-def test_source_accounting_infinite_guard_and_close_failure():
-    infinite = fixture("infinite", mode="guard", physical_fragments=(frame("long-output"),), infinite=True, expected_outcome="silent_empty_200")
-    # The guard emits a bounded failure without a successful [DONE] terminal.
-    record = replay_fixture(infinite, base_commit=BASE)[0]
-    assert record["source_accounting"]["pull_count"] >= 1
-    assert record["source_accounting"]["close_count"] >= 1
-
-    closing = fixture("close-failing", physical_fragments=(frame("x"),), close_fails=True, expected_outcome="cleanup_failure")
-    record = replay_fixture(closing, base_commit=BASE)[0]
-    assert record["actual_outcome"] == "cleanup_failure"
-    assert record["source_accounting"]["cleanup_error"] == "RuntimeError"
-
-
-@pytest.mark.parametrize(
-    ("name", "chunks", "expected"),
-    [
-        ("false-success", (frame("x"), "data: [DONE]\n\n"), "false_success_done"),
-        ("empty", tuple(), "silent_empty_200"),
-        ("corrupt", (frame("x"), frame(finish="stop"), "data: [DONE]\n\n", "data: [DONE]\n\n"), "terminal_corruption"),
-        ("post-terminal", (frame("x"), frame(finish="stop"), "data: [DONE]\n\n", frame("late")), "post_terminal_mutation"),
-        ("unsupported", (b"data: {bad}\n\n",), "unsupported_framing"),
-    ],
-)
-def test_failure_classifications_are_explicit(name, chunks, expected):
-    record = replay_fixture(fixture(name, physical_fragments=chunks, expected_outcome=expected), base_commit=BASE)[0]
-    assert record["actual_outcome"] == expected
-    assert record["pass"]
+def test_discoveries_and_bytes_are_not_normalized():
+    done = rows_for("done-before-finish")[0]
+    assert done["observed_outcome"] == "stream_post_terminal_content"
+    assert "ERR_STREAM_TERMINAL_ORDER is unreachable" in done["adjudication_note"]
+    for fixture_id in ("multiline-sse-discovery", "physical-byte-fragment-discovery"):
+        row = rows_for(fixture_id)[0]
+        assert row["underlying_stream_outcome"] == "stream_empty_visible_output"
+        assert row["adjudication_state"] == "needs_adjudication"
+    assert rows_for("unicode-emoji")[0]["raw_bytes"] > 0
+    assert rows_for("invalid-utf8-replacement")[0]["raw_frame_encoding"][0]["encoding"] == "hex"
 
 
-def test_atomic_jsonl_and_stable_summary_order(tmp_path: Path):
-    records = replay_fixture(fixture("z-last"), base_commit=BASE) + replay_fixture(fixture("a-first"), base_commit=BASE)
-    jsonl, summary = atomic_write_jsonl_and_summary(records, tmp_path)
-    lines = jsonl.read_text(encoding="utf-8").splitlines()
-    assert [json.loads(line)["fixture_id"] for line in lines[:3]] == ["a-first"] * 3
-    assert not list(tmp_path.glob(".*.tmp"))
-    body = json.loads(summary.read_text(encoding="utf-8"))
-    assert body["record_count"] == 6
-    assert body["fixture_ids"] == ["a-first", "z-last"]
+def test_atomic_write_and_summary_gate_separation(tmp_path: Path):
+    rows, summary = harness.run(tmp_path)
+    assert summary["harness_gate_pass"] is True
+    assert summary["product_gate_pass"] is False
+    assert summary["cleanup_failures"] == 3
+    assert summary["result_counts"] == {"fail": 3, "needs_adjudication": 9, "pass": 84}
+    ordered = json.loads((tmp_path / "fixture-matrix.json").read_text(encoding="utf-8"))
+    assert ordered == sorted(rows, key=lambda row: (row["fixture_id"], row["repetition"]))
+    target = tmp_path / "target.json"
+    harness.atomic_write(target, "original")
+    with pytest.raises(OSError):
+        harness.atomic_write(target, "replacement", replace=lambda _s, _d: (_ for _ in ()).throw(OSError("simulated")))
+    assert target.read_text(encoding="utf-8") == "original"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_direct_false_success_count_and_thin_cli(tmp_path: Path):
+    row = rows_for("clean-success")[0].copy()
+    row.update({"emitted_done_presence": True, "underlying_stream_outcome": "content_filter", "result": "pass"})
+    summary = harness.write_outputs(tmp_path / "summary", [row])
+    assert summary["false_success_violations"] == 1
+    wrapper = Path("scripts/round2_stream_fixture_harness.py").read_text(encoding="utf-8")
+    assert "from tests.stream_round2.harness import main" in wrapper
+    assert "class Fixture" not in wrapper and "def execute(" not in wrapper

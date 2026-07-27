@@ -1,0 +1,2489 @@
+[
+  {
+    "fixture_id": "clean-success",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "clean-success",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "clean-success",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "empty-after-metadata",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"type\":\"model_metadata\",\"model\":\"fixture\"}\n\n"
+    ],
+    "raw_bytes": 51,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "b040d1cc4b701da83021a3fdf1284c517f6b55dc74c5cf7f8b381e4655f83102",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "model_metadata": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "empty-after-metadata",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"type\":\"model_metadata\",\"model\":\"fixture\"}\n\n"
+    ],
+    "raw_bytes": 51,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "b040d1cc4b701da83021a3fdf1284c517f6b55dc74c5cf7f8b381e4655f83102",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "model_metadata": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "empty-after-metadata",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"type\":\"model_metadata\",\"model\":\"fixture\"}\n\n"
+    ],
+    "raw_bytes": 51,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "b040d1cc4b701da83021a3fdf1284c517f6b55dc74c5cf7f8b381e4655f83102",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "model_metadata": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "delimiter-only",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "\r\n",
+      "\n"
+    ],
+    "raw_bytes": 3,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2a5222a0dd2400f31aae17bc0ad61e08446faa9e86bc9862ba8b0740cfa05283",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "sse_boundary": 2
+    },
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "delimiter-only",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "\r\n",
+      "\n"
+    ],
+    "raw_bytes": 3,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2a5222a0dd2400f31aae17bc0ad61e08446faa9e86bc9862ba8b0740cfa05283",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "sse_boundary": 2
+    },
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "delimiter-only",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "\r\n",
+      "\n"
+    ],
+    "raw_bytes": 3,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2a5222a0dd2400f31aae17bc0ad61e08446faa9e86bc9862ba8b0740cfa05283",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "sse_boundary": 2
+    },
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "malformed-only",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {bad}\n\n"
+    ],
+    "raw_bytes": 13,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_malformed_only",
+    "actual_outcome": "stream_malformed_only",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "8b132d0da00542c96c69c51b4d99b44b34fca5f92390d77bcc67f74845ec55f5",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 1
+    },
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "malformed-only",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {bad}\n\n"
+    ],
+    "raw_bytes": 13,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_malformed_only",
+    "actual_outcome": "stream_malformed_only",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "8b132d0da00542c96c69c51b4d99b44b34fca5f92390d77bcc67f74845ec55f5",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 1
+    },
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "malformed-only",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {bad}\n\n"
+    ],
+    "raw_bytes": 13,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_malformed_only",
+    "actual_outcome": "stream_malformed_only",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "8b132d0da00542c96c69c51b4d99b44b34fca5f92390d77bcc67f74845ec55f5",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 1
+    },
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "missing-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 87,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_missing_finish",
+    "actual_outcome": "stream_missing_finish",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "cf2ac091a9993b00d8bc7942a7873d77972a9c9b1876eaaec93883952779812e",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "missing-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 87,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_missing_finish",
+    "actual_outcome": "stream_missing_finish",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "cf2ac091a9993b00d8bc7942a7873d77972a9c9b1876eaaec93883952779812e",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "missing-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 87,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_missing_finish",
+    "actual_outcome": "stream_missing_finish",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "cf2ac091a9993b00d8bc7942a7873d77972a9c9b1876eaaec93883952779812e",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "missing-done",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n"
+    ],
+    "raw_bytes": 134,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_missing_done",
+    "actual_outcome": "stream_missing_done",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "4b61523a65c289ec073557f1534ce040c5589d4a22e859079620f439bb125c2c",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "missing-done",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n"
+    ],
+    "raw_bytes": 134,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_missing_done",
+    "actual_outcome": "stream_missing_done",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "4b61523a65c289ec073557f1534ce040c5589d4a22e859079620f439bb125c2c",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "missing-done",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n"
+    ],
+    "raw_bytes": 134,
+    "logical_chunks": 2,
+    "expected_outcome": "stream_missing_done",
+    "actual_outcome": "stream_missing_done",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "4b61523a65c289ec073557f1534ce040c5589d4a22e859079620f439bb125c2c",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "done-before-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n"
+    ],
+    "raw_bytes": 148,
+    "logical_chunks": 3,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "85d28441ad021c00dcfd0623a6348687ad357314c22e0513f1adb2f58eef25ae",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "done-before-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n"
+    ],
+    "raw_bytes": 148,
+    "logical_chunks": 3,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "85d28441ad021c00dcfd0623a6348687ad357314c22e0513f1adb2f58eef25ae",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "done-before-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n"
+    ],
+    "raw_bytes": 148,
+    "logical_chunks": 3,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "85d28441ad021c00dcfd0623a6348687ad357314c22e0513f1adb2f58eef25ae",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "duplicate-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 209,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_duplicate_terminal",
+    "actual_outcome": "stream_duplicate_terminal",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "090c2fcdc1ca678ec1d81955b468a088647f42e55f158d528d8b6e6e0d161297",
+    "terminal_counts_order": {
+      "finish": 2,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 2,
+      "duplicate_event": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "duplicate-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 209,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_duplicate_terminal",
+    "actual_outcome": "stream_duplicate_terminal",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "090c2fcdc1ca678ec1d81955b468a088647f42e55f158d528d8b6e6e0d161297",
+    "terminal_counts_order": {
+      "finish": 2,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 2,
+      "duplicate_event": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "duplicate-finish",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 209,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_duplicate_terminal",
+    "actual_outcome": "stream_duplicate_terminal",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "090c2fcdc1ca678ec1d81955b468a088647f42e55f158d528d8b6e6e0d161297",
+    "terminal_counts_order": {
+      "finish": 2,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 2,
+      "duplicate_event": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "duplicate-done",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 162,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_duplicate_terminal",
+    "actual_outcome": "stream_duplicate_terminal",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "f6876342ba0aa50d90cc2cd0b12748c338ada7570da3d545922cc168cb4cf321",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 2,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 2,
+      "duplicate_event": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "duplicate-done",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 162,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_duplicate_terminal",
+    "actual_outcome": "stream_duplicate_terminal",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "f6876342ba0aa50d90cc2cd0b12748c338ada7570da3d545922cc168cb4cf321",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 2,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 2,
+      "duplicate_event": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "duplicate-done",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 162,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_duplicate_terminal",
+    "actual_outcome": "stream_duplicate_terminal",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "f6876342ba0aa50d90cc2cd0b12748c338ada7570da3d545922cc168cb4cf321",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 2,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 2,
+      "duplicate_event": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "post-terminal-visible",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"choices\": [{\"delta\": {\"content\": \"late\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 224,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "7ace5418e86a1fd3e8b88667d0000196dbe8df3a232fcfc923330a62055225bd",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "post-terminal-visible",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"choices\": [{\"delta\": {\"content\": \"late\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 224,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "7ace5418e86a1fd3e8b88667d0000196dbe8df3a232fcfc923330a62055225bd",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "post-terminal-visible",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"choices\": [{\"delta\": {\"content\": \"late\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 224,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "7ace5418e86a1fd3e8b88667d0000196dbe8df3a232fcfc923330a62055225bd",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "post-terminal-metadata",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"type\":\"model_metadata\",\"model\":\"fixture\"}\n\n"
+    ],
+    "raw_bytes": 199,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "ea51aeba02b70914647e1b41f478bb2bd326634fcf38655706f9dea117a09fc5",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "post-terminal-metadata",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"type\":\"model_metadata\",\"model\":\"fixture\"}\n\n"
+    ],
+    "raw_bytes": 199,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "ea51aeba02b70914647e1b41f478bb2bd326634fcf38655706f9dea117a09fc5",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "post-terminal-metadata",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+      "data: {\"type\":\"model_metadata\",\"model\":\"fixture\"}\n\n"
+    ],
+    "raw_bytes": 199,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_post_terminal_content",
+    "actual_outcome": "stream_post_terminal_content",
+    "response_hash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "raw_hash": "ea51aeba02b70914647e1b41f478bb2bd326634fcf38655706f9dea117a09fc5",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1,
+      "post_terminal_content": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "ordinary-exception-before-content",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "ordinary-exception-before-content",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "ordinary-exception-before-content",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "stream_empty_no_terminal",
+    "actual_outcome": "stream_empty_no_terminal",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "ordinary-exception-after-partial",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 73,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_interrupted",
+    "actual_outcome": "stream_interrupted",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2b8b57b1fd02191fa83d318445e5a9217986a6d7205623ef734c6c908047a49a",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 2,
+    "close_count": 1,
+    "transport_counts": {
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "ordinary-exception-after-partial",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 73,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_interrupted",
+    "actual_outcome": "stream_interrupted",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2b8b57b1fd02191fa83d318445e5a9217986a6d7205623ef734c6c908047a49a",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 2,
+    "close_count": 1,
+    "transport_counts": {
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "ordinary-exception-after-partial",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 73,
+    "logical_chunks": 1,
+    "expected_outcome": "stream_interrupted",
+    "actual_outcome": "stream_interrupted",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2b8b57b1fd02191fa83d318445e5a9217986a6d7205623ef734c6c908047a49a",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 1
+    },
+    "done_presence": false,
+    "pull_count": 2,
+    "close_count": 1,
+    "transport_counts": {
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "asyncio-cancelled",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "propagated:CancelledError",
+    "actual_outcome": "propagated:CancelledError",
+    "response_hash": "",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "asyncio-cancelled",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "propagated:CancelledError",
+    "actual_outcome": "propagated:CancelledError",
+    "response_hash": "",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "asyncio-cancelled",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "propagated:CancelledError",
+    "actual_outcome": "propagated:CancelledError",
+    "response_hash": "",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "generator-exit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "propagated:GeneratorExit",
+    "actual_outcome": "propagated:GeneratorExit",
+    "response_hash": "",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "generator-exit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "propagated:GeneratorExit",
+    "actual_outcome": "propagated:GeneratorExit",
+    "response_hash": "",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "generator-exit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [],
+    "raw_bytes": 0,
+    "logical_chunks": 0,
+    "expected_outcome": "propagated:GeneratorExit",
+    "actual_outcome": "propagated:GeneratorExit",
+    "response_hash": "",
+    "raw_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "terminal_counts_order": {
+      "finish": 0,
+      "done": 0,
+      "sequence": 0
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {},
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "character-limit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"long-output\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 83,
+    "logical_chunks": 1,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "f6c3acc354a9ad60147507f7264754ddaf5ceb51cd9a80158d825280d036737e",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "character-limit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"long-output\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 83,
+    "logical_chunks": 1,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "f6c3acc354a9ad60147507f7264754ddaf5ceb51cd9a80158d825280d036737e",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "character-limit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"long-output\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 83,
+    "logical_chunks": 1,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "f6c3acc354a9ad60147507f7264754ddaf5ceb51cd9a80158d825280d036737e",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 1,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "chunk-limit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 73,
+    "logical_chunks": 1,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2b8b57b1fd02191fa83d318445e5a9217986a6d7205623ef734c6c908047a49a",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 4,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "chunk-limit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 73,
+    "logical_chunks": 1,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2b8b57b1fd02191fa83d318445e5a9217986a6d7205623ef734c6c908047a49a",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 4,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "chunk-limit",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"x\"}, \"finish_reason\": null}]}\n\n"
+    ],
+    "raw_bytes": 73,
+    "logical_chunks": 1,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "2b8b57b1fd02191fa83d318445e5a9217986a6d7205623ef734c6c908047a49a",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": false,
+    "pull_count": 4,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "quarantined-output",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"secret\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"type\":\"output_hygiene\",\"hygiene\":{\"output_integrity\":{\"quarantine_required\":true}}}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"content_filter\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 256,
+    "logical_chunks": 4,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "c9d5490c9a93e45b3d91e412d1d4457db48c4c7f8d14d1029cb17e2e1a7df3f5",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 5,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "quarantined-output",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"secret\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"type\":\"output_hygiene\",\"hygiene\":{\"output_integrity\":{\"quarantine_required\":true}}}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"content_filter\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 256,
+    "logical_chunks": 4,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "c9d5490c9a93e45b3d91e412d1d4457db48c4c7f8d14d1029cb17e2e1a7df3f5",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 5,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "quarantined-output",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"secret\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"type\":\"output_hygiene\",\"hygiene\":{\"output_integrity\":{\"quarantine_required\":true}}}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"content_filter\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 256,
+    "logical_chunks": 4,
+    "expected_outcome": "content_filter",
+    "actual_outcome": "content_filter",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "c9d5490c9a93e45b3d91e412d1d4457db48c4c7f8d14d1029cb17e2e1a7df3f5",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 0,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 5,
+    "close_count": 1,
+    "transport_counts": {},
+    "semantic_counts": {
+      "output_hygiene": 1,
+      "finish": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "provider-substitution",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "provider_substituted",
+    "actual_outcome": "provider_substituted",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "provider-substitution",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "provider_substituted",
+    "actual_outcome": "provider_substituted",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "provider-substitution",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "provider_substituted",
+    "actual_outcome": "provider_substituted",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "model-substitution",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "model_substituted",
+    "actual_outcome": "model_substituted",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "model-substitution",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "model_substituted",
+    "actual_outcome": "model_substituted",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "model-substitution",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "model_substituted",
+    "actual_outcome": "model_substituted",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "route-unknown",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "route_unknown",
+    "actual_outcome": "route_unknown",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "route-unknown",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "route_unknown",
+    "actual_outcome": "route_unknown",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "route-unknown",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"hello\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 152,
+    "logical_chunks": 3,
+    "expected_outcome": "route_unknown",
+    "actual_outcome": "route_unknown",
+    "response_hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "raw_hash": "c93fd4b1e539dda95e63d2c116582b0053d695d97066b6ed6a8013ac41f4d7a3",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "unicode-emoji-combining",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"AðŸ˜€é\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\r\n\r\n"
+    ],
+    "raw_bytes": 162,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "be76942509f1fb76ee4ed62b0544a30ce96336869a765a5e6879f13ffc6af71e",
+    "raw_hash": "1f49742c69c02860f64ebd375a62e87d2c61bb248be797793f30f4a1535b11c6",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "unicode-emoji-combining",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"AðŸ˜€é\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\r\n\r\n"
+    ],
+    "raw_bytes": 162,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "be76942509f1fb76ee4ed62b0544a30ce96336869a765a5e6879f13ffc6af71e",
+    "raw_hash": "1f49742c69c02860f64ebd375a62e87d2c61bb248be797793f30f4a1535b11c6",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "unicode-emoji-combining",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"AðŸ˜€é\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\r\n\r\n"
+    ],
+    "raw_bytes": 162,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "be76942509f1fb76ee4ed62b0544a30ce96336869a765a5e6879f13ffc6af71e",
+    "raw_hash": "1f49742c69c02860f64ebd375a62e87d2c61bb248be797793f30f4a1535b11c6",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "invalid-utf8-bytes",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22ff227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "raw_bytes": 143,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+    "raw_hash": "02313338f67eb73e9025bb310b938c85683debacd1effa2678eab8b95eaa5cef",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "invalid-utf8-bytes",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22ff227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "raw_bytes": 143,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+    "raw_hash": "02313338f67eb73e9025bb310b938c85683debacd1effa2678eab8b95eaa5cef",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "invalid-utf8-bytes",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22ff227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "raw_bytes": 143,
+    "logical_chunks": 3,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+    "raw_hash": "02313338f67eb73e9025bb310b938c85683debacd1effa2678eab8b95eaa5cef",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 3
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 1,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "multiple-logical-sse-chunks",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"a\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {\"content\": \"b\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 221,
+    "logical_chunks": 4,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+    "raw_hash": "6341e3484088111620f81d1526f12e428e84b578fa898f52e05ac3fbf2f69576",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 2,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "multiple-logical-sse-chunks",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"a\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {\"content\": \"b\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 221,
+    "logical_chunks": 4,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+    "raw_hash": "6341e3484088111620f81d1526f12e428e84b578fa898f52e05ac3fbf2f69576",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 2,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "multiple-logical-sse-chunks",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\": [{\"delta\": {\"content\": \"a\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {\"content\": \"b\"}, \"finish_reason\": null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 221,
+    "logical_chunks": 4,
+    "expected_outcome": "success",
+    "actual_outcome": "success",
+    "response_hash": "fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+    "raw_hash": "6341e3484088111620f81d1526f12e428e84b578fa898f52e05ac3fbf2f69576",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 4
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {},
+    "semantic_counts": {
+      "content_delta": 2,
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "multiline-sse-data-discovery",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}\n",
+      "data: \"b\"},\"finish_reason\":null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 154,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_empty_visible_output",
+    "actual_outcome": "stream_empty_visible_output",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "8d9a28b60d7161057b6766da3a509f2cbc85b59134c91bab92d4c72af2767628",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 2
+    },
+    "semantic_counts": {
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "multiline-sse-data-discovery",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}\n",
+      "data: \"b\"},\"finish_reason\":null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 154,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_empty_visible_output",
+    "actual_outcome": "stream_empty_visible_output",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "8d9a28b60d7161057b6766da3a509f2cbc85b59134c91bab92d4c72af2767628",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 2
+    },
+    "semantic_counts": {
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "multiline-sse-data-discovery",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}\n",
+      "data: \"b\"},\"finish_reason\":null}]}\n\n",
+      "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
+      "data: [DONE]\n\n"
+    ],
+    "raw_bytes": 154,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_empty_visible_output",
+    "actual_outcome": "stream_empty_visible_output",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "8d9a28b60d7161057b6766da3a509f2cbc85b59134c91bab92d4c72af2767628",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 2
+    },
+    "semantic_counts": {
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "physical-byte-fragment-discovery",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a2261",
+      "62227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a205b7b2264656c7461223a207b7d2c202266696e6973685f726561736f6e223a202273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "raw_bytes": 144,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_empty_visible_output",
+    "actual_outcome": "stream_empty_visible_output",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "067a502a9055abc816a1c76b9abf28be1b8990a99ad96fde2f5ccac0d129b7f1",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 1,
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "physical-byte-fragment-discovery",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a2261",
+      "62227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a205b7b2264656c7461223a207b7d2c202266696e6973685f726561736f6e223a202273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "raw_bytes": 144,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_empty_visible_output",
+    "actual_outcome": "stream_empty_visible_output",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "067a502a9055abc816a1c76b9abf28be1b8990a99ad96fde2f5ccac0d129b7f1",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 1,
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  },
+  {
+    "fixture_id": "physical-byte-fragment-discovery",
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "parser_version": "stream-protocol/2",
+    "raw_frames": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a2261",
+      "62227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a205b7b2264656c7461223a207b7d2c202266696e6973685f726561736f6e223a202273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "raw_bytes": 144,
+    "logical_chunks": 4,
+    "expected_outcome": "stream_empty_visible_output",
+    "actual_outcome": "stream_empty_visible_output",
+    "response_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_hash": "067a502a9055abc816a1c76b9abf28be1b8990a99ad96fde2f5ccac0d129b7f1",
+    "terminal_counts_order": {
+      "finish": 1,
+      "done": 1,
+      "sequence": 2
+    },
+    "done_presence": true,
+    "pull_count": 0,
+    "close_count": 0,
+    "transport_counts": {
+      "malformed_frame": 1,
+      "unknown_frame": 1
+    },
+    "semantic_counts": {
+      "finish": 1,
+      "done": 1
+    },
+    "reproducibility_status": "reproducible",
+    "pass": true
+  }
+]

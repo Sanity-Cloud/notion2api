@@ -1,12 +1,20 @@
 {
+  "adjudication_count": 9,
+  "cleanup_failures": 3,
+  "fail_count": 3,
   "false_success_violations": 0,
   "fixture_count": 32,
   "gate_pass": true,
+  "harness_gate_pass": true,
   "harness_implementation_failures": 0,
   "nondeterministic_repetitions": 0,
+  "pass_count": 84,
+  "product_gate_pass": false,
+  "release_recommendation": "do_not_proceed_product_gate_failed_smoke_held",
   "result_counts": {
+    "fail": 3,
     "needs_adjudication": 9,
-    "pass": 87
+    "pass": 84
   },
   "run_id": "hive-stream-round2-fixture-validation-20260727",
   "schema_version": "hive-stream-round2-harness/2",

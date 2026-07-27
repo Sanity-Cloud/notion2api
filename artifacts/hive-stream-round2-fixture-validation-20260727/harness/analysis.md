@@ -1,56 +1,19 @@
-# WU-R2-HARNESS analysis
+# WU-R2-HARNESS closure analysis
 
-## Scope and evidence preservation
+## Preserved draft evidence
 
-The pre-existing `artifacts/hive-stream-round2-fixture-validation-20260727/fixture-matrix.json` remains untouched as the initial draft evidence (78 runs, 15 reported mismatches). Corrected outputs are isolated in this `harness/` directory. No provider, network, service, merge, or product-code changes were made.
+The initial 78-run / 15-mismatch matrix is preserved at `artifacts/hive-stream-round2-fixture-validation-20260727/draft/initial-78-run-15-mismatch-fixture-matrix.json` with SHA-256 `bffbd1102a3d704825828fe39c11cdd04b1b2ea379878231bfa8edc5367d80f6`. It was not deleted or overwritten.
 
-## Corrected result
+## Consolidated offline harness
 
-- 32 fixtures × 3 deterministic repetitions = **96 runs**.
-- **87 pass**, **9 needs_adjudication**, **0 fail**.
-- Harness implementation failures: **0**.
-- Nondeterministic repetitions: **0**.
-- False-success violations: **0**.
-- Gate: **PASS**.
+`tests/stream_round2/harness.py` is the authoritative version-2 implementation. The CLI is a thin importer/caller only. The regenerated matrix contains **96 deterministic runs** across 32 fixtures: **84 pass**, **3 fail**, and **9 needs adjudication**. There are **0 nondeterministic repetitions** and **0 false-success violations**.
 
-Guard-error fixtures now extract the emitted structured error event's top-level `stream_receipt`, instead of reparsing error-only emissions as provider stream frames. Before-content is recorded as `stream_empty_no_terminal` / `ERR_PROVIDER_EMPTY_STREAM`; after-partial is `stream_interrupted` / `ERR_STREAM_INTERRUPTED`. Input and emitted DONE state, emitted finish reason, source completion, pull/close accounting, close errors, propagated exceptions, and client interpretation are independent fields.
+The three failures are the close-failure fixture repetitions. Each preserves `underlying_stream_outcome=success` while setting `operational_outcome=cleanup_failure` and `result=fail`; cleanup is a hard product failure. Therefore **harness_gate_pass=true** while **product_gate_pass=false**.
 
-## Product adjudication questions
+Needs-adjudication remains deliberately unchanged for done-before-finish (observed `stream_post_terminal_content`; `ERR_STREAM_TERMINAL_ORDER` is unreachable for that input under current precedence) and for multiline / physical-fragment framing discoveries (underlying `stream_empty_visible_output`).
 
-1. **spec_disagreement — done-before-finish (3 repetitions):** the tracker increments `post_terminal_count` for every non-DONE event after DONE before it reaches the terminal-order comparison. Current observed classification is `stream_post_terminal_content`; the semantic expectation remains `stream_terminal_order_invalid` / `ERR_STREAM_TERMINAL_ORDER`. The fixture is intentionally `needs_adjudication`, not a pass. Its executable test preserves the reachability evidence.
-2. **unsupported_framing — multiline data (3) and physical byte fragmentation (3):** current product observation is `stream_empty_visible_output`, including the recorded event counts. The preserved semantic intent is malformed-only. These six runs are discovery outcomes and require framing-policy adjudication rather than a harness failure.
+## Validation and release posture
 
-## Coverage added
+Focused harness plus inherited stream tests passed (**60 passed**); Ruff and compileall passed; the CLI regenerated JSON, JSONL, and summary. Work used no network, provider, service, merge, deploy, or downstream lane execution.
 
-Close failure; Unicode emoji; combining marks; CRLF/LF; invalid UTF-8 replacement; complete logical chunks; multiline and physical framing discovery; cancellation; GeneratorExit; finite/infinite sources; character/chunk limits; terminal anomalies; route states; quarantine; stable JSON/JSONL/summary output; temp cleanup; simulated atomic replacement failure.
-
-## Commands and results
-
-```text
-python scripts/round2_stream_fixture_harness.py artifacts/hive-stream-round2-fixture-validation-20260727/harness
-=> gate_pass=true; total_runs=96; pass=87; needs_adjudication=9; fail=0
-
-python -m pytest tests/stream_round2/test_fixture_harness.py -q
-=> 9 passed
-
-python -m pytest tests/test_stream_protocol.py tests/test_stream_integrity_guard.py -q
-=> 23 passed
-
-python -m ruff check scripts/round2_stream_fixture_harness.py tests/stream_round2/test_fixture_harness.py
-=> All checks passed
-
-python -m compileall -q scripts/round2_stream_fixture_harness.py tests/stream_round2/test_fixture_harness.py
-=> passed
-
-git diff --check
-=> passed
-
-encoding guard (UTF-8 no BOM/NUL)
-=> passed
-```
-
-## Release recommendation
-
-**Release WU-R2-HARNESS to the next lane for adjudication only.** The harness is complete and durable; do not treat the nine discovery runs as harness defects. Product policy decisions are required before any framing or terminal-order product change.
-
-**WU-R2-HARNESS: COMPLETED**
+Dependencies recorded for this work unit: WU-R2-MATRIX, WU-R2-CONSUMERS, WU-R2-ENCODING, and WU-R2-FRAMING. **Downstream fixture lanes must not proceed while smoke remains held**, because the product gate is failed by cleanup handling. The exact file hashes and pre-final-amend commit are in `receipt.json`.

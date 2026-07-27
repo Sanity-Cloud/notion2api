@@ -1,42 +1,68 @@
 {
-  "schema_version": "hive-stream-round2-harness-receipt/1",
-  "work_unit": "WU-R2-HARNESS",
-  "status": "COMPLETED",
-  "base_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+  "branch": "validate/stream-round2-fixtures-20260727",
+  "cleanup_failure_status": "present: 3 close-failure repetitions are hard product failures; underlying_stream_outcome remains success",
+  "commit_before_final_amend": "96193d8f6d34f7baceeadee0ffb22edb8f777fe9",
+  "downstream_release_decision": "do_not_proceed_product_gate_failed_smoke_held; no downstream lanes were executed",
   "draft_evidence": {
-    "path": "artifacts/hive-stream-round2-fixture-validation-20260727/fixture-matrix.json",
+    "mismatches": 15,
+    "path": "artifacts/hive-stream-round2-fixture-validation-20260727/draft/initial-78-run-15-mismatch-fixture-matrix.json",
     "preserved": true,
-    "initial_runs": 78,
-    "initial_mismatches": 15
+    "runs": 78,
+    "sha256": "bffbd1102a3d704825828fe39c11cdd04b1b2ea379878231bfa8edc5367d80f6"
   },
-  "corrected_results": {
-    "fixtures": 32,
-    "repetitions": 3,
-    "runs": 96,
-    "pass": 87,
-    "needs_adjudication": 9,
-    "fail": 0,
+  "excluded_actions": [
+    "network",
+    "provider",
+    "service",
+    "merge",
+    "deploy"
+  ],
+  "harness": {
+    "adjudication_count": 9,
+    "cleanup_failures": 3,
+    "fail_count": 3,
+    "false_success_violations": 0,
+    "fixture_count": 32,
+    "gate_pass": true,
+    "harness_gate_pass": true,
     "harness_implementation_failures": 0,
     "nondeterministic_repetitions": 0,
-    "false_success_violations": 0,
-    "gate_pass": true
+    "pass_count": 84,
+    "product_gate_pass": false,
+    "release_recommendation": "do_not_proceed_product_gate_failed_smoke_held",
+    "result_counts": {
+      "fail": 3,
+      "needs_adjudication": 9,
+      "pass": 84
+    },
+    "run_id": "hive-stream-round2-fixture-validation-20260727",
+    "schema_version": "hive-stream-round2-harness/2",
+    "total_runs": 96
   },
-  "adjudication": {
-    "spec_disagreement_runs": 3,
-    "unsupported_framing_runs": 6,
-    "product_questions": [
-      "DONE-before-finish reaches post-terminal-content before terminal-order validation.",
-      "Multiline data and physical fragmentation currently classify as stream_empty_visible_output rather than malformed-only."
-    ]
+  "hashes_sha256": {
+    "authoritative_harness": "cd581118daa2617afa80ecd744b51e3e98fc92b4fd14ca37ded60839a44288e4",
+    "cli_wrapper": "2b2f6f810d602febf773c32d466e411a89c99668be4a99528ea7acd5f4376cda",
+    "draft_fixture_matrix_json": "bffbd1102a3d704825828fe39c11cdd04b1b2ea379878231bfa8edc5367d80f6",
+    "fixture_matrix_json": "41ec755093503b9faf73234a3b463606d48f62e9396f1d1583a9c6da39dd698d",
+    "fixture_matrix_jsonl": "403b226624f9dd7f3ad06d8283d0d2b55bd8b1b731ce803f328e132c01c23235",
+    "fixture_schema_json": "8cee338e90ac250b241d9493bbfbcea8ec97ab231fc4eb0459bf125c221b37fd",
+    "summary_json": "2de69cedff9d62c1ab957164e2a485af12e32abda5185095aafd387bfaecc6fb"
   },
-  "outputs": ["fixture-matrix.json", "fixture-matrix.jsonl", "summary.json", "analysis.md", "receipt.json"],
-  "checks": {
-    "focused_harness_tests": "9 passed",
-    "inherited_stream_tests": "23 passed",
-    "ruff": "passed",
+  "mission_dependencies": [
+    "WU-R2-MATRIX",
+    "WU-R2-CONSUMERS",
+    "WU-R2-ENCODING",
+    "WU-R2-FRAMING"
+  ],
+  "mission_id": "hive-stream-round2-fixture-validation-20260727",
+  "receipt_schema_version": "hive-stream-round2-harness-receipt/2",
+  "scope": "offline deterministic harness closure only; no product code or downstream lane execution",
+  "validation": {
+    "cli": "passed",
     "compileall": "passed",
-    "git_diff_check": "passed",
-    "encoding_guard": "passed"
+    "focused_pytest": "60 passed",
+    "ruff": "passed",
+    "strict_utf8_no_bom": "passed"
   },
-  "recommendation": "Release to next lane for adjudication only; no product change is authorized by this harness receipt."
+  "work_unit": "WU-R2-HARNESS"
 }

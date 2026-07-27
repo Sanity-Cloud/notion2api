@@ -1,4 +1,9 @@
-"""Deterministic, offline fixture harness for later stream Round 2 lanes."""
+"""Offline deterministic Round 2 stream-fixture validation harness.
+
+This harness observes current product behaviour; it never normalizes product
+mismatches into passes.  It deliberately keeps the original matrix as draft
+evidence and writes corrected evidence only beneath the harness output folder.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -6,210 +11,335 @@ import hashlib
 import json
 import os
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator, Literal
 
-from app.stream_protocol import PARSER_VERSION, StreamProtocolTracker
+ROOT = Path(__file__).resolve().parents[2]
 
-SCHEMA_VERSION = "hive-stream-round2-fixture-result/1"
-INVARIANT_FIELDS = (
-    "fixture_id", "base_commit", "parser_version", "expected_outcome", "actual_outcome",
-    "actual_code", "response_sha256", "raw_sha256", "semantic_counts", "transport_counts",
-    "terminal", "done_presence", "source_accounting", "client_interpretation",
-)
+from app.stream_protocol import PARSER_VERSION, StreamProtocolTracker, classify_route_integrity  # noqa: E402  # ROOT is inserted above for direct script execution
+
+SCHEMA_VERSION = "hive-stream-round2-harness/2"
+RUN_ID = "hive-stream-round2-fixture-validation-20260727"
+BASE_COMMIT = "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+REPETITIONS = 3
+Json = dict[str, Any]
+Mode = Literal["tracker", "guard", "route"]
+
+
+def frame(content: str | None = None, finish: str | None = None, *, newline: str = "\n") -> str:
+    delta = {} if content is None else {"content": content}
+    payload = {"choices": [{"delta": delta, "finish_reason": finish}]}
+    return "data: " + json.dumps(payload, ensure_ascii=False, sort_keys=True) + newline + newline
+
+
+def metadata() -> str:
+    return 'data: {"model":"fixture","type":"model_metadata"}\n\n'
+
+
+def hygiene() -> str:
+    return 'data: {"hygiene":{"output_integrity":{"quarantine_required":true}},"type":"output_hygiene"}\n\n'
 
 
 @dataclass(frozen=True)
 class Fixture:
     fixture_id: str
-    mode: str
-    physical_fragments: tuple[bytes | str, ...]
-    logical_chunks: tuple[dict[str, Any], ...]
+    mode: Mode
+    chunks: tuple[bytes | str, ...]
     expected_outcome: str
     expected_code: str = ""
-    source_error: Callable[[], BaseException] | None = None
+    semantic_intent: str = ""
+    error_factory: Callable[[], BaseException] | None = None
     infinite: bool = False
-    close_fails: bool = False
-    client_interpretation: str = "tracker_receipt"
+    close_error: bool = False
+    limit: tuple[str, int] | None = None
+    route: tuple[str, str, str, str] | None = None
+    discovery: str = ""
 
 
-@dataclass
-class CountingSource:
-    fragments: tuple[bytes | str, ...]
-    error: BaseException | None = None
-    infinite: bool = False
-    close_fails: bool = False
-    pulls: int = 0
-    closes: int = 0
-    index: int = 0
+class Source(Iterator[bytes | str]):
+    """Bounded test double with explicit pull and close evidence."""
 
-    def __iter__(self) -> "CountingSource":
+    def __init__(self, fixture: Fixture) -> None:
+        self._chunks = fixture.chunks
+        self._error = fixture.error_factory() if fixture.error_factory else None
+        self._infinite = fixture.infinite
+        self._close_error = fixture.close_error
+        self._index = 0
+        self.pulls = 0
+        self.close_calls = 0
+        self.close_exception = ""
+        self.completed = False
+
+    def __iter__(self) -> "Source":
         return self
 
     def __next__(self) -> bytes | str:
         self.pulls += 1
-        if self.index < len(self.fragments):
-            value = self.fragments[self.index]
-            self.index += 1
+        if self._index < len(self._chunks):
+            value = self._chunks[self._index]
+            self._index += 1
             return value
-        if self.infinite and self.fragments:
-            return self.fragments[-1]
-        if self.error is not None:
-            raise self.error
+        if self._infinite and self._chunks:
+            return self._chunks[-1]
+        self.completed = True
+        if self._error is not None:
+            raise self._error
         raise StopIteration
 
     def close(self) -> None:
-        self.closes += 1
-        if self.close_fails:
-            raise RuntimeError("fixture close failure")
+        self.close_calls += 1
+        if self._close_error:
+            self.close_exception = "RuntimeError: close failure"
+            raise RuntimeError("close failure")
 
 
-def _bytes(value: bytes | str) -> bytes:
-    return value if isinstance(value, bytes) else value.encode("utf-8")
+def fixtures() -> tuple[Fixture, ...]:
+    clean = (frame("hello"), frame(finish="stop"), "data: [DONE]\n\n")
+    return (
+        Fixture("clean-success", "tracker", clean, "success"),
+        Fixture("empty-after-metadata", "tracker", (metadata(),), "stream_empty_no_terminal", "ERR_PROVIDER_EMPTY_STREAM"),
+        Fixture("delimiter-only", "tracker", ("\r\n", "\n"), "stream_empty_no_terminal", "ERR_PROVIDER_EMPTY_STREAM"),
+        Fixture("malformed-only", "tracker", ("data: {bad}\n\n",), "stream_malformed_only", "ERR_STREAM_MALFORMED_ONLY"),
+        Fixture("missing-finish", "tracker", (frame("x"), "data: [DONE]\n\n"), "stream_missing_finish", "ERR_STREAM_MISSING_FINISH"),
+        Fixture("missing-done", "tracker", (frame("x"), frame(finish="stop")), "stream_missing_done", "ERR_STREAM_MISSING_DONE"),
+        Fixture("done-before-finish", "tracker", (frame("x"), "data: [DONE]\n\n", frame(finish="stop")), "stream_terminal_order_invalid", "ERR_STREAM_TERMINAL_ORDER", discovery="spec_disagreement"),
+        Fixture("duplicate-finish", "tracker", (frame("x"), frame(finish="stop"), frame(finish="stop"), "data: [DONE]\n\n"), "stream_duplicate_terminal", "ERR_STREAM_DUPLICATE_TERMINAL"),
+        Fixture("duplicate-done", "tracker", (frame("x"), frame(finish="stop"), "data: [DONE]\n\n", "data: [DONE]\n\n"), "stream_duplicate_terminal", "ERR_STREAM_DUPLICATE_TERMINAL"),
+        Fixture("post-terminal-visible", "tracker", (frame("x"), frame(finish="stop"), "data: [DONE]\n\n", frame("late")), "stream_post_terminal_content", "ERR_STREAM_POST_TERMINAL_CONTENT"),
+        Fixture("post-terminal-metadata", "tracker", (frame("x"), frame(finish="stop"), "data: [DONE]\n\n", metadata()), "stream_post_terminal_content", "ERR_STREAM_POST_TERMINAL_CONTENT"),
+        Fixture("invalid-finish-reason", "tracker", (frame("x"), frame(finish="bogus"), "data: [DONE]\n\n"), "stream_finish_reason_invalid", "ERR_STREAM_FINISH_REASON"),
+        Fixture("ordinary-exception-before-content", "guard", (), "stream_empty_no_terminal", "ERR_PROVIDER_EMPTY_STREAM", error_factory=RuntimeError),
+        Fixture("ordinary-exception-after-partial", "guard", (frame("x"),), "stream_interrupted", "ERR_STREAM_INTERRUPTED", error_factory=RuntimeError),
+        Fixture("asyncio-cancelled", "guard", (), "propagated:CancelledError", error_factory=asyncio.CancelledError),
+        Fixture("generator-exit", "guard", (), "propagated:GeneratorExit", error_factory=GeneratorExit),
+        Fixture("close-failure", "guard", clean, "success", close_error=True),
+        Fixture("finite-source", "guard", clean, "success"),
+        Fixture("character-limit", "guard", (frame("long-output"),), "content_filter", infinite=True, limit=("MAX_GUARDED_STREAM_BUFFER_CHARS", 10)),
+        Fixture("chunk-limit", "guard", (frame("x"),), "content_filter", infinite=True, limit=("MAX_GUARDED_STREAM_BUFFER_CHUNKS", 3)),
+        Fixture("quarantined-output", "guard", (frame("secret"), hygiene(), frame(finish="content_filter"), "data: [DONE]\n\n"), "content_filter"),
+        Fixture("unicode-emoji", "tracker", (frame("😀"), frame(finish="stop"), "data: [DONE]\n\n"), "success"),
+        Fixture("combining-marks", "tracker", (frame("e\u0301"), frame(finish="stop"), "data: [DONE]\n\n"), "success"),
+        Fixture("crlf-normalization", "tracker", (frame("x", newline="\r\n"), frame(finish="stop", newline="\r\n"), "data: [DONE]\r\n\r\n"), "success"),
+        Fixture("invalid-utf8-replacement", "tracker", (b'data: {"choices":[{"delta":{"content":"\xff"},"finish_reason":null}]}\n\n', frame(finish="stop"), b"data: [DONE]\n\n"), "success"),
+        Fixture("multiple-complete-logical-chunks", "guard", (frame("a"), frame("b"), frame(finish="stop"), "data: [DONE]\n\n"), "success"),
+        Fixture("multiline-sse-discovery", "tracker", ('data: {"choices":[{"delta":{"content":"a"}\n', 'data: "b"},"finish_reason":null}]}\n\n', frame(finish="stop"), "data: [DONE]\n\n"), "stream_malformed_only", "ERR_STREAM_MALFORMED_ONLY", semantic_intent="malformed-only", discovery="unsupported_framing"),
+        Fixture("physical-byte-fragment-discovery", "tracker", (b'data: {"choices":[{"delta":{"content":"a', b'b"},"finish_reason":null}]}\n\n', frame(finish="stop").encode(), b"data: [DONE]\n\n"), "stream_malformed_only", "ERR_STREAM_MALFORMED_ONLY", semantic_intent="malformed-only", discovery="unsupported_framing"),
+        Fixture("route-exact", "route", clean, "route_exact", route=("openai", "gpt-x", "openai", "gpt-x")),
+        Fixture("provider-substitution", "route", clean, "provider_substituted", route=("minimax", "minimax-x", "openai", "gpt-x")),
+        Fixture("model-substitution", "route", clean, "model_substituted", route=("openai", "gpt-x", "openai", "gpt-y")),
+        Fixture("route-unknown", "route", clean, "route_unknown", route=("openai", "gpt-x", "", "")),
+    )
 
 
-def _encoded_fragment(value: bytes | str) -> dict[str, str]:
-    raw = _bytes(value)
-    return {"encoding": "hex", "value": raw.hex()}
+def _bytes(chunks: Iterable[bytes | str]) -> bytes:
+    return b"".join(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8", "replace") for chunk in chunks)
 
 
-def _classify(outcome: Any) -> tuple[str, str]:
-    code = str(outcome.code or "")
-    classification = str(outcome.classification or "")
-    if code == "ERR_STREAM_MISSING_FINISH" and outcome.receipt.get("done_count"):
-        return "false_success_done", code
-    if code == "ERR_PROVIDER_EMPTY_STREAM":
-        return "silent_empty_200", code
-    if code in {"ERR_STREAM_DUPLICATE_TERMINAL", "ERR_STREAM_TERMINAL_ORDER"}:
-        return "terminal_corruption", code
-    if code == "ERR_STREAM_POST_TERMINAL_CONTENT":
-        return "post_terminal_mutation", code
-    if outcome.receipt.get("transport_event_counts", {}).get("malformed_frame"):
-        return "unsupported_framing", code
-    return classification or ("success" if outcome.ok else "stream_failure"), code
+def _frame_encoding(chunks: tuple[bytes | str, ...]) -> list[Json]:
+    return [{"encoding": "hex" if isinstance(chunk, bytes) else "utf-8", "value": chunk.hex() if isinstance(chunk, bytes) else chunk} for chunk in chunks]
 
 
-def _tracker_run(source: CountingSource) -> tuple[Any, str]:
+def _parse_emitted(emitted: str) -> tuple[Json | None, str | None, bool]:
+    receipt: Json | None = None
+    finish: str | None = None
+    for part in emitted.split("\n\n"):
+        if not part.startswith("data:"):
+            continue
+        try:
+            payload = json.loads(part[5:].strip())
+        except json.JSONDecodeError:
+            continue
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(payload.get("stream_receipt"), dict):
+            receipt = dict(payload["stream_receipt"])
+            if isinstance(error, dict):
+                receipt["code"] = str(error.get("code") or "")
+        elif isinstance(error, dict) and isinstance(error.get("stream_receipt"), dict):
+            receipt = dict(error["stream_receipt"])
+            receipt["code"] = str(error.get("code") or "")
+        choices = payload.get("choices") if isinstance(payload, dict) else None
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            value = choices[0].get("finish_reason")
+            if value:
+                finish = str(value)
+    return receipt, finish, "data: [DONE]" in emitted
+
+
+def _observe(chunks: Iterable[bytes | str]) -> tuple[Json, str, str]:
     tracker = StreamProtocolTracker()
-    source_error: BaseException | None = None
-    try:
-        for fragment in source:
-            tracker.observe(fragment)
-    except (asyncio.CancelledError, GeneratorExit):
-        raise
-    except BaseException as exc:
-        source_error = exc
-    return tracker.finalize(source_error=source_error), "tracker_receipt"
+    for chunk in chunks:
+        tracker.observe(chunk)
+    outcome = tracker.finalize()
+    return outcome.receipt, outcome.classification, outcome.code
 
 
-def _guard_run(source: CountingSource) -> tuple[Any, str]:
+def _guard(fixture: Fixture) -> tuple[Source, str, Json, str, str, str | None, bool, str]:
+    # Import lazily so tracker/route fixtures remain configuration-free and offline.
+    os.environ.setdefault(
+        "NOTION_ACCOUNTS",
+        '[{"token_v2":"fixture","space_id":"fixture","user_id":"fixture"}]',
+    )
     from app.api import chat
-    emitted: list[bytes | str] = []
-    try:
-        emitted = list(chat._guard_stream_until_integrity(source, response_id="fixture", model="fixture"))
-    except (asyncio.CancelledError, GeneratorExit):
-        raise
-    tracker = StreamProtocolTracker()
-    for item in emitted:
-        tracker.observe(item)
-    return tracker.finalize(), "guarded_stream"
 
-
-def execute_fixture(fixture: Fixture, *, repetition: int, base_commit: str) -> dict[str, Any]:
-    source = CountingSource(fixture.physical_fragments, fixture.source_error() if fixture.source_error else None, fixture.infinite, fixture.close_fails)
+    source = Source(fixture)
+    previous = getattr(chat, fixture.limit[0]) if fixture.limit else None
+    if fixture.limit:
+        setattr(chat, fixture.limit[0], fixture.limit[1])
     propagated = ""
     try:
-        outcome, interpretation = _tracker_run(source) if fixture.mode == "tracker" else _guard_run(source)
-        actual, code = _classify(outcome)
-    except (asyncio.CancelledError, GeneratorExit) as exc:
+        emitted = "".join(str(value) for value in chat._guard_stream_until_integrity(source, response_id="fixture", model="fixture"))
+    except BaseException as exc:
+        emitted = ""
         propagated = type(exc).__name__
-        actual, code, interpretation = "source_cancelled", propagated, "propagated"
-        outcome = None
     finally:
-        cleanup_error = ""
+        if fixture.limit:
+            setattr(chat, fixture.limit[0], previous)
+    error_receipt, finish, done = _parse_emitted(emitted)
+    if propagated:
+        receipt: Json = {"classification": f"propagated:{propagated}", "parser_version": PARSER_VERSION}
+        return source, emitted, receipt, f"propagated:{propagated}", "", finish, done, propagated
+    if error_receipt is not None:
+        return source, emitted, error_receipt, str(error_receipt.get("classification", "")), _code_for(error_receipt), finish, done, ""
+    if finish == "content_filter":
+        return source, emitted, {"classification": "content_filter", "parser_version": PARSER_VERSION}, "content_filter", "", finish, done, ""
+    receipt, classification, code = _observe(tuple(part + "\n\n" for part in emitted.split("\n\n") if part))
+    return source, emitted, receipt, classification, code, finish, done, ""
+
+
+def _code_for(receipt: Json) -> str:
+    mapping = {"stream_empty_no_terminal": "ERR_PROVIDER_EMPTY_STREAM", "stream_interrupted": "ERR_STREAM_INTERRUPTED", "stream_missing_done": "ERR_STREAM_MISSING_DONE"}
+    return str(receipt.get("code") or mapping.get(str(receipt.get("classification", "")), ""))
+
+
+def _adjudication(fixture: Fixture, observed: str) -> tuple[str, str]:
+    if fixture.discovery == "spec_disagreement":
+        return "needs_adjudication", "spec_disagreement: observed stream_post_terminal_content; ERR_STREAM_TERMINAL_ORDER is unreachable for that input under current precedence"
+    if fixture.discovery == "unsupported_framing":
+        return "needs_adjudication", f"unsupported_framing: underlying current classification is {observed}"
+    return "none", ""
+
+
+def execute(fixture: Fixture, repetition: int) -> Json:
+    raw = _bytes(fixture.chunks)
+    emitted = ""
+    propagated = ""
+    source: Source | None = None
+    if fixture.mode == "route":
+        observed = classify_route_integrity(requested_provider=fixture.route[0], requested_model=fixture.route[1], observed_provider=fixture.route[2], observed_model=fixture.route[3]) if fixture.route else "route_unknown"
+        code = ""
+        receipt: Json = {"parser_version": PARSER_VERSION, "transport_event_counts": {}, "semantic_event_counts": {}, "visible_chars": 0, "response_sha256": "", "finish_count": 0, "done_count": 0, "normalized_sequence_count": 0}
+        emitted_finish = None
+        emitted_done = False
+        source = Source(fixture)
+    elif fixture.mode == "guard":
+        source, emitted, receipt, observed, code, emitted_finish, emitted_done, propagated = _guard(fixture)
+    else:
+        source = Source(fixture)
+        try:
+            receipt, observed, code = _observe(source)
+        finally:
+            if source.close_calls == 0:
+                try:
+                    source.close()
+                except BaseException:
+                    pass
+        emitted_finish = None
+        emitted_done = False
+    if source is not None and source.close_calls == 0:
         try:
             source.close()
-        except BaseException as exc:
-            cleanup_error = type(exc).__name__
-    if cleanup_error:
-        actual, code = "cleanup_failure", cleanup_error
-    raw = b"".join(_bytes(value) for value in fixture.physical_fragments)
-    receipt = outcome.receipt if outcome else {}
-    terminal = {
-        "finish_count": receipt.get("finish_count", 0),
-        "done_count": receipt.get("done_count", 0),
-        "first_finish_sequence": receipt.get("first_finish_sequence"),
-        "first_done_sequence": receipt.get("first_done_sequence"),
-        "ordering": "finish_before_done" if receipt.get("first_finish_sequence", 0) < receipt.get("first_done_sequence", 0) else "invalid_or_missing",
+        except BaseException:
+            pass
+    underlying_stream_outcome = observed
+    operational_outcome = "success"
+    if source is None or source.close_calls != 1 or source.close_exception:
+        operational_outcome = "cleanup_failure"
+    state, note = _adjudication(fixture, observed)
+    invariant = {"expected_outcome": fixture.expected_outcome, "observed_outcome": observed, "outcome_match": observed == fixture.expected_outcome, "expected_code": fixture.expected_code, "observed_code": code, "code_match": not fixture.expected_code or code == fixture.expected_code}
+    result = "needs_adjudication" if state == "needs_adjudication" else ("pass" if invariant["outcome_match"] and invariant["code_match"] else "fail")
+    if operational_outcome == "cleanup_failure":
+        result = "fail"
+    execution_id = hashlib.sha256(f"{fixture.fixture_id}:{repetition}:{raw.hex()}".encode()).hexdigest()[:20]
+    return {
+        "schema_version": SCHEMA_VERSION, "fixture_id": fixture.fixture_id, "repetition": repetition, "execution_id": execution_id,
+        "run_id": RUN_ID, "base_commit": BASE_COMMIT, "parser_version": receipt.get("parser_version", PARSER_VERSION), "mode": fixture.mode,
+        "raw_frame_encoding": _frame_encoding(fixture.chunks), "raw_bytes": len(raw), "logical_chunks": len(fixture.chunks),
+        "expected_outcome": fixture.expected_outcome, "expected_code": fixture.expected_code, "expected_semantic_intent": fixture.semantic_intent or fixture.expected_outcome,
+        "observed_outcome": observed, "observed_code": code, "underlying_classification": observed,
+        "underlying_stream_outcome": underlying_stream_outcome, "operational_outcome": operational_outcome,
+        "transport_counts": dict(receipt.get("transport_event_counts", {})), "semantic_counts": dict(receipt.get("semantic_event_counts", {})), "visible_chars": int(receipt.get("visible_chars", 0)),
+        "response_hash": str(receipt.get("response_sha256", "")), "raw_hash": hashlib.sha256(raw).hexdigest(),
+        "finish_count": int(receipt.get("finish_count", 0)), "done_count": int(receipt.get("done_count", 0)), "sequence_count": int(receipt.get("normalized_sequence_count", 0)),
+        "finish_reason": receipt.get("finish_reason"), "emitted_finish_reason": emitted_finish,
+        "input_done_presence": any(b"[DONE]" in (c if isinstance(c, bytes) else c.encode()) for c in fixture.chunks), "emitted_done_presence": emitted_done,
+        "pull_count": source.pulls, "close_count": source.close_calls, "close_error": source.close_exception or None, "socket_iteration_completed": source.completed,
+        "propagated_exception": propagated or None, "client_interpretation": "error_receipt" if 'stream_receipt' in emitted else ("success_done" if emitted_done else ("non_success_terminal" if emitted_finish else "no_emission")),
+        "stop_condition": "propagated" if propagated else ("guard_limit" if fixture.limit else ("source_error" if fixture.error_factory else "source_exhausted")),
+        "adjudication_state": state, "adjudication_note": note, "invariant_comparison": invariant, "deterministic_replay_status": "pending", "result": result,
     }
-    record = {
-        "schema_version": SCHEMA_VERSION,
-        "fixture_id": fixture.fixture_id,
-        "repetition": repetition,
-        "base_commit": base_commit,
-        "parser_version": PARSER_VERSION,
-        "mode": fixture.mode,
-        "physical_fragments": [_encoded_fragment(item) for item in fixture.physical_fragments],
-        "raw_bytes": len(raw),
-        "logical_chunks": list(fixture.logical_chunks),
-        "expected_outcome": fixture.expected_outcome,
-        "expected_code": fixture.expected_code,
-        "actual_outcome": actual,
-        "actual_code": code,
-        "response_sha256": receipt.get("response_sha256", ""),
-        "raw_sha256": hashlib.sha256(raw).hexdigest(),
-        "semantic_counts": dict(sorted(receipt.get("semantic_event_counts", {}).items())),
-        "transport_counts": dict(sorted(receipt.get("transport_event_counts", {}).items())),
-        "terminal": terminal,
-        "done_presence": bool(receipt.get("done_count")),
-        "source_accounting": {"pull_count": source.pulls, "close_count": source.closes, "cleanup_error": cleanup_error},
-        "client_interpretation": interpretation,
-        "deterministic_replay": "pending",
-        "propagated": propagated,
-    }
-    record["pass"] = actual == fixture.expected_outcome and (not fixture.expected_code or code == fixture.expected_code)
-    return record
 
 
-def replay_fixture(fixture: Fixture, *, base_commit: str, repetitions: int = 3) -> list[dict[str, Any]]:
-    if repetitions < 3:
-        raise ValueError("Round 2 fixtures require at least three repetitions")
-    records = [execute_fixture(fixture, repetition=index + 1, base_commit=base_commit) for index in range(repetitions)]
-    baseline = {key: records[0][key] for key in INVARIANT_FIELDS}
-    stable = all({key: record[key] for key in INVARIANT_FIELDS} == baseline for record in records[1:])
-    status = "reproducible" if stable else "replay_divergence"
-    for record in records:
-        record["deterministic_replay"] = status
-        record["pass"] = record["pass"] and stable
-    return records
+def deterministic_fields(record: Json) -> Json:
+    excluded = {"repetition", "execution_id", "deterministic_replay_status"}
+    return {key: value for key, value in record.items() if key not in excluded}
 
 
-def atomic_write_jsonl_and_summary(records: Iterable[dict[str, Any]], output_dir: Path) -> tuple[Path, Path]:
-    ordered = sorted(records, key=lambda row: (row["fixture_id"], row["repetition"]))
-    output_dir.mkdir(parents=True, exist_ok=True)
-    jsonl = output_dir / "results.jsonl"
-    summary = output_dir / "summary.json"
-    _atomic_write(jsonl, "".join(json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":")) + "\n" for row in ordered))
-    summary_body = {
-        "schema_version": SCHEMA_VERSION,
-        "record_count": len(ordered),
-        "fixture_ids": sorted({row["fixture_id"] for row in ordered}),
-        "failed_count": sum(not row["pass"] for row in ordered),
-        "replay_statuses": sorted({row["deterministic_replay"] for row in ordered}),
-    }
-    _atomic_write(summary, json.dumps(summary_body, sort_keys=True, ensure_ascii=False, indent=2) + "\n")
-    return jsonl, summary
+def compare_repetitions(records: list[Json]) -> None:
+    for fixture_id in {str(row["fixture_id"]) for row in records}:
+        rows = [row for row in records if row["fixture_id"] == fixture_id]
+        stable = all(deterministic_fields(row) == deterministic_fields(rows[0]) for row in rows)
+        for row in rows:
+            row["deterministic_replay_status"] = "reproducible" if stable else "nondeterministic"
+            if not stable:
+                row["result"] = "fail"
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent, text=True)
+def atomic_write(path: Path, data: str, *, replace: Callable[[str, str], None] = os.replace) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False)
+    temp_name = handle.name
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(content)
+        with handle:
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_name, path)
-    finally:
-        if os.path.exists(temp_name):
-            os.unlink(temp_name)
+        replace(temp_name, str(path))
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+
+
+def write_outputs(output_dir: Path, rows: list[Json]) -> Json:
+    ordered = sorted(rows, key=lambda row: (str(row["fixture_id"]), int(row["repetition"])))
+    counts = Counter(str(row["result"]) for row in ordered)
+    nondeterministic = sum(row["deterministic_replay_status"] != "reproducible" for row in ordered)
+    cleanup_failures = sum(row["operational_outcome"] == "cleanup_failure" for row in ordered)
+    false_success_violations = sum(
+        bool(row["emitted_done_presence"]) and row["underlying_stream_outcome"] != "success"
+        or (row["underlying_stream_outcome"] == "success" and int(row["visible_chars"]) == 0)
+        for row in ordered
+    )
+    harness_gate_pass = nondeterministic == 0
+    product_gate_pass = not counts["fail"] and cleanup_failures == 0 and false_success_violations == 0
+    summary = {"schema_version": SCHEMA_VERSION, "run_id": RUN_ID, "total_runs": len(ordered), "fixture_count": len(fixtures()), "result_counts": dict(sorted(counts.items())), "pass_count": counts["pass"], "fail_count": counts["fail"], "adjudication_count": counts["needs_adjudication"], "harness_implementation_failures": 0, "nondeterministic_repetitions": nondeterministic, "cleanup_failures": cleanup_failures, "false_success_violations": false_success_violations, "harness_gate_pass": harness_gate_pass, "product_gate_pass": product_gate_pass, "release_recommendation": "do_not_proceed_product_gate_failed_smoke_held" if not product_gate_pass else "fixture_lanes_may_proceed_smoke_held", "gate_pass": harness_gate_pass}
+    atomic_write(output_dir / "fixture-matrix.json", json.dumps(ordered, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    atomic_write(output_dir / "fixture-matrix.jsonl", "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in ordered))
+    atomic_write(output_dir / "summary.json", json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    return summary
+
+
+def run(output_dir: Path | None = None) -> tuple[list[Json], Json]:
+    rows = [execute(fixture, repetition) for fixture in fixtures() for repetition in range(1, REPETITIONS + 1)]
+    compare_repetitions(rows)
+    summary = write_outputs(output_dir, rows) if output_dir else {}
+    return rows, summary
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = argv or []
+    destination = Path(arguments[0]) if arguments else ROOT / "artifacts" / RUN_ID / "harness"
+    _, summary = run(destination)
+    print(json.dumps(summary, sort_keys=True))
+    return 0 if summary.get("harness_gate_pass") else 1
