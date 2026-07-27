@@ -1,0 +1,37 @@
+{
+  "base_url": "http://127.0.0.1:<ephemeral>",
+  "cases": {
+    "clean": {
+      "browser_parser_ok": true,
+      "mcp_ok": true,
+      "raw_done": true
+    },
+    "cleanup_failure": {
+      "browser_parser_failed_closed": true,
+      "code": "ERR_STREAM_SOURCE_CLEANUP",
+      "mcp_ok": false,
+      "raw_content_leaked": false,
+      "raw_done": false
+    },
+    "interrupted": {
+      "browser_parser_failed_closed": true,
+      "code": "ERR_STREAM_INTERRUPTED",
+      "mcp_ok": false,
+      "raw_content_leaked": false,
+      "raw_done": false
+    }
+  },
+  "close_counts": {
+    "smoke-clean": 1,
+    "smoke-cleanup": 1,
+    "smoke-interrupted": 1
+  },
+  "deploy_authorized": false,
+  "existing_services_touched": false,
+  "gate": "PASS",
+  "network_scope": "loopback-only",
+  "node_stdout": "isolated browser HTTP smoke: passed",
+  "provider_calls": false,
+  "schema_version": "round2-isolated-http-smoke/1",
+  "timestamp_utc": "2026-07-27T18:46:31.195950+00:00"
+}
