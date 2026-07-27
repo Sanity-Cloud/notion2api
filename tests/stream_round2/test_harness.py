@@ -15,7 +15,7 @@ def rows_for(fixture_id: str):
 def test_full_schema_and_stable_repetitions():
     rows, _ = harness.run()
     required = {
-        "schema_version", "fixture_id", "repetition", "execution_id", "run_id", "base_commit",
+        "schema_version", "fixture_id", "repetition", "execution_id", "run_id", "subject_commit", "base_commit", "harness_content_commit", "harness_gate_commit",
         "parser_version", "mode", "raw_frame_encoding", "raw_bytes", "raw_hash", "logical_chunks",
         "expected_semantic_intent", "expected_outcome", "expected_code", "observed_outcome",
         "observed_code", "underlying_stream_outcome", "operational_outcome", "transport_counts",
@@ -88,3 +88,21 @@ def test_direct_false_success_count_and_thin_cli(tmp_path: Path):
     wrapper = Path("scripts/round2_stream_fixture_harness.py").read_text(encoding="utf-8")
     assert "from tests.stream_round2.harness import main" in wrapper
     assert "class Fixture" not in wrapper and "def execute(" not in wrapper
+
+
+def test_provenance_roles_are_explicit():
+    from tests.stream_round2 import harness
+
+    row = rows_for("clean-success")[0]
+    assert row["subject_commit"] == harness.SUBJECT_COMMIT
+    assert row["base_commit"] == harness.SUBJECT_COMMIT
+    assert row["harness_content_commit"] == harness.HARNESS_CONTENT_COMMIT
+    assert row["harness_gate_commit"] == harness.HARNESS_GATE_COMMIT
+    assert len({row["subject_commit"], row["harness_content_commit"], row["harness_gate_commit"]}) == 3
+
+    _, summary = harness.run()
+    assert summary == {}
+    schema = json.loads((Path(__file__).with_name("fixture_schema.json")).read_text(encoding="utf-8"))
+    assert schema["$id"] == "hive-stream-round2-harness/2"
+    for field in ("subject_commit", "base_commit", "harness_content_commit", "harness_gate_commit"):
+        assert field in schema["required"]
