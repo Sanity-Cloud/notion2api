@@ -8,10 +8,6 @@ window.NotionAI = window.NotionAI || {};
 window.NotionAI.Chat = window.NotionAI.Chat || {};
 
 window.NotionAI.Chat.Streaming = {
-    createTerminalState() { return { sawSuccessfulFinish: false, sawDone: false }; },
-    terminalError(reason) { return new Error(`Stream terminal-state failure: ${reason}`); },
-    observeTerminalPayload(payload, state) { if (!payload || state.sawDone) return { ignored: true }; if (payload === '[DONE]') { state.sawDone = true; return { done: true }; } let data; try { data = JSON.parse(payload); } catch (error) { throw this.terminalError('malformed SSE terminal payload'); } const finish = data?.choices?.[0]?.finish_reason; if (data?.object === 'error' || data?.error || data?.type === 'stream_error' || finish === 'error' || finish === 'content_filter') throw this.terminalError(data?.error?.message || data?.message || finish || data?.type || 'stream error'); if (['stop','length','tool_calls','function_call'].includes(finish)) state.sawSuccessfulFinish = true; return { data }; },
-    assertTerminalState(state) { if (!state.sawSuccessfulFinish || !state.sawDone) throw this.terminalError(`EOF before successful finish_reason and [DONE] (finish=${state.sawSuccessfulFinish}, done=${state.sawDone})`); },
     /**
      * Streams chat completion response
      * @param {Object} chat - Current chat object

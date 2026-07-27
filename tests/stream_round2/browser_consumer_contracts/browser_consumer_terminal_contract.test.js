@@ -1,12 +1,142 @@
 'use strict';
-const assert = require('assert'); const fs = require('fs'); const path = require('path');
-const root = path.resolve(__dirname, '..', '..', '..');
-const files = ['frontend/js/chat/streaming.js','frontend/index.html','frontend/embed.html'].map(x=>path.join(root,x));
-function step(state, payload) { if (!payload || state.done) return; if (payload === '[DONE]') { state.done=true; return; } let d; try { d=JSON.parse(payload); } catch { throw Error('Stream terminal-state failure: malformed SSE terminal payload'); } const f=d?.choices?.[0]?.finish_reason; if(d?.object==='error'||d?.error||d?.type==='stream_error'||f==='error'||f==='content_filter') throw Error('Stream terminal-state failure: '+(f||d?.type||'stream error')); if(['stop','length','tool_calls','function_call'].includes(f)) state.finish=true; }
-function run(frames) { const s={finish:false,done:false,text:'',history:[]}; try { for(const f of frames){step(s,f.payload); if(!s.done&&f.text)s.text+=f.text;} if(!s.finish||!s.done) throw Error(`Stream terminal-state failure: EOF before successful finish_reason and [DONE] (finish=${s.finish}, done=${s.done})`); if(s.text)s.history.push(s.text); return s; } catch(e) { s.failed=e.message; s.text='Stream failed.'; return s; } }
-for(const file of files){const source=fs.readFileSync(file,'utf8'); for(const needle of ['stream_error','content_filter','function_call','[DONE]','terminal-state']) assert(source.includes(needle), file+' missing '+needle);}
-for(const finish of ['stop','length','tool_calls','function_call']) assert.deepStrictEqual(run([{payload:JSON.stringify({choices:[{finish_reason:finish}]})},{payload:'[DONE]'}]).failed,undefined);
-for(const payload of [JSON.stringify({type:'stream_error'}),JSON.stringify({object:'error'}),JSON.stringify({error:{message:'x'}}),JSON.stringify({choices:[{finish_reason:'error'}]}),JSON.stringify({choices:[{finish_reason:'content_filter'}]}),'{"choices":']) assert(run([{text:'partial',payload}]).failed);
-assert(run([{payload:JSON.stringify({choices:[{finish_reason:'stop'}]})}]).failed); assert(run([{payload:'[DONE]'}]).failed);
-const post=run([{text:'a',payload:JSON.stringify({choices:[{finish_reason:'stop'}]})},{payload:'[DONE]'},{text:'MUTATE',payload:JSON.stringify({choices:[{delta:{content:'MUTATE'}}]})}]); assert.strictEqual(post.text,'a'); assert.deepStrictEqual(post.history,['a']);
-const cancelled={name:'AbortError'}; assert.strictEqual(cancelled.name,'AbortError'); console.log('browser consumer terminal contract: 15 assertions passed');
+const assert = require('assert');
+const path = require('path');
+
+const updates = [];
+global.STATE = { controller: null };
+global.window = {
+  NotionAI: {
+    Chat: {
+      Renderer: {
+        updateAIMessage: (_wrapper, text) => updates.push(text),
+        updateThinkingPanel: () => {},
+        updateModelLabel: () => {},
+        updateSearchPanel: () => {},
+        showErrorCard: () => {}
+      }
+    },
+    API: {
+      Models: { getResponseModelDisplayName: () => '' }
+    },
+    Utils: {
+      Validation: { normalizeSearchPayload: value => value || { queries: [], sources: [] } }
+    }
+  }
+};
+require(path.resolve(__dirname, '../../../frontend/js/chat/streaming.js'));
+const streaming = window.NotionAI.Chat.Streaming;
+const wrapper = { thinkingText: '' };
+const search = { queries: [], sources: [] };
+
+function payload(content = null, finishReason = null, extra = {}) {
+  return JSON.stringify({
+    ...extra,
+    choices: [{ delta: content === null ? {} : { content }, finish_reason: finishReason }]
+  });
+}
+
+for (const finishReason of ['stop', 'length', 'tool_calls', 'function_call']) {
+  const state = streaming.createTerminalState();
+  let result = streaming.consumePayload(payload('ok'), wrapper, search, '', '', null, state);
+  result = streaming.consumePayload(payload(null, finishReason), wrapper, search, result.thinkingText, result.fullAiReply, null, state);
+  result = streaming.consumePayload('[DONE]', wrapper, search, result.thinkingText, result.fullAiReply, null, state);
+  streaming.validateTerminalState(state);
+  assert.strictEqual(result.fullAiReply, 'ok');
+  assert.strictEqual(state.finishCount, 1);
+  assert.strictEqual(state.finishReason, finishReason);
+  assert.strictEqual(state.done, true);
+}
+
+for (const terminalPayload of [
+  JSON.stringify({ type: 'stream_error', error: { code: 'ERR', message: 'failed' } }),
+  JSON.stringify({ object: 'error', error: { code: 'ERR_OBJECT', message: 'failed' } }),
+  payload(null, 'error'),
+  payload(null, 'content_filter')
+]) {
+  const state = streaming.createTerminalState();
+  streaming.consumePayload(terminalPayload, wrapper, search, '', 'partial', null, state);
+  assert.throws(() => streaming.validateTerminalState(state));
+}
+
+for (const frames of [
+  [payload('partial')],
+  ['[DONE]'],
+  [payload(null, 'stop')],
+  [payload(null, 'stop'), payload(null, 'stop'), '[DONE]']
+]) {
+  const state = streaming.createTerminalState();
+  let thinking = '';
+  let content = '';
+  for (const frame of frames) {
+    const result = streaming.consumePayload(frame, wrapper, search, thinking, content, null, state);
+    thinking = result.thinkingText;
+    content = result.fullAiReply;
+  }
+  assert.throws(() => streaming.validateTerminalState(state));
+}
+
+{
+  const state = streaming.createTerminalState();
+  let result = streaming.consumePayload(payload('kept'), wrapper, search, '', '', null, state);
+  result = streaming.consumePayload(payload(null, 'stop'), wrapper, search, result.thinkingText, result.fullAiReply, null, state);
+  result = streaming.consumePayload('[DONE]', wrapper, search, result.thinkingText, result.fullAiReply, null, state);
+  result = streaming.consumePayload(payload('ignored'), wrapper, search, result.thinkingText, result.fullAiReply, null, state);
+  assert.strictEqual(result.fullAiReply, 'kept');
+}
+
+function responseFrom(textChunks, finalError = null) {
+  let index = 0;
+  return {
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (finalError && index === textChunks.length) throw finalError;
+            if (index >= textChunks.length) return { done: true };
+            return { done: false, value: new TextEncoder().encode(textChunks[index++]) };
+          }
+        };
+      }
+    }
+  };
+}
+
+(async () => {
+  updates.length = 0;
+  const clean = await streaming.processStream(
+    responseFrom([`data: ${payload('clean')}\n\ndata: ${payload(null, 'stop')}\n\ndata: [DONE]\n\n`]),
+    wrapper,
+    { queries: [], sources: [] },
+    '',
+    '',
+    'model'
+  );
+  assert.strictEqual(clean.fullAiReply, 'clean');
+  assert.strictEqual(clean.terminalState.done, true);
+
+  updates.length = 0;
+  await assert.rejects(
+    streaming.processStream(
+      responseFrom([`data: ${payload('partial')}\n\ndata: ${JSON.stringify({ type: 'stream_error', error: { code: 'ERR_STREAM', message: 'failed' } })}\n\n`]),
+      wrapper,
+      { queries: [], sources: [] },
+      '',
+      '',
+      'model'
+    ),
+    error => error.errorCode === 'ERR_STREAM'
+  );
+  assert.strictEqual(updates.at(-1), '');
+
+  const abort = new Error('cancelled');
+  abort.name = 'AbortError';
+  await assert.rejects(
+    streaming.processStream(responseFrom([], abort), wrapper, { queries: [], sources: [] }, '', '', 'model'),
+    error => error.name === 'AbortError'
+  );
+
+  console.log('browser consumer terminal contract: real parser checks passed');
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
