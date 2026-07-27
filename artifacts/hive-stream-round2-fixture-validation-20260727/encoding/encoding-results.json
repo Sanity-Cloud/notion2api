@@ -1,0 +1,1448 @@
+[
+  {
+    "boundary": "tracker",
+    "case_id": "ascii",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 143,
+      "raw_sha256": "328509fde80aa65479befe606d43ffa9efa5f807d5fdf19f70ff2ba9ce79fba5",
+      "visible_code_points": 5,
+      "visible_sha256": "481868aabe586b2a08c07657e7c2deb37bfa054baedf4e5d81e5f2a7c87124ac",
+      "visible_text_escaped": "ASCII",
+      "visible_utf8_bytes": 5
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 143,
+      "raw_stream_sha256": "328509fde80aa65479befe606d43ffa9efa5f807d5fdf19f70ff2ba9ce79fba5",
+      "response_sha256": "481868aabe586b2a08c07657e7c2deb37bfa054baedf4e5d81e5f2a7c87124ac",
+      "visible_chars": 5
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a224153434949227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "ascii",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 143,
+      "raw_sha256": "328509fde80aa65479befe606d43ffa9efa5f807d5fdf19f70ff2ba9ce79fba5",
+      "visible_code_points": 5,
+      "visible_sha256": "481868aabe586b2a08c07657e7c2deb37bfa054baedf4e5d81e5f2a7c87124ac",
+      "visible_text_escaped": "ASCII",
+      "visible_utf8_bytes": 5
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 143,
+      "raw_stream_sha256": "328509fde80aa65479befe606d43ffa9efa5f807d5fdf19f70ff2ba9ce79fba5",
+      "response_sha256": "481868aabe586b2a08c07657e7c2deb37bfa054baedf4e5d81e5f2a7c87124ac",
+      "visible_chars": 5
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a224153434949227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "ascii",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 143,
+      "raw_sha256": "328509fde80aa65479befe606d43ffa9efa5f807d5fdf19f70ff2ba9ce79fba5",
+      "visible_code_points": 5,
+      "visible_sha256": "481868aabe586b2a08c07657e7c2deb37bfa054baedf4e5d81e5f2a7c87124ac",
+      "visible_text_escaped": "ASCII",
+      "visible_utf8_bytes": 5
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 143,
+      "raw_stream_sha256": "328509fde80aa65479befe606d43ffa9efa5f807d5fdf19f70ff2ba9ce79fba5",
+      "response_sha256": "481868aabe586b2a08c07657e7c2deb37bfa054baedf4e5d81e5f2a7c87124ac",
+      "visible_chars": 5
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a224153434949227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "bmp-cjk",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 141,
+      "raw_sha256": "532795ccd0e84a16de73d2f092f61d7aedc3015545794720a2adc0ab314b8793",
+      "visible_code_points": 1,
+      "visible_sha256": "fc9f0d61dd80076ae5f0e41688aa0c3e8727b232b7a8c40c4f0671e0cd5d94c9",
+      "visible_text_escaped": "\\u6f22",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 141,
+      "raw_stream_sha256": "532795ccd0e84a16de73d2f092f61d7aedc3015545794720a2adc0ab314b8793",
+      "response_sha256": "fc9f0d61dd80076ae5f0e41688aa0c3e8727b232b7a8c40c4f0671e0cd5d94c9",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22e6bca2227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "bmp-cjk",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 141,
+      "raw_sha256": "532795ccd0e84a16de73d2f092f61d7aedc3015545794720a2adc0ab314b8793",
+      "visible_code_points": 1,
+      "visible_sha256": "fc9f0d61dd80076ae5f0e41688aa0c3e8727b232b7a8c40c4f0671e0cd5d94c9",
+      "visible_text_escaped": "\\u6f22",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 141,
+      "raw_stream_sha256": "532795ccd0e84a16de73d2f092f61d7aedc3015545794720a2adc0ab314b8793",
+      "response_sha256": "fc9f0d61dd80076ae5f0e41688aa0c3e8727b232b7a8c40c4f0671e0cd5d94c9",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22e6bca2227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "bmp-cjk",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 141,
+      "raw_sha256": "532795ccd0e84a16de73d2f092f61d7aedc3015545794720a2adc0ab314b8793",
+      "visible_code_points": 1,
+      "visible_sha256": "fc9f0d61dd80076ae5f0e41688aa0c3e8727b232b7a8c40c4f0671e0cd5d94c9",
+      "visible_text_escaped": "\\u6f22",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 141,
+      "raw_stream_sha256": "532795ccd0e84a16de73d2f092f61d7aedc3015545794720a2adc0ab314b8793",
+      "response_sha256": "fc9f0d61dd80076ae5f0e41688aa0c3e8727b232b7a8c40c4f0671e0cd5d94c9",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22e6bca2227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "emoji-non-bmp",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "visible_code_points": 1,
+      "visible_sha256": "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+      "visible_text_escaped": "\\U0001f600",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "response_sha256": "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f9880227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "emoji-non-bmp",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "visible_code_points": 1,
+      "visible_sha256": "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+      "visible_text_escaped": "\\U0001f600",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "response_sha256": "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f9880227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "emoji-non-bmp",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "visible_code_points": 1,
+      "visible_sha256": "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+      "visible_text_escaped": "\\U0001f600",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "response_sha256": "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f9880227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "composed-e-acute",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 140,
+      "raw_sha256": "87494691241464ec73cf5a89d3809667ec557737d040b581a298648d372ac7e4",
+      "visible_code_points": 1,
+      "visible_sha256": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+      "visible_text_escaped": "\\xe9",
+      "visible_utf8_bytes": 2
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 140,
+      "raw_stream_sha256": "87494691241464ec73cf5a89d3809667ec557737d040b581a298648d372ac7e4",
+      "response_sha256": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22c3a9227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "composed-e-acute",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 140,
+      "raw_sha256": "87494691241464ec73cf5a89d3809667ec557737d040b581a298648d372ac7e4",
+      "visible_code_points": 1,
+      "visible_sha256": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+      "visible_text_escaped": "\\xe9",
+      "visible_utf8_bytes": 2
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 140,
+      "raw_stream_sha256": "87494691241464ec73cf5a89d3809667ec557737d040b581a298648d372ac7e4",
+      "response_sha256": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22c3a9227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "composed-e-acute",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 140,
+      "raw_sha256": "87494691241464ec73cf5a89d3809667ec557737d040b581a298648d372ac7e4",
+      "visible_code_points": 1,
+      "visible_sha256": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+      "visible_text_escaped": "\\xe9",
+      "visible_utf8_bytes": 2
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 140,
+      "raw_stream_sha256": "87494691241464ec73cf5a89d3809667ec557737d040b581a298648d372ac7e4",
+      "response_sha256": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22c3a9227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "decomposed-e-acute",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 141,
+      "raw_sha256": "36777b360f3677f014c99f858cd9b45b67d16f7ed1da2a2841925991dcaf0c0f",
+      "visible_code_points": 2,
+      "visible_sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+      "visible_text_escaped": "e\\u0301",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 141,
+      "raw_stream_sha256": "36777b360f3677f014c99f858cd9b45b67d16f7ed1da2a2841925991dcaf0c0f",
+      "response_sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a2265cc81227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "decomposed-e-acute",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 141,
+      "raw_sha256": "36777b360f3677f014c99f858cd9b45b67d16f7ed1da2a2841925991dcaf0c0f",
+      "visible_code_points": 2,
+      "visible_sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+      "visible_text_escaped": "e\\u0301",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 141,
+      "raw_stream_sha256": "36777b360f3677f014c99f858cd9b45b67d16f7ed1da2a2841925991dcaf0c0f",
+      "response_sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a2265cc81227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "decomposed-e-acute",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 141,
+      "raw_sha256": "36777b360f3677f014c99f858cd9b45b67d16f7ed1da2a2841925991dcaf0c0f",
+      "visible_code_points": 2,
+      "visible_sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+      "visible_text_escaped": "e\\u0301",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 141,
+      "raw_stream_sha256": "36777b360f3677f014c99f858cd9b45b67d16f7ed1da2a2841925991dcaf0c0f",
+      "response_sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a2265cc81227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "zwj-emoji",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 149,
+      "raw_sha256": "114249cd38fb5f58aadffd6970c87b0613c6c8226d045b019c3f88631b212a03",
+      "visible_code_points": 3,
+      "visible_sha256": "427274538f1f24ef137872891551ffb4263f6edd90c80c533534578e8a5a9893",
+      "visible_text_escaped": "\\U0001f469\\u200d\\U0001f4bb",
+      "visible_utf8_bytes": 11
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 149,
+      "raw_stream_sha256": "114249cd38fb5f58aadffd6970c87b0613c6c8226d045b019c3f88631b212a03",
+      "response_sha256": "427274538f1f24ef137872891551ffb4263f6edd90c80c533534578e8a5a9893",
+      "visible_chars": 3
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f91a9e2808df09f92bb227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "zwj-emoji",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 149,
+      "raw_sha256": "114249cd38fb5f58aadffd6970c87b0613c6c8226d045b019c3f88631b212a03",
+      "visible_code_points": 3,
+      "visible_sha256": "427274538f1f24ef137872891551ffb4263f6edd90c80c533534578e8a5a9893",
+      "visible_text_escaped": "\\U0001f469\\u200d\\U0001f4bb",
+      "visible_utf8_bytes": 11
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 149,
+      "raw_stream_sha256": "114249cd38fb5f58aadffd6970c87b0613c6c8226d045b019c3f88631b212a03",
+      "response_sha256": "427274538f1f24ef137872891551ffb4263f6edd90c80c533534578e8a5a9893",
+      "visible_chars": 3
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f91a9e2808df09f92bb227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "zwj-emoji",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 149,
+      "raw_sha256": "114249cd38fb5f58aadffd6970c87b0613c6c8226d045b019c3f88631b212a03",
+      "visible_code_points": 3,
+      "visible_sha256": "427274538f1f24ef137872891551ffb4263f6edd90c80c533534578e8a5a9893",
+      "visible_text_escaped": "\\U0001f469\\u200d\\U0001f4bb",
+      "visible_utf8_bytes": 11
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 149,
+      "raw_stream_sha256": "114249cd38fb5f58aadffd6970c87b0613c6c8226d045b019c3f88631b212a03",
+      "response_sha256": "427274538f1f24ef137872891551ffb4263f6edd90c80c533534578e8a5a9893",
+      "visible_chars": 3
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f91a9e2808df09f92bb227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "variation-selector",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 144,
+      "raw_sha256": "175dfd330861c1c95790d9c070d2d655bde9f7d8d0ed6dc48128b8d8ca88ea27",
+      "visible_code_points": 2,
+      "visible_sha256": "185beb968bd1a81d07ebcf82376642f7b29f1b5594b21fe9edee714efbdcaa44",
+      "visible_text_escaped": "\\u2708\\ufe0f",
+      "visible_utf8_bytes": 6
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 144,
+      "raw_stream_sha256": "175dfd330861c1c95790d9c070d2d655bde9f7d8d0ed6dc48128b8d8ca88ea27",
+      "response_sha256": "185beb968bd1a81d07ebcf82376642f7b29f1b5594b21fe9edee714efbdcaa44",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22e29c88efb88f227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "variation-selector",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 144,
+      "raw_sha256": "175dfd330861c1c95790d9c070d2d655bde9f7d8d0ed6dc48128b8d8ca88ea27",
+      "visible_code_points": 2,
+      "visible_sha256": "185beb968bd1a81d07ebcf82376642f7b29f1b5594b21fe9edee714efbdcaa44",
+      "visible_text_escaped": "\\u2708\\ufe0f",
+      "visible_utf8_bytes": 6
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 144,
+      "raw_stream_sha256": "175dfd330861c1c95790d9c070d2d655bde9f7d8d0ed6dc48128b8d8ca88ea27",
+      "response_sha256": "185beb968bd1a81d07ebcf82376642f7b29f1b5594b21fe9edee714efbdcaa44",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22e29c88efb88f227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "variation-selector",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 144,
+      "raw_sha256": "175dfd330861c1c95790d9c070d2d655bde9f7d8d0ed6dc48128b8d8ca88ea27",
+      "visible_code_points": 2,
+      "visible_sha256": "185beb968bd1a81d07ebcf82376642f7b29f1b5594b21fe9edee714efbdcaa44",
+      "visible_text_escaped": "\\u2708\\ufe0f",
+      "visible_utf8_bytes": 6
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 144,
+      "raw_stream_sha256": "175dfd330861c1c95790d9c070d2d655bde9f7d8d0ed6dc48128b8d8ca88ea27",
+      "response_sha256": "185beb968bd1a81d07ebcf82376642f7b29f1b5594b21fe9edee714efbdcaa44",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22e29c88efb88f227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "embedded-nul-controls",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 153,
+      "raw_sha256": "6ebfd1d7026daa7ec8038385b1b02bfa187251b5ec1babaeed6bbb7bdd9db146",
+      "visible_code_points": 5,
+      "visible_sha256": "4236a9dc47ebf4173b16f765cb4aac241815188fd13f3b1a2494f1f269a4280d",
+      "visible_text_escaped": "A\\x00B\\x1fC",
+      "visible_utf8_bytes": 5
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 153,
+      "raw_stream_sha256": "6ebfd1d7026daa7ec8038385b1b02bfa187251b5ec1babaeed6bbb7bdd9db146",
+      "response_sha256": "4236a9dc47ebf4173b16f765cb4aac241815188fd13f3b1a2494f1f269a4280d",
+      "visible_chars": 5
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22415c7530303030425c753030316643227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "embedded-nul-controls",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 153,
+      "raw_sha256": "6ebfd1d7026daa7ec8038385b1b02bfa187251b5ec1babaeed6bbb7bdd9db146",
+      "visible_code_points": 5,
+      "visible_sha256": "4236a9dc47ebf4173b16f765cb4aac241815188fd13f3b1a2494f1f269a4280d",
+      "visible_text_escaped": "A\\x00B\\x1fC",
+      "visible_utf8_bytes": 5
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 153,
+      "raw_stream_sha256": "6ebfd1d7026daa7ec8038385b1b02bfa187251b5ec1babaeed6bbb7bdd9db146",
+      "response_sha256": "4236a9dc47ebf4173b16f765cb4aac241815188fd13f3b1a2494f1f269a4280d",
+      "visible_chars": 5
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22415c7530303030425c753030316643227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "embedded-nul-controls",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 153,
+      "raw_sha256": "6ebfd1d7026daa7ec8038385b1b02bfa187251b5ec1babaeed6bbb7bdd9db146",
+      "visible_code_points": 5,
+      "visible_sha256": "4236a9dc47ebf4173b16f765cb4aac241815188fd13f3b1a2494f1f269a4280d",
+      "visible_text_escaped": "A\\x00B\\x1fC",
+      "visible_utf8_bytes": 5
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 153,
+      "raw_stream_sha256": "6ebfd1d7026daa7ec8038385b1b02bfa187251b5ec1babaeed6bbb7bdd9db146",
+      "response_sha256": "4236a9dc47ebf4173b16f765cb4aac241815188fd13f3b1a2494f1f269a4280d",
+      "visible_chars": 5
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22415c7530303030425c753030316643227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "visible-crlf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 144,
+      "raw_sha256": "fa90f9c2199c5c71e3dda74030a508a4fd52e877685533ca576ec1e21b6b2266",
+      "visible_code_points": 4,
+      "visible_sha256": "255e24970eef1cf6a0503f246be4b2ecd25d69bbbeb4073f4abb26d62886f64b",
+      "visible_text_escaped": "A\\r\\nB",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 144,
+      "raw_stream_sha256": "fa90f9c2199c5c71e3dda74030a508a4fd52e877685533ca576ec1e21b6b2266",
+      "response_sha256": "255e24970eef1cf6a0503f246be4b2ecd25d69bbbeb4073f4abb26d62886f64b",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22415c725c6e42227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "visible-crlf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 144,
+      "raw_sha256": "fa90f9c2199c5c71e3dda74030a508a4fd52e877685533ca576ec1e21b6b2266",
+      "visible_code_points": 4,
+      "visible_sha256": "255e24970eef1cf6a0503f246be4b2ecd25d69bbbeb4073f4abb26d62886f64b",
+      "visible_text_escaped": "A\\r\\nB",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 144,
+      "raw_stream_sha256": "fa90f9c2199c5c71e3dda74030a508a4fd52e877685533ca576ec1e21b6b2266",
+      "response_sha256": "255e24970eef1cf6a0503f246be4b2ecd25d69bbbeb4073f4abb26d62886f64b",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22415c725c6e42227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "visible-crlf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 144,
+      "raw_sha256": "fa90f9c2199c5c71e3dda74030a508a4fd52e877685533ca576ec1e21b6b2266",
+      "visible_code_points": 4,
+      "visible_sha256": "255e24970eef1cf6a0503f246be4b2ecd25d69bbbeb4073f4abb26d62886f64b",
+      "visible_text_escaped": "A\\r\\nB",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 144,
+      "raw_stream_sha256": "fa90f9c2199c5c71e3dda74030a508a4fd52e877685533ca576ec1e21b6b2266",
+      "response_sha256": "255e24970eef1cf6a0503f246be4b2ecd25d69bbbeb4073f4abb26d62886f64b",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22415c725c6e42227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "sse-lf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "1e659a25808e8b7db12dc0632585cbf0fef34c7a2b97bb486610c63818d2c818",
+      "visible_code_points": 4,
+      "visible_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_text_escaped": "line",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "1e659a25808e8b7db12dc0632585cbf0fef34c7a2b97bb486610c63818d2c818",
+      "response_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226c696e65227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "sse-lf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "1e659a25808e8b7db12dc0632585cbf0fef34c7a2b97bb486610c63818d2c818",
+      "visible_code_points": 4,
+      "visible_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_text_escaped": "line",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "1e659a25808e8b7db12dc0632585cbf0fef34c7a2b97bb486610c63818d2c818",
+      "response_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226c696e65227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "sse-lf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "1e659a25808e8b7db12dc0632585cbf0fef34c7a2b97bb486610c63818d2c818",
+      "visible_code_points": 4,
+      "visible_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_text_escaped": "line",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "1e659a25808e8b7db12dc0632585cbf0fef34c7a2b97bb486610c63818d2c818",
+      "response_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226c696e65227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "sse-crlf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 148,
+      "raw_sha256": "741e2f6a6bba33522b5cfda99db3abf96702b425fe5cf6af0934293f52ec4b38",
+      "visible_code_points": 4,
+      "visible_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_text_escaped": "line",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 148,
+      "raw_stream_sha256": "741e2f6a6bba33522b5cfda99db3abf96702b425fe5cf6af0934293f52ec4b38",
+      "response_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226c696e65227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0d0a0d0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0d0a0d0a",
+      "646174613a205b444f4e455d0d0a0d0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "sse-crlf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 148,
+      "raw_sha256": "741e2f6a6bba33522b5cfda99db3abf96702b425fe5cf6af0934293f52ec4b38",
+      "visible_code_points": 4,
+      "visible_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_text_escaped": "line",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 148,
+      "raw_stream_sha256": "741e2f6a6bba33522b5cfda99db3abf96702b425fe5cf6af0934293f52ec4b38",
+      "response_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226c696e65227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0d0a0d0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0d0a0d0a",
+      "646174613a205b444f4e455d0d0a0d0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "sse-crlf",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 148,
+      "raw_sha256": "741e2f6a6bba33522b5cfda99db3abf96702b425fe5cf6af0934293f52ec4b38",
+      "visible_code_points": 4,
+      "visible_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_text_escaped": "line",
+      "visible_utf8_bytes": 4
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 148,
+      "raw_stream_sha256": "741e2f6a6bba33522b5cfda99db3abf96702b425fe5cf6af0934293f52ec4b38",
+      "response_sha256": "38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0",
+      "visible_chars": 4
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226c696e65227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0d0a0d0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0d0a0d0a",
+      "646174613a205b444f4e455d0d0a0d0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "lone-surrogate-replaced-on-string-encode",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "00af88f124f46582dc6a3abd0982afe4ee398a1a0d0537421af657758eba25d6",
+      "visible_code_points": 1,
+      "visible_sha256": "8a8de823d5ed3e12746a62ef169bcf372be0ca44f0a1236abc35df05d96928e1",
+      "visible_text_escaped": "?",
+      "visible_utf8_bytes": 1
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "00af88f124f46582dc6a3abd0982afe4ee398a1a0d0537421af657758eba25d6",
+      "response_sha256": "8a8de823d5ed3e12746a62ef169bcf372be0ca44f0a1236abc35df05d96928e1",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a223f227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "lone-surrogate-replaced-on-string-encode",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "00af88f124f46582dc6a3abd0982afe4ee398a1a0d0537421af657758eba25d6",
+      "visible_code_points": 1,
+      "visible_sha256": "8a8de823d5ed3e12746a62ef169bcf372be0ca44f0a1236abc35df05d96928e1",
+      "visible_text_escaped": "?",
+      "visible_utf8_bytes": 1
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "00af88f124f46582dc6a3abd0982afe4ee398a1a0d0537421af657758eba25d6",
+      "response_sha256": "8a8de823d5ed3e12746a62ef169bcf372be0ca44f0a1236abc35df05d96928e1",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a223f227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "lone-surrogate-replaced-on-string-encode",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "00af88f124f46582dc6a3abd0982afe4ee398a1a0d0537421af657758eba25d6",
+      "visible_code_points": 1,
+      "visible_sha256": "8a8de823d5ed3e12746a62ef169bcf372be0ca44f0a1236abc35df05d96928e1",
+      "visible_text_escaped": "?",
+      "visible_utf8_bytes": 1
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "00af88f124f46582dc6a3abd0982afe4ee398a1a0d0537421af657758eba25d6",
+      "response_sha256": "8a8de823d5ed3e12746a62ef169bcf372be0ca44f0a1236abc35df05d96928e1",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a223f227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-content-ff",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "792d841abe453a446ee3dc396d09c2b72e708acbcb19aff81e58cfb0257ac49e",
+      "visible_code_points": 1,
+      "visible_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_text_escaped": "\\ufffd",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "792d841abe453a446ee3dc396d09c2b72e708acbcb19aff81e58cfb0257ac49e",
+      "response_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22ff227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-content-ff",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "792d841abe453a446ee3dc396d09c2b72e708acbcb19aff81e58cfb0257ac49e",
+      "visible_code_points": 1,
+      "visible_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_text_escaped": "\\ufffd",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "792d841abe453a446ee3dc396d09c2b72e708acbcb19aff81e58cfb0257ac49e",
+      "response_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22ff227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-content-ff",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "792d841abe453a446ee3dc396d09c2b72e708acbcb19aff81e58cfb0257ac49e",
+      "visible_code_points": 1,
+      "visible_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_text_escaped": "\\ufffd",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "792d841abe453a446ee3dc396d09c2b72e708acbcb19aff81e58cfb0257ac49e",
+      "response_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22ff227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-content-fe",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "ff280c9dba6e0e2ad895dbb8a10532e1ace3feb27b6e965a0f568af012999182",
+      "visible_code_points": 1,
+      "visible_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_text_escaped": "\\ufffd",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "ff280c9dba6e0e2ad895dbb8a10532e1ace3feb27b6e965a0f568af012999182",
+      "response_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22fe227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-content-fe",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "ff280c9dba6e0e2ad895dbb8a10532e1ace3feb27b6e965a0f568af012999182",
+      "visible_code_points": 1,
+      "visible_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_text_escaped": "\\ufffd",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "ff280c9dba6e0e2ad895dbb8a10532e1ace3feb27b6e965a0f568af012999182",
+      "response_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22fe227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-content-fe",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 139,
+      "raw_sha256": "ff280c9dba6e0e2ad895dbb8a10532e1ace3feb27b6e965a0f568af012999182",
+      "visible_code_points": 1,
+      "visible_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_text_escaped": "\\ufffd",
+      "visible_utf8_bytes": 3
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 139,
+      "raw_stream_sha256": "ff280c9dba6e0e2ad895dbb8a10532e1ace3feb27b6e965a0f568af012999182",
+      "response_sha256": "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097",
+      "visible_chars": 1
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22fe227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-metadata",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 185,
+      "raw_sha256": "7e01f10603d0022e4e98dd8ee5ba30a8fe778ec1d932d6c268ba2e51a81d0bbd",
+      "visible_code_points": 2,
+      "visible_sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "visible_text_escaped": "ok",
+      "visible_utf8_bytes": 2
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 185,
+      "raw_stream_sha256": "7e01f10603d0022e4e98dd8ee5ba30a8fe778ec1d932d6c268ba2e51a81d0bbd",
+      "response_sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2274797065223a226d6f64656c5f6d65746164617461222c226d6f64656c223a22ff227d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226f6b227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-metadata",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 185,
+      "raw_sha256": "7e01f10603d0022e4e98dd8ee5ba30a8fe778ec1d932d6c268ba2e51a81d0bbd",
+      "visible_code_points": 2,
+      "visible_sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "visible_text_escaped": "ok",
+      "visible_utf8_bytes": 2
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 185,
+      "raw_stream_sha256": "7e01f10603d0022e4e98dd8ee5ba30a8fe778ec1d932d6c268ba2e51a81d0bbd",
+      "response_sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2274797065223a226d6f64656c5f6d65746164617461222c226d6f64656c223a22ff227d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226f6b227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "invalid-utf8-metadata",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 185,
+      "raw_sha256": "7e01f10603d0022e4e98dd8ee5ba30a8fe778ec1d932d6c268ba2e51a81d0bbd",
+      "visible_code_points": 2,
+      "visible_sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "visible_text_escaped": "ok",
+      "visible_utf8_bytes": 2
+    },
+    "observed": {
+      "classification": "success",
+      "code": "",
+      "ok": true,
+      "raw_stream_bytes": 185,
+      "raw_stream_sha256": "7e01f10603d0022e4e98dd8ee5ba30a8fe778ec1d932d6c268ba2e51a81d0bbd",
+      "response_sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "visible_chars": 2
+    },
+    "raw_frame_hex": [
+      "646174613a207b2274797065223a226d6f64656c5f6d65746164617461222c226d6f64656c223a22ff227d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a226f6b227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "split-multibyte-byte-sequence",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "visible_code_points": 0,
+      "visible_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "visible_text_escaped": "",
+      "visible_utf8_bytes": 0
+    },
+    "observed": {
+      "classification": "stream_empty_visible_output",
+      "code": "ERR_STREAM_EMPTY_VISIBLE_OUTPUT",
+      "ok": false,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "response_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "visible_chars": 0
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f",
+      "9880227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 1,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "split-multibyte-byte-sequence",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "visible_code_points": 0,
+      "visible_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "visible_text_escaped": "",
+      "visible_utf8_bytes": 0
+    },
+    "observed": {
+      "classification": "stream_empty_visible_output",
+      "code": "ERR_STREAM_EMPTY_VISIBLE_OUTPUT",
+      "ok": false,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "response_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "visible_chars": 0
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f",
+      "9880227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 2,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  },
+  {
+    "boundary": "tracker",
+    "case_id": "split-multibyte-byte-sequence",
+    "consistent": true,
+    "deterministic_replay_status": "reproducible",
+    "expected": {
+      "raw_bytes": 142,
+      "raw_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "visible_code_points": 0,
+      "visible_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "visible_text_escaped": "",
+      "visible_utf8_bytes": 0
+    },
+    "observed": {
+      "classification": "stream_empty_visible_output",
+      "code": "ERR_STREAM_EMPTY_VISIBLE_OUTPUT",
+      "ok": false,
+      "raw_stream_bytes": 142,
+      "raw_stream_sha256": "da9535fd852a3e03634c7f28bf32030a3455dc28b9f288093ea124df5e9dedf1",
+      "response_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "visible_chars": 0
+    },
+    "raw_frame_hex": [
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b22636f6e74656e74223a22f09f",
+      "9880227d2c2266696e6973685f726561736f6e223a6e756c6c7d5d7d0a0a",
+      "646174613a207b2263686f69636573223a5b7b2264656c7461223a7b7d2c2266696e6973685f726561736f6e223a2273746f70227d5d7d0a0a",
+      "646174613a205b444f4e455d0a0a"
+    ],
+    "repetition": 3,
+    "run_id": "hive-stream-round2-fixture-validation-20260727"
+  }
+]

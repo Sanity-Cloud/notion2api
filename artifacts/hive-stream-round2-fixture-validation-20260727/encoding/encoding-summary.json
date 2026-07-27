@@ -1,0 +1,17 @@
+{
+  "all_consistent": true,
+  "all_reproducible": true,
+  "canonicalization": {
+    "composed_and_decomposed_response_hashes_differ": true,
+    "line_ending_raw_hashes_differ_visible_hashes_match": true,
+    "unicode_normalization": "absent"
+  },
+  "case_count": 16,
+  "repetitions": 3,
+  "replacement_convergence": {
+    "raw_hashes_differ": true,
+    "visible_hashes_match": true,
+    "visible_text": "U+FFFD"
+  },
+  "run_id": "hive-stream-round2-fixture-validation-20260727"
+}

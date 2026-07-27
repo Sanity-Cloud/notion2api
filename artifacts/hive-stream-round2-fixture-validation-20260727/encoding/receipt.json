@@ -1,0 +1,20 @@
+{
+  "run_id": "hive-stream-round2-fixture-validation-20260727",
+  "work_unit": "WU-R2-ENCODING",
+  "branch": "validate/r2-encoding-20260727",
+  "base": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+  "scope": "tests and evidence only; smoke prohibited",
+  "commands": [
+    "python -m pytest tests/stream_round2/encoding -q => 5 passed",
+    "python -c from tests.stream_round2.harness import main; main([...]) => harness gate pass; product gate false (pre-existing 3 cleanup failures, 9 adjudications)",
+    "python -m pytest tests/stream_round2/encoding tests/stream_round2/test_fixture_harness.py tests/test_stream_protocol.py tests/test_stream_integrity_guard.py -q => 37 passed",
+    "ruff check tests/stream_round2/encoding tests/stream_round2/harness.py => passed",
+    "python -m compileall -q app tests/stream_round2 => passed",
+    "git diff --check => passed"
+  ],
+  "results": {"cases": 16, "repetitions": 3, "observations": 48, "consistent": true, "reproducible": true, "unicode_normalization": "absent", "replacement_convergence": true},
+  "artifact_sha256": {"encoding-results.json": "b4bacbbbb256be3b730063b43f331350f05e316207d50c8efaa64db868cb6098", "encoding-summary.json": "9fc49804ecf3d3062a1abfcbb520a1e6a290ade413c1f8233b20a1c65f6eaedb", "decision-table.md": "23118996d28eb388bbce5c34bcd28fb0e043fb362b103ee9d4700fb1fb21cab0"},
+  "recommendation": "Preserve raw and visible hashes; no Unicode normalization; separately adjudicate guard bytes-boundary behavior.",
+  "risks": ["replacement decoding makes distinct invalid raw streams share a visible response hash", "split byte sequences are not reassembled", "guard stringifies bytes outside declared Iterable[str] contract"],
+  "dissent": "Guard bytes handling may be an integration defect even though bytes are outside the declared type contract."
+}
