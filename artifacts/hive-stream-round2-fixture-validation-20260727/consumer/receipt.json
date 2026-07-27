@@ -5,7 +5,7 @@
   "mission": "hive-stream-round2-fixture-validation-20260727",
   "branch": "validate/r2-consumers-20260727",
   "base_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
-  "commit": "PENDING_AMEND",
+  "evidence_commit": "6ff5e4233b6ad5b98f35487c3c7e7b49efede73e",
   "scope": "tests and evidence only; no consumer or product-code changes",
   "offline_only": true,
   "commands": [
