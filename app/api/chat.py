@@ -714,6 +714,61 @@ def _guard_stream_until_integrity(
         yield "data: [DONE]\n\n"
         return
 
+    successful_finishes = {"stop", "length", "tool_calls", "function_call"}
+    finish_count = 0
+    done_count = 0
+    saw_done = False
+    terminal_error = ""
+    for chunk in buffered:
+        stripped = chunk.strip()
+        if stripped == "data: [DONE]":
+            done_count += 1
+            saw_done = True
+            continue
+        if saw_done:
+            terminal_error = "data received after [DONE]"
+            break
+        payload = _parse_sse_json(chunk)
+        if payload is None:
+            continue
+        choices = payload.get("choices")
+        choice = (
+            choices[0]
+            if isinstance(choices, list)
+            and choices
+            and isinstance(choices[0], dict)
+            else {}
+        )
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is None:
+            continue
+        if finish_reason not in successful_finishes:
+            terminal_error = f"unsupported finish_reason={finish_reason}"
+            break
+        finish_count += 1
+        if finish_count > 1:
+            terminal_error = "multiple successful finish reasons"
+            break
+
+    if not terminal_error and (finish_count != 1 or done_count != 1):
+        terminal_error = "missing exactly one successful finish reason followed by [DONE]"
+
+    if terminal_error:
+        error_payload = {
+            "id": response_id,
+            "object": "error",
+            "model": model,
+            "error": {
+                "code": "incomplete_terminal_state",
+                "type": "stream_protocol_error",
+                "message": f"Stream rejected: {terminal_error}.",
+            },
+        }
+        yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
+        yield _build_stream_chunk(response_id, model, finish_reason="error")
+        yield "data: [DONE]\n\n"
+        return
+
     yield from buffered
 
 
