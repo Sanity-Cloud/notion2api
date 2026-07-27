@@ -30,8 +30,50 @@
     function add(role,text){$('empty')?.remove();const el=document.createElement('div');el.className=`message ${role}`;el.textContent=text;$('messages').append(el);$('messages').scrollTop=$('messages').scrollHeight;return el}
     function renderFiles(){attachments.textContent=pending.length?pending.map(item=>item.name).join(', '):''}
     function readFile(item){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({name:item.name,content_type:item.type||'application/octet-stream',data:reader.result});reader.onerror=()=>reject(reader.error);reader.readAsDataURL(item)})}
-    function terminalError(reason){return new Error('Stream terminal-state failure: '+reason)}function consume(payload,target,state){if(!payload||state.done)return;if(payload==='[DONE]'){state.done=true;return}let data;try{data=JSON.parse(payload)}catch{throw terminalError('malformed SSE terminal payload')}const finish=data?.choices?.[0]?.finish_reason;if(data?.object==='error'||data?.error||data?.type==='stream_error'||finish==='error'||finish==='content_filter')throw terminalError(data?.error?.message||data?.message||finish||data?.type||'stream error');if(['stop','length','tool_calls','function_call'].includes(finish))state.finish=true;if(data.type==='content_replace'){target.textContent=String(data.content||'');return}const text=data?.choices?.[0]?.delta?.content||'';if(text)target.textContent+=text}
-    async function submit(){const text=input.value.trim();if((!text&&!pending.length)||controller){if(controller)controller.abort();return}const apiKey=localStorage.getItem('claude_api_key')||'';if(!apiKey){status.textContent='Open the main UI and save its API key first.';return}input.value='';const outgoing=text||'Please analyze the attached files.';messages.push({role:'user',content:outgoing});add('user',outgoing);const target=add('assistant','');send.textContent='Stop';controller=new AbortController();status.textContent='Working…';try{const files=await Promise.all(pending.splice(0).map(readFile));renderFiles();const response=await fetch('/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${apiKey}`,'X-Client-Type':'web'},signal:controller.signal,body:JSON.stringify({model,messages,conversation_id:conversationId||null,stream:true,attachments:files,metadata:{persist_remote_chat:true}})});conversationId=response.headers.get('X-Conversation-Id')||conversationId;if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(error?.error?.message||`Request failed (${response.status})`)}const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',terminal={finish:false,done:false};while(!terminal.done){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const events=buffer.split('\n\n');buffer=events.pop()||'';events.forEach(event=>event.split('\n').filter(line=>line.startsWith('data:')).forEach(line=>consume(line.slice(5).trim(),target,terminal)))}if(!terminal.finish||!terminal.done)throw terminalError(`EOF before successful finish_reason and [DONE] (finish=${terminal.finish}, done=${terminal.done})`);if(target.textContent.trim())messages.push({role:'assistant',content:target.textContent});else target.textContent='No visible response received.';status.textContent='Ready'}catch(error){target.textContent=error.name==='AbortError'?'Cancelled.':error.message;status.textContent=error.name==='AbortError'?'Cancelled':'Failed'}finally{controller=null;send.textContent='Send'}}
+    function terminalError(reason,code='stream_terminal_error'){const error=new Error(reason);error.errorCode=code;return error}
+    function createTerminalState(){return{finishReason:null,finishCount:0,done:false,failure:null}}
+    function consume(payload,target,state){
+      if(!payload||state.done||state.failure)return;
+      if(payload==='[DONE]'){state.done=true;return}
+      let data;try{data=JSON.parse(payload)}catch{return}
+      if(!data||typeof data!=='object'||Array.isArray(data))return;
+      const structured=data.error;
+      if(data.object==='error'||data.type==='stream_error'||structured){state.failure={code:structured?.code||data.code||'stream_error',message:structured?.message||data.message||'The stream reported an error.'};return}
+      const choice=Array.isArray(data.choices)&&data.choices[0]&&typeof data.choices[0]==='object'?data.choices[0]:null;
+      const finish=choice?.finish_reason;
+      if(finish!==undefined&&finish!==null){
+        const normalized=String(finish);
+        if(normalized==='error'||normalized==='content_filter'){state.failure={code:normalized,message:`The stream ended with finish_reason=${normalized}.`};return}
+        if(!['stop','length','tool_calls','function_call'].includes(normalized)){state.failure={code:'unrecognized_finish_reason',message:`Unsupported finish_reason=${normalized}.`};return}
+        state.finishCount+=1;state.finishReason=normalized;
+        if(state.finishCount!==1){state.failure={code:'multiple_finish_reasons',message:'The stream emitted more than one successful finish reason.'};return}
+      }
+      if(data.type==='content_replace'){target.textContent=String(data.content||'');return}
+      const chunk=choice?.delta?.content||'';if(chunk)target.textContent+=chunk;
+    }
+    async function submit(){
+      const text=input.value.trim();if((!text&&!pending.length)||controller){if(controller)controller.abort();return}
+      const apiKey=localStorage.getItem('claude_api_key')||'';if(!apiKey){status.textContent='Open the main UI and save its API key first.';return}
+      input.value='';const outgoing=text||'Please analyze the attached files.';messages.push({role:'user',content:outgoing});add('user',outgoing);const target=add('assistant','');send.textContent='Stop';controller=new AbortController();status.textContent='Working?';const terminal=createTerminalState();
+      try{
+        const files=await Promise.all(pending.splice(0).map(readFile));renderFiles();
+        const response=await fetch('/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${apiKey}`,'X-Client-Type':'web'},signal:controller.signal,body:JSON.stringify({model,messages,conversation_id:conversationId||null,stream:true,attachments:files,metadata:{persist_remote_chat:true}})});
+        conversationId=response.headers.get('X-Conversation-Id')||conversationId;
+        if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(error?.error?.message||`Request failed (${response.status})`)}
+        const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
+        while(!terminal.done&&!terminal.failure){
+          const{done,value}=await reader.read();if(done)break;
+          buffer+=decoder.decode(value,{stream:true});const events=buffer.split('\n\n');buffer=events.pop()||'';
+          for(const event of events){if(terminal.done||terminal.failure)break;for(const line of event.split('\n').filter(line=>line.startsWith('data:'))){consume(line.slice(5).trim(),target,terminal);if(terminal.done||terminal.failure)break}}
+        }
+        if(!terminal.done&&!terminal.failure&&buffer.trim().startsWith('data:'))consume(buffer.trim().slice(5).trim(),target,terminal);
+        if(terminal.failure)throw terminalError(terminal.failure.message,terminal.failure.code);
+        if(!terminal.done||terminal.finishCount!==1||!['stop','length','tool_calls','function_call'].includes(terminal.finishReason))throw terminalError('The stream ended before a valid finish reason and [DONE] receipt.','incomplete_terminal_state');
+        if(target.textContent.trim())messages.push({role:'assistant',content:target.textContent});else target.textContent='No visible response received.';
+        status.textContent='Ready';
+      }catch(error){target.textContent=error.name==='AbortError'?'Cancelled.':error.message;status.textContent=error.name==='AbortError'?'Cancelled':'Failed'}
+      finally{controller=null;send.textContent='Send'}
+    }
     $('attach').onclick=()=>file.click();file.onchange=()=>{pending.push(...file.files);file.value='';renderFiles()};send.onclick=submit;input.onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submit()}};
   </script>
 </body>
