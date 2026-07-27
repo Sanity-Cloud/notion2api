@@ -1,0 +1,24 @@
+{
+  "work_unit": "WU-R2-FRAMING",
+  "mission": "hive-stream-round2-fixture-validation-20260727",
+  "base": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+  "tracker_boundary": "StreamProtocolTracker.observe accepts one complete logical SSE line or one complete data chunk; it is not a byte-stream assembler.",
+  "adapter_contracts": [
+    {"function": "app.stream_parser.parse_stream:1106", "iterator": "requests.Response.iter_lines(decode_unicode=True)", "contract": "logical lines"},
+    {"function": "app.mcp_server.NotionMcpClient.post_chat_stream:737", "iterator": "httpx.Response.aiter_lines()", "contract": "logical lines"},
+    {"function": "app.api.chat._guard_stream_until_integrity:661-663", "iterator": "provider iterable into FastAPI StreamingResponse", "contract": "passes yielded application chunks to tracker; no TCP-boundary assumption"},
+    {"function": "app.api.chat endpoints:1869,2192,3154", "iterator": "FastAPI StreamingResponse(_guard_stream_until_integrity(...))", "contract": "outbound response streaming, not upstream byte framing"}
+  ],
+  "observations": {
+    "complete_lf_crlf": "success",
+    "comments_keepalive": "transport-only; semantic count unchanged",
+    "malformed_and_non_data": "observable transport classifications",
+    "multiline_sse": "unsupported_framing at tracker boundary; current receipt stream_empty_visible_output after finish/DONE",
+    "byte_fragmentation": "unsupported_framing at tracker boundary; current receipt stream_empty_visible_output after finish/DONE",
+    "multiple_logical_events_one_chunk": "unsupported_framing; malformed-only when packed alone",
+    "done_before_finish": "stream_post_terminal_content; terminal-order-invalid branch is unreachable via normal observe transitions"
+  },
+  "defect_confirmed": false,
+  "recommendation": "Do not modify tracker in this lane. If raw-byte transport is introduced later, add a lower SSE assembler that emits complete logical data payloads before StreamProtocolTracker; retain current receipt classifications until that boundary changes.",
+  "status": "COMPLETED"
+}

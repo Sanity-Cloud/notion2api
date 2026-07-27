@@ -1,0 +1,9 @@
+[
+  {"case":"logical data event (LF/CRLF)","tracker_result":"semantic content/finish/done","decision":"supported","owner":"tracker"},
+  {"case":"blank line or : comment","tracker_result":"sse_boundary or keepalive","decision":"supported; transport-only","owner":"tracker"},
+  {"case":"event/id/retry or multi-data SSE fields","tracker_result":"unknown_frame or malformed_frame","decision":"unsupported at current boundary","owner":"lower SSE assembler if required"},
+  {"case":"JSON/UTF-8 split across byte fragments","tracker_result":"malformed/unknown then stream_empty_visible_output","decision":"unsupported at current boundary","owner":"lower byte assembler"},
+  {"case":"several logical events in one input chunk","tracker_result":"malformed_frame","decision":"unsupported input contract","owner":"upstream chunk normalizer"},
+  {"case":"DONE then finish","tracker_result":"post_terminal_count increments; finish is not recorded","decision":"post-terminal precedence wins","owner":"tracker precedence review"},
+  {"case":"finish then DONE","tracker_result":"success","decision":"supported terminal order","owner":"tracker"}
+]

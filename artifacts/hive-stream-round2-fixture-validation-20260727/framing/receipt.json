@@ -1,0 +1,34 @@
+{
+  "work_unit": "WU-R2-FRAMING",
+  "status": "COMPLETED",
+  "mission": "hive-stream-round2-fixture-validation-20260727",
+  "branch": "validate/r2-framing-20260727",
+  "base": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+  "scope": "tests and evidence only; no product-code, network, provider, service, merge, or deploy action",
+  "commands": [
+    {"command": "python -m pytest -q tests/stream_round2/framing", "result": "14 passed in 0.05s"},
+    {"command": "python -m pytest -q tests/stream_round2", "result": "29 passed in 0.78s"},
+    {"command": "python -m ruff check tests/stream_round2/framing/test_tracker_framing.py", "result": "All checks passed"},
+    {"command": "python -m compileall -q tests/stream_round2/framing/test_tracker_framing.py", "result": "exit 0"},
+    {"command": "git diff --check", "result": "exit 0"},
+    {"command": "UTF-8/NUL encoding check excluding __pycache__", "result": "PASS (4 files before receipt)"}
+  ],
+  "evidence_lines": [
+    "app/stream_protocol.py:50-54: classifier accepts one SSE line or complete data chunk.",
+    "app/stream_protocol.py:200-205: DONE causes all non-DONE semantic frames to become post-terminal without recording finish.",
+    "app/stream_protocol.py:252-256 precedes :286-294, so post-terminal content outranks terminal-order invalid.",
+    "app/stream_parser.py:1106 uses requests.Response.iter_lines(decode_unicode=True).",
+    "app/mcp_server.py:737 uses httpx.Response.aiter_lines().",
+    "app/api/chat.py:661-663 passes yielded application chunks to tracker; StreamingResponse is constructed at :1869, :2192, and :3154."
+  ],
+  "sha256_manifest": {
+    "tests/stream_round2/framing/test_tracker_framing.py": "49c0f53037d09db616b7c32a48881f83d35d1ba9ac3e1da8a69007326ead7c47",
+    "findings.json": "607ffafab21b412723c837b475ae1a350fdb935aa60cb37577966b0270dfe27f",
+    "decision-table.json": "471a0878d3034b1cdb018f3fb5bf1bf44fcacad0d1a2158801e8d846ea0ddbcc",
+    "analysis.md": "001d1fb97b2bdd8db7f6cdf0c9efd0398648661bb8b3b0ce49d733fb2a4b5fd1"
+  },
+  "risks": ["A future raw-byte adapter needs a lower incremental SSE/UTF-8 assembler before tracker."],
+  "dissent": "Full multi-line SSE is valid at a lower SSE protocol boundary, but traced current adapters provide logical lines; widening tracker is out of lane.",
+  "defect_confirmed": false,
+  "recommendation": "Keep current classifications and tracker contract; introduce a lower assembler only if raw-byte input is intentionally routed here."
+}
