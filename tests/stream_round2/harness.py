@@ -22,7 +22,11 @@ from app.stream_protocol import PARSER_VERSION, StreamProtocolTracker, classify_
 
 SCHEMA_VERSION = "hive-stream-round2-harness/2"
 RUN_ID = "hive-stream-round2-fixture-validation-20260727"
-BASE_COMMIT = "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+SUBJECT_COMMIT = "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+HARNESS_CONTENT_COMMIT = "de2eff0c8192c2ae4242f57da8b883dc34a6df1f"
+HARNESS_GATE_COMMIT = "b897d2b4145b21f7aacfeca32af7fef478746d46"
+# Backward-compatible alias: base_commit always identifies the product revision under test.
+BASE_COMMIT = SUBJECT_COMMIT
 REPETITIONS = 3
 Json = dict[str, Any]
 Mode = Literal["tracker", "guard", "route"]
@@ -264,7 +268,7 @@ def execute(fixture: Fixture, repetition: int) -> Json:
     execution_id = hashlib.sha256(f"{fixture.fixture_id}:{repetition}:{raw.hex()}".encode()).hexdigest()[:20]
     return {
         "schema_version": SCHEMA_VERSION, "fixture_id": fixture.fixture_id, "repetition": repetition, "execution_id": execution_id,
-        "run_id": RUN_ID, "base_commit": BASE_COMMIT, "parser_version": receipt.get("parser_version", PARSER_VERSION), "mode": fixture.mode,
+        "run_id": RUN_ID, "subject_commit": SUBJECT_COMMIT, "base_commit": SUBJECT_COMMIT, "harness_content_commit": HARNESS_CONTENT_COMMIT, "harness_gate_commit": HARNESS_GATE_COMMIT, "parser_version": receipt.get("parser_version", PARSER_VERSION), "mode": fixture.mode,
         "raw_frame_encoding": _frame_encoding(fixture.chunks), "raw_bytes": len(raw), "logical_chunks": len(fixture.chunks),
         "expected_outcome": fixture.expected_outcome, "expected_code": fixture.expected_code, "expected_semantic_intent": fixture.semantic_intent or fixture.expected_outcome,
         "observed_outcome": observed, "observed_code": code, "underlying_classification": observed,
@@ -323,7 +327,7 @@ def write_outputs(output_dir: Path, rows: list[Json]) -> Json:
     )
     harness_gate_pass = nondeterministic == 0
     product_gate_pass = not counts["fail"] and cleanup_failures == 0 and false_success_violations == 0
-    summary = {"schema_version": SCHEMA_VERSION, "run_id": RUN_ID, "total_runs": len(ordered), "fixture_count": len(fixtures()), "result_counts": dict(sorted(counts.items())), "pass_count": counts["pass"], "fail_count": counts["fail"], "adjudication_count": counts["needs_adjudication"], "harness_implementation_failures": 0, "nondeterministic_repetitions": nondeterministic, "cleanup_failures": cleanup_failures, "false_success_violations": false_success_violations, "harness_gate_pass": harness_gate_pass, "product_gate_pass": product_gate_pass, "release_recommendation": "do_not_proceed_product_gate_failed_smoke_held" if not product_gate_pass else "fixture_lanes_may_proceed_smoke_held", "gate_pass": harness_gate_pass}
+    summary = {"schema_version": SCHEMA_VERSION, "run_id": RUN_ID, "provenance": {"subject_commit": SUBJECT_COMMIT, "harness_content_commit": HARNESS_CONTENT_COMMIT, "harness_gate_commit": HARNESS_GATE_COMMIT}, "total_runs": len(ordered), "fixture_count": len(fixtures()), "result_counts": dict(sorted(counts.items())), "pass_count": counts["pass"], "fail_count": counts["fail"], "adjudication_count": counts["needs_adjudication"], "harness_implementation_failures": 0, "nondeterministic_repetitions": nondeterministic, "cleanup_failures": cleanup_failures, "false_success_violations": false_success_violations, "harness_gate_pass": harness_gate_pass, "product_gate_pass": product_gate_pass, "release_recommendation": "do_not_proceed_product_gate_failed_smoke_held" if not product_gate_pass else "fixture_lanes_may_proceed_smoke_held", "gate_pass": harness_gate_pass}
     atomic_write(output_dir / "fixture-matrix.json", json.dumps(ordered, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     atomic_write(output_dir / "fixture-matrix.jsonl", "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in ordered))
     atomic_write(output_dir / "summary.json", json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n")

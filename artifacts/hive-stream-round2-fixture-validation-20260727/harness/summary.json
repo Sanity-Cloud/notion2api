@@ -10,6 +10,11 @@
   "nondeterministic_repetitions": 0,
   "pass_count": 84,
   "product_gate_pass": false,
+  "provenance": {
+    "harness_content_commit": "de2eff0c8192c2ae4242f57da8b883dc34a6df1f",
+    "harness_gate_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+    "subject_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+  },
   "release_recommendation": "do_not_proceed_product_gate_failed_smoke_held",
   "result_counts": {
     "fail": 3,

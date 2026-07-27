@@ -14,7 +14,7 @@ def rows_for(fixture_id: str):
 def test_schema_and_repetitions_are_stable():
     rows, _ = harness.run()
     assert len(rows) == len(harness.fixtures()) * harness.REPETITIONS
-    required = {"schema_version", "fixture_id", "repetition", "execution_id", "base_commit", "parser_version", "mode", "raw_frame_encoding", "raw_bytes", "logical_chunks", "expected_outcome", "expected_code", "observed_outcome", "observed_code", "underlying_classification", "transport_counts", "semantic_counts", "visible_chars", "response_hash", "raw_hash", "finish_count", "done_count", "sequence_count", "input_done_presence", "emitted_done_presence", "pull_count", "close_count", "close_error", "propagated_exception", "client_interpretation", "stop_condition", "adjudication_state", "invariant_comparison", "deterministic_replay_status", "result"}
+    required = {"schema_version", "fixture_id", "repetition", "execution_id", "subject_commit", "base_commit", "harness_content_commit", "harness_gate_commit", "parser_version", "mode", "raw_frame_encoding", "raw_bytes", "logical_chunks", "expected_outcome", "expected_code", "observed_outcome", "observed_code", "underlying_classification", "transport_counts", "semantic_counts", "visible_chars", "response_hash", "raw_hash", "finish_count", "done_count", "sequence_count", "input_done_presence", "emitted_done_presence", "pull_count", "close_count", "close_error", "propagated_exception", "client_interpretation", "stop_condition", "adjudication_state", "invariant_comparison", "deterministic_replay_status", "result"}
     assert required <= set(rows[0])
     assert {row["deterministic_replay_status"] for row in rows} == {"reproducible"}
 
