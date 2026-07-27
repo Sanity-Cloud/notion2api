@@ -1,18 +1,14 @@
-# WU-R2-MATRIX stop record
+# WU-R2-MATRIX completed execution
 
-## Decision
-Stopped before deterministic replay. The authoritative harness has a proven provenance defect: `BASE_COMMIT` is `de52b8ac571f77b130a3c20919cd1666a4af3ce5`, while the required base and current isolated-worktree HEAD are `b897d2b4145b21f7aacfeca32af7fef478746d46`.
+## Supersession
+This completed record supersedes the stopped execution documented in commit `25eee7c`; that stop record remains preserved in Git history. The authoritative provenance correction from `7de68ae` distinguishes the product subject (`de52b8ac571f77b130a3c20919cd1666a4af3ce5`), harness content (`de2eff0c8192c2ae4242f57da8b883dc34a6df1f`), and harness gate (`b897d2b4145b21f7aacfeca32af7fef478746d46`). Lane HEAD is not interpreted as the product subject.
 
-## Why this blocks execution
-The harness writes its `BASE_COMMIT` into every record. Running the requested 320+ records would therefore persist evidence attributed to the wrong revision. Per the lane instruction, the harness was not patched and replay/stress execution stopped.
+## Matrix and replay
+Executed 320 records: all 32 fixtures, 10 repetitions each. Determinism, invariants, ordering, raw/response hashes, pull/close counts, DONE presence, classifications, operational outcomes, and adjudication fields were compared across repetitions.
 
-## Evidence
-- Authoritative harness: `tests/stream_round2/harness.py`
-- Baseline preserved: `artifacts/hive-stream-round2-fixture-validation-20260727/harness/fixture-matrix.json` (96 records)
-- No product code, fixture expectation, network/provider, service, merge, deploy, or smoke activity occurred.
+## Baseline and stress
+The preserved 96-record baseline was behaviorally compared with the corresponding expanded repetitions. Boundary stress ran character sizes 9/10/11 against limit 10 and chunk counts 2/3/4 against limit 3, with finite and infinite sources. A separate 10-run close-failure replay preserved underlying stream success while reporting the deliberate source-double cleanup failure.
 
-## Unperformed required observations
-Stable ordering/invariants/hashes, boundary stress, close-failure repetition, statistics, and independent output-hash validation are **not assessed**, not passed. No `fixture-matrix.json`, JSONL, or summary was emitted under `results` because their provenance would be invalid.
+## Findings
+See `summary.json`, `statistics.json`, `boundary-stress.json`, and `independent-hash-validation.json` for exact records and counts. Smoke, network/provider calls, services, merge, and deployment were prohibited and not run.
 
-## Dissent and recommendation
-Dissent: a harness-only deterministic gate could still run, but it would not meet the explicit requested-base provenance requirement. Recommendation: correct the authoritative harness provenance outside this lane, then rerun the full matrix from the stated base. `WU-R2-MATRIX` remains incomplete.

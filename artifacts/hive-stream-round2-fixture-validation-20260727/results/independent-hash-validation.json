@@ -1,0 +1,25 @@
+{
+  "baseline_comparison": {
+    "baseline_records": 96,
+    "behavior_differences": [],
+    "expanded_compared_records": 96,
+    "pass": true
+  },
+  "provenance": {
+    "base_commit_alias": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "harness_content_commit": "de2eff0c8192c2ae4242f57da8b883dc34a6df1f",
+    "harness_gate_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+    "lane_head": "7de68aeef6b587437814cce9fcf90fb0edc31edb",
+    "subject_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+  },
+  "raw_hash_validation": {
+    "mismatches": [],
+    "pass": true,
+    "records": 320
+  },
+  "response_hash_validation": {
+    "mismatches": [],
+    "pass": true,
+    "records": 320
+  }
+}

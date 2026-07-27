@@ -1,0 +1,83 @@
+{
+  "adjudication_count": 30,
+  "boundary_stress": {
+    "all_closed_once": true,
+    "max_pulls": 4,
+    "runs": 12
+  },
+  "cleanup_failures": 10,
+  "dedicated_close_failure_replay": {
+    "all_cleanup_failures": true,
+    "all_close_error_isolated": true,
+    "all_underlying_success": true,
+    "deterministic": true,
+    "pull_counts": [
+      4
+    ],
+    "runs": 10
+  },
+  "expanded_matrix": {
+    "fixture_count": 32,
+    "records": 320,
+    "repetitions": 10
+  },
+  "fail_count": 10,
+  "false_success_violations": 0,
+  "fixture_count": 32,
+  "gate_pass": true,
+  "harness_gate_pass": true,
+  "harness_implementation_failures": 0,
+  "independent_validation": {
+    "baseline_comparison": {
+      "baseline_records": 96,
+      "behavior_differences": [],
+      "expanded_compared_records": 96,
+      "pass": true
+    },
+    "provenance": {
+      "base_commit_alias": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+      "harness_content_commit": "de2eff0c8192c2ae4242f57da8b883dc34a6df1f",
+      "harness_gate_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+      "lane_head": "7de68aeef6b587437814cce9fcf90fb0edc31edb",
+      "subject_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+    },
+    "raw_hash_validation": {
+      "mismatches": [],
+      "pass": true,
+      "records": 320
+    },
+    "response_hash_validation": {
+      "mismatches": [],
+      "pass": true,
+      "records": 320
+    }
+  },
+  "issue_counts": {
+    "baseline_behavior_differences": 0,
+    "classification_drift": 0,
+    "double_close": 0,
+    "false_success": 0,
+    "missing_cleanup": 0,
+    "raw_hash_mismatches": 0,
+    "replay_divergence": 0,
+    "response_hash_mismatches": 0,
+    "unbounded_pulls": 0
+  },
+  "nondeterministic_repetitions": 0,
+  "pass_count": 280,
+  "product_gate_pass": false,
+  "provenance": {
+    "harness_content_commit": "de2eff0c8192c2ae4242f57da8b883dc34a6df1f",
+    "harness_gate_commit": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+    "subject_commit": "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+  },
+  "release_recommendation": "do_not_proceed_product_gate_failed_smoke_held",
+  "result_counts": {
+    "fail": 10,
+    "needs_adjudication": 30,
+    "pass": 280
+  },
+  "run_id": "hive-stream-round2-fixture-validation-20260727",
+  "schema_version": "hive-stream-round2-harness/2",
+  "total_runs": 320
+}

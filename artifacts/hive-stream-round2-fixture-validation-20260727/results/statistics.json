@@ -1,0 +1,747 @@
+{
+  "boundary_stress": {
+    "all_closed_once": true,
+    "max_pulls": 4,
+    "records": [
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-finite-9",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "finite",
+        "threshold": 9
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-finite-10",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "finite",
+        "threshold": 10
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-finite-11",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "finite",
+        "threshold": 11
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-finite-2",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "stream_missing_finish",
+        "pulls": 3,
+        "source": "finite",
+        "threshold": 2
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-finite-3",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "stream_missing_finish",
+        "pulls": 4,
+        "source": "finite",
+        "threshold": 3
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-finite-4",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 4,
+        "source": "finite",
+        "threshold": 4
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-infinite-9",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "infinite",
+        "threshold": 9
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-infinite-10",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "infinite",
+        "threshold": 10
+      },
+      {
+        "closes": 1,
+        "dimension": "character",
+        "id": "stress-character-infinite-11",
+        "limit": 10,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 1,
+        "source": "infinite",
+        "threshold": 11
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-infinite-2",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 4,
+        "source": "infinite",
+        "threshold": 2
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-infinite-3",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 4,
+        "source": "infinite",
+        "threshold": 3
+      },
+      {
+        "closes": 1,
+        "dimension": "chunk",
+        "id": "stress-chunk-infinite-4",
+        "limit": 3,
+        "operational": "success",
+        "outcome": "content_filter",
+        "pulls": 4,
+        "source": "infinite",
+        "threshold": 4
+      }
+    ],
+    "runs": 12
+  },
+  "category_level": {
+    "guard": {
+      "classifications": {
+        "content_filter": 30,
+        "propagated:CancelledError": 10,
+        "propagated:GeneratorExit": 10,
+        "stream_empty_no_terminal": 10,
+        "stream_interrupted": 10,
+        "success": 30
+      },
+      "close_range": [
+        1,
+        1
+      ],
+      "pull_range": [
+        1,
+        5
+      ],
+      "results": {
+        "fail": 10,
+        "pass": 90
+      },
+      "runs": 100
+    },
+    "route": {
+      "classifications": {
+        "model_substituted": 10,
+        "provider_substituted": 10,
+        "route_exact": 10,
+        "route_unknown": 10
+      },
+      "close_range": [
+        1,
+        1
+      ],
+      "pull_range": [
+        0,
+        0
+      ],
+      "results": {
+        "pass": 40
+      },
+      "runs": 40
+    },
+    "tracker": {
+      "classifications": {
+        "stream_duplicate_terminal": 20,
+        "stream_empty_no_terminal": 20,
+        "stream_empty_visible_output": 20,
+        "stream_finish_reason_invalid": 10,
+        "stream_malformed_only": 10,
+        "stream_missing_done": 10,
+        "stream_missing_finish": 10,
+        "stream_post_terminal_content": 30,
+        "success": 50
+      },
+      "close_range": [
+        1,
+        1
+      ],
+      "pull_range": [
+        2,
+        5
+      ],
+      "results": {
+        "needs_adjudication": 30,
+        "pass": 150
+      },
+      "runs": 180
+    }
+  },
+  "close_failure": {
+    "all_cleanup_failures": true,
+    "all_close_error_isolated": true,
+    "all_underlying_success": true,
+    "deterministic": true,
+    "pull_counts": [
+      4
+    ],
+    "runs": 10
+  },
+  "fixture_level": {
+    "asyncio-cancelled": {
+      "classifications": {
+        "propagated:CancelledError": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 1,
+      "pull_min": 1,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "character-limit": {
+      "classifications": {
+        "content_filter": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 1,
+      "pull_min": 1,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "chunk-limit": {
+      "classifications": {
+        "content_filter": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "clean-success": {
+      "classifications": {
+        "success": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "close-failure": {
+      "classifications": {
+        "success": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "fail": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "combining-marks": {
+      "classifications": {
+        "success": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "crlf-normalization": {
+      "classifications": {
+        "success": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "delimiter-only": {
+      "classifications": {
+        "stream_empty_no_terminal": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 3,
+      "pull_min": 3,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "done-before-finish": {
+      "classifications": {
+        "stream_post_terminal_content": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "needs_adjudication": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "duplicate-done": {
+      "classifications": {
+        "stream_duplicate_terminal": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 5,
+      "pull_min": 5,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "duplicate-finish": {
+      "classifications": {
+        "stream_duplicate_terminal": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 5,
+      "pull_min": 5,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "empty-after-metadata": {
+      "classifications": {
+        "stream_empty_no_terminal": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 2,
+      "pull_min": 2,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "finite-source": {
+      "classifications": {
+        "success": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "generator-exit": {
+      "classifications": {
+        "propagated:GeneratorExit": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 1,
+      "pull_min": 1,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "invalid-finish-reason": {
+      "classifications": {
+        "stream_finish_reason_invalid": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "invalid-utf8-replacement": {
+      "classifications": {
+        "success": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "malformed-only": {
+      "classifications": {
+        "stream_malformed_only": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 2,
+      "pull_min": 2,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "missing-done": {
+      "classifications": {
+        "stream_missing_done": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 3,
+      "pull_min": 3,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "missing-finish": {
+      "classifications": {
+        "stream_missing_finish": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 3,
+      "pull_min": 3,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "model-substitution": {
+      "classifications": {
+        "model_substituted": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 0,
+      "pull_min": 0,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "multiline-sse-discovery": {
+      "classifications": {
+        "stream_empty_visible_output": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 5,
+      "pull_min": 5,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "needs_adjudication": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "multiple-complete-logical-chunks": {
+      "classifications": {
+        "success": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 5,
+      "pull_min": 5,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "ordinary-exception-after-partial": {
+      "classifications": {
+        "stream_interrupted": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 2,
+      "pull_min": 2,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "ordinary-exception-before-content": {
+      "classifications": {
+        "stream_empty_no_terminal": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 1,
+      "pull_min": 1,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "physical-byte-fragment-discovery": {
+      "classifications": {
+        "stream_empty_visible_output": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 5,
+      "pull_min": 5,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "needs_adjudication": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "post-terminal-metadata": {
+      "classifications": {
+        "stream_post_terminal_content": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 5,
+      "pull_min": 5,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "post-terminal-visible": {
+      "classifications": {
+        "stream_post_terminal_content": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 5,
+      "pull_min": 5,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "provider-substitution": {
+      "classifications": {
+        "provider_substituted": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 0,
+      "pull_min": 0,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "quarantined-output": {
+      "classifications": {
+        "content_filter": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 5,
+      "pull_min": 5,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "route-exact": {
+      "classifications": {
+        "route_exact": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 0,
+      "pull_min": 0,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "route-unknown": {
+      "classifications": {
+        "route_unknown": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 0,
+      "pull_min": 0,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    },
+    "unicode-emoji": {
+      "classifications": {
+        "success": 10
+      },
+      "close_max": 1,
+      "close_min": 1,
+      "pull_max": 4,
+      "pull_min": 4,
+      "raw_hashes": 1,
+      "response_hashes": 1,
+      "results": {
+        "pass": 10
+      },
+      "runs": 10,
+      "stable": true
+    }
+  },
+  "issues": {
+    "baseline_behavior_differences": [],
+    "classification_drift": [],
+    "double_close": [],
+    "false_success": [],
+    "missing_cleanup": [],
+    "raw_hash_mismatches": [],
+    "replay_divergence": [],
+    "response_hash_mismatches": [],
+    "unbounded_pulls": []
+  }
+}
