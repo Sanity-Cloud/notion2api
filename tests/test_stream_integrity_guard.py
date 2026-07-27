@@ -247,3 +247,28 @@ def test_guard_chain_close_failure_closes_upstream_once_and_fails_closed(factory
     assert "ERR_STREAM_SOURCE_CLEANUP" in emitted
     assert '"finish_reason": "error"' in emitted
     assert "data: [DONE]" not in emitted
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [chat._create_standard_stream_generator, chat._create_lite_stream_generator],
+)
+def test_guard_captures_nested_generator_cleanup_failure(factory):
+    upstream = _ClosableSequence([], close_error=True)
+    wrapped = factory(
+        "id",
+        "model",
+        {"type": "content", "text": "nested-safe"},
+        upstream,
+    )
+
+    emitted = "".join(
+        chat._guard_stream_until_integrity(wrapped, response_id="id", model="model")
+    )
+
+    assert upstream.close_calls == 1
+    assert "nested-safe" not in emitted
+    assert "ERR_STREAM_SOURCE_CLEANUP" in emitted
+    assert "stream_source_cleanup_failed" in emitted
+    assert '"finish_reason": "error"' in emitted
+    assert "data: [DONE]" not in emitted
