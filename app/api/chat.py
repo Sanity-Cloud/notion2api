@@ -1,6 +1,7 @@
 # pylint: disable=broad-exception-caught, protected-access
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -13,7 +14,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.core.errors import openai_error
 from app.core.internal_callers import is_repo_ai_internal_request
 from app.core.models import normalize_model_id
-from app.conversation import apply_notion_ai_options, compress_round_if_needed, compress_sliding_window_round, build_lite_transcript
+from app.conversation import (
+    apply_notion_ai_options,
+    compress_round_if_needed,
+    compress_sliding_window_round,
+    build_lite_transcript,
+)
 from app.config import is_lite_mode
 from app.logger import logger
 from app.model_registry import is_supported_model, list_available_models
@@ -44,7 +50,9 @@ from app.api.chat_resume_thread_binding import _resolve_persistent_thread_id
 router = APIRouter()
 
 
-def _apply_notion_request_options(transcript: list[dict[str, Any]], req_body: ChatCompletionRequest) -> list[dict[str, Any]]:
+def _apply_notion_request_options(
+    transcript: list[dict[str, Any]], req_body: ChatCompletionRequest
+) -> list[dict[str, Any]]:
     return apply_notion_ai_options(
         transcript,
         mode=req_body.notion_mode,
@@ -65,10 +73,17 @@ def _requested_thread_title(req_body: ChatCompletionRequest) -> str | None:
     )
 
 
-def _persist_local_thread_title(request: Request, req_body: ChatCompletionRequest, title: str | None) -> None:
+def _persist_local_thread_title(
+    request: Request, req_body: ChatCompletionRequest, title: str | None
+) -> None:
     conversation_id = str(req_body.conversation_id or "").strip()
     manager = getattr(request.app.state, "conversation_manager", None)
-    if title and conversation_id and manager and manager.conversation_exists(conversation_id):
+    if (
+        title
+        and conversation_id
+        and manager
+        and manager.conversation_exists(conversation_id)
+    ):
         manager.set_conversation_title(conversation_id, title)
 
 
@@ -191,10 +206,16 @@ def _build_error_response(
 def _upstream_error_response(exc: NotionUpstreamError) -> JSONResponse:
     """Convert NotionUpstreamError to a unified JSON response."""
     excerpt = str(exc.response_excerpt or "")
-    if exc.status_code == 422 or "OUTPUT_CONTAMINATED" in excerpt or "INTERNAL_TOOL_SYNTAX_EXPOSED" in excerpt:
+    if (
+        exc.status_code == 422
+        or "OUTPUT_CONTAMINATED" in excerpt
+        or "INTERNAL_TOOL_SYNTAX_EXPOSED" in excerpt
+    ):
         return _build_error_response(
             422,
-            code="OUTPUT_CONTAMINATED" if "INTERNAL_TOOL_SYNTAX" not in excerpt else "INTERNAL_TOOL_SYNTAX_EXPOSED",
+            code="OUTPUT_CONTAMINATED"
+            if "INTERNAL_TOOL_SYNTAX" not in excerpt
+            else "INTERNAL_TOOL_SYNTAX_EXPOSED",
             message="Assistant output failed integrity validation and was quarantined.",
             error_type="indeterminate_output",
             suggestion="Inspect the original request and quarantined evidence; do not resubmit blindly.",
@@ -264,13 +285,14 @@ def _resolve_request_model(request: Request, model: str | None) -> str:
         pool = request.app.state.account_pool
         client = pool.get_client(wait_if_cooling=False)
         from app.model_registry import get_restricted_models_for_space, get_notion_model
+
         restricted = get_restricted_models_for_space(client)
         notion_model = get_notion_model(normalized_model)
         if notion_model in restricted or normalized_model in restricted:
             openai_error(
                 f"Model '{normalized_model}' is unavailable for the current account due to restriction (e.g. trial_not_allowed).",
                 "model_restricted",
-                status_code=400
+                status_code=400,
             )
     except Exception as e:
         if hasattr(e, "status_code"):
@@ -278,7 +300,11 @@ def _resolve_request_model(request: Request, model: str | None) -> str:
 
     if not is_supported_model(normalized_model):
         try:
-            available_models = [m for m in list_available_models() if get_notion_model(m) not in restricted and m not in restricted]
+            available_models = [
+                m
+                for m in list_available_models()
+                if get_notion_model(m) not in restricted and m not in restricted
+            ]
         except Exception:
             available_models = list_available_models()
         openai_error(
@@ -318,7 +344,11 @@ def _strict_model_requested(req_body: ChatCompletionRequest) -> bool:
 
 
 def _is_model_mismatch(response_obj: ChatCompletionResponse) -> bool:
-    requested = str(getattr(response_obj, "notion_requested_model", "") or getattr(response_obj, "requested_model", "") or "").strip()
+    requested = str(
+        getattr(response_obj, "notion_requested_model", "")
+        or getattr(response_obj, "requested_model", "")
+        or ""
+    ).strip()
     actual = str(getattr(response_obj, "actual_model", "") or "").strip()
     return bool(requested and actual and requested != actual)
 
@@ -330,11 +360,16 @@ def _model_mismatch_response(response_obj: ChatCompletionResponse) -> JSONRespon
         message="Requested model was not the model that answered.",
         error_type="model_mismatch",
         suggestion="Use an available model or disable strict model enforcement for this request.",
-        detail=json.dumps({
-            "requested_model": getattr(response_obj, "requested_model", None),
-            "notion_requested_model": getattr(response_obj, "notion_requested_model", None),
-            "actual_model": getattr(response_obj, "actual_model", None),
-        }, ensure_ascii=False),
+        detail=json.dumps(
+            {
+                "requested_model": getattr(response_obj, "requested_model", None),
+                "notion_requested_model": getattr(
+                    response_obj, "notion_requested_model", None
+                ),
+                "actual_model": getattr(response_obj, "actual_model", None),
+            },
+            ensure_ascii=False,
+        ),
     )
 
 
@@ -379,18 +414,22 @@ def _last_user_message_content(messages: Iterable[Any]) -> Any:
     return ""
 
 
-_LOCAL_PROBE_OK = frozenset({
-    "reply with ok.",
-    "reply with ok",
-    "respond with ok.",
-    "respond with ok",
-})
+_LOCAL_PROBE_OK = frozenset(
+    {
+        "reply with ok.",
+        "reply with ok",
+        "respond with ok.",
+        "respond with ok",
+    }
+)
 
-_LOCAL_PROBE_PONG = frozenset({
-    "ping! respond with exactly 'pong' to verify connection.",
-    "reply with exactly: pong",
-    "reply with exactly pong",
-})
+_LOCAL_PROBE_PONG = frozenset(
+    {
+        "ping! respond with exactly 'pong' to verify connection.",
+        "reply with exactly: pong",
+        "reply with exactly pong",
+    }
+)
 
 
 def _normalize_probe_text(content: Any) -> str:
@@ -430,7 +469,9 @@ def _probe_match_candidates(content: Any) -> list[str]:
     for match in re.finditer(r"(?im)^\s*question:\s*(.+?)\s*$", text):
         _add(match.group(1))
 
-    for match in re.finditer(r"(?i)\[current user request\]\s*(.+)$", text, flags=re.DOTALL):
+    for match in re.finditer(
+        r"(?i)\[current user request\]\s*(.+)$", text, flags=re.DOTALL
+    ):
         tail = match.group(1).strip()
         if not tail:
             continue
@@ -450,6 +491,25 @@ def _local_probe_response_text(content: Any) -> str:
             return "pong"
     return ""
 
+
+def _sandbox_remote_request_authorized(
+    request: Request,
+    req_body: ChatCompletionRequest,
+) -> bool:
+    """Require explicit opt-in before a sandbox may call the remote provider."""
+    required = os.getenv("NOTION_SANDBOX_REQUIRE_EXPLICIT_REMOTE", "").strip().lower()
+    if required not in {"1", "true", "yes", "on"}:
+        return True
+
+    header_value = request.headers.get("x-sandbox-allow-remote", "").strip().lower()
+    if header_value in {"1", "true", "yes", "on"}:
+        return True
+
+    metadata = req_body.metadata if isinstance(req_body.metadata, dict) else {}
+    metadata_value = metadata.get("sandbox_allow_remote")
+    if isinstance(metadata_value, bool):
+        return metadata_value
+    return str(metadata_value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 RECALL_INTENT_KEYWORDS = [
@@ -523,6 +583,93 @@ def _build_hygiene_metadata_event(hygiene: dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+MAX_GUARDED_STREAM_BUFFER_CHARS = 500_000
+
+
+def _parse_sse_json(chunk: str) -> dict[str, Any] | None:
+    """Parse one JSON SSE frame; non-JSON and ``[DONE]`` frames return ``None``."""
+    stripped = str(chunk or "").strip()
+    if not stripped.startswith("data:"):
+        return None
+    payload = stripped[5:].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _guard_stream_until_integrity(
+    source: Iterable[str],
+    *,
+    response_id: str,
+    model: str,
+) -> Generator[str, None, None]:
+    """Buffer provider SSE until final integrity classification is known.
+
+    A final-only quarantine cannot retract deltas already delivered to clients.
+    This guard therefore withholds provider output until the stream reaches a
+    terminal integrity decision. Local probe streams do not use this wrapper.
+    """
+    buffered: list[str] = []
+    metadata_events: list[str] = []
+    hygiene_events: list[str] = []
+    total_chars = 0
+    quarantined = False
+    forced_limit = False
+
+    for raw_chunk in source:
+        chunk = str(raw_chunk)
+        total_chars += len(chunk)
+        if not forced_limit and total_chars <= MAX_GUARDED_STREAM_BUFFER_CHARS:
+            buffered.append(chunk)
+        else:
+            forced_limit = True
+            buffered.clear()
+
+        payload = _parse_sse_json(chunk)
+        if payload is None:
+            continue
+        event_type = str(payload.get("type") or "")
+        if event_type == "model_metadata":
+            metadata_events.append(chunk)
+        if event_type == "output_hygiene":
+            hygiene_events.append(chunk)
+            hygiene = payload.get("hygiene")
+            if isinstance(hygiene, dict) and _output_requires_quarantine(hygiene):
+                quarantined = True
+
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            if choice.get("finish_reason") == "content_filter":
+                quarantined = True
+
+    if forced_limit:
+        hygiene = {
+            "output_integrity": assess_output_integrity(
+                "",
+                additional_reasons=("guarded_stream_buffer_limit_exceeded",),
+            )
+        }
+        yield from metadata_events
+        yield _build_hygiene_metadata_event(hygiene)
+        yield _build_stream_chunk(response_id, model, finish_reason="content_filter")
+        yield "data: [DONE]\n\n"
+        return
+
+    if quarantined:
+        yield from metadata_events
+        yield from hygiene_events
+        yield _build_stream_chunk(response_id, model, finish_reason="content_filter")
+        yield "data: [DONE]\n\n"
+        return
+
+    yield from buffered
+
+
 def _emit_visible_stream_correction(
     response_id: str,
     model_name: str,
@@ -552,7 +699,9 @@ def _emit_visible_stream_correction(
                     )
                 )
             else:
-                chunks.append(_build_stream_chunk(response_id, model_name, content=suffix))
+                chunks.append(
+                    _build_stream_chunk(response_id, model_name, content=suffix)
+                )
             streamed_text += suffix
         return assistant_started, streamed_text, chunks
 
@@ -568,7 +717,9 @@ def _emit_visible_stream_correction(
                 )
             )
         else:
-            chunks.append(_build_stream_chunk(response_id, model_name, content=sanitized_text))
+            chunks.append(
+                _build_stream_chunk(response_id, model_name, content=sanitized_text)
+            )
         return assistant_started, sanitized_text, chunks
 
     if client_type == "web":
@@ -590,7 +741,10 @@ def _attach_response_hygiene(
     response_obj: ChatCompletionResponse,
     hygiene: dict[str, Any] | None,
 ) -> None:
-    if hygiene and (any(value for key, value in hygiene.items() if key != "output_integrity") or _output_requires_quarantine(hygiene)):
+    if hygiene and (
+        any(value for key, value in hygiene.items() if key != "output_integrity")
+        or _output_requires_quarantine(hygiene)
+    ):
         response_obj.hygiene = hygiene
 
 
@@ -672,7 +826,10 @@ def _normalize_stream_item(item: Any) -> dict[str, Any]:
     if isinstance(item, dict):
         item_type = str(item.get("type", "") or "").lower()
         if item_type == "content":
-            return {"type": "content", "text": str(item.get("text") or item.get("history", "") or "")}
+            return {
+                "type": "content",
+                "text": str(item.get("text") or item.get("history", "") or ""),
+            }
         if item_type == "search":
             payload = item.get("data")
             return {
@@ -680,14 +837,19 @@ def _normalize_stream_item(item: Any) -> dict[str, Any]:
                 "data": payload if isinstance(payload, dict) else {},
             }
         if item_type == "thinking":
-            return {"type": "thinking", "text": str(item.get("text") or item.get("history", "") or "")}
+            return {
+                "type": "thinking",
+                "text": str(item.get("text") or item.get("history", "") or ""),
+            }
         if item_type == "final_content":
             return {
                 "type": "final_content",
                 "text": str(item.get("text") or item.get("history", "") or ""),
                 "source_type": str(item.get("source_type", "") or ""),
                 "source_length": item.get("source_length"),
-                "model_metadata": item.get("model_metadata") if isinstance(item.get("model_metadata"), dict) else {},
+                "model_metadata": item.get("model_metadata")
+                if isinstance(item.get("model_metadata"), dict)
+                else {},
             }
         if item_type == "model_metadata":
             payload = item.get("data")
@@ -708,7 +870,9 @@ def _iter_stream_items(
         yield item
 
 
-def _merge_model_metadata(current: dict[str, Any] | None, item: dict[str, Any]) -> dict[str, Any]:
+def _merge_model_metadata(
+    current: dict[str, Any] | None, item: dict[str, Any]
+) -> dict[str, Any]:
     merged: dict[str, Any] = dict(current or {})
     payload: Any = None
     item_type = str(item.get("type", "") or "")
@@ -756,14 +920,26 @@ def _response_model_metadata(
         or ""
     ).strip()
 
-    caller = request_metadata.get("caller") if isinstance(request_metadata, dict) else None
+    caller = (
+        request_metadata.get("caller") if isinstance(request_metadata, dict) else None
+    )
     if isinstance(caller, dict):
         payload["caller"] = {
             str(key): value
             for key, value in caller.items()
-            if str(key) in {
-                "id", "caller_id", "type", "caller_type", "project_id", "run_id",
-                "job_id", "review_instance_id", "team_id", "manager_id", "request_origin",
+            if str(key)
+            in {
+                "id",
+                "caller_id",
+                "type",
+                "caller_type",
+                "project_id",
+                "run_id",
+                "job_id",
+                "review_instance_id",
+                "team_id",
+                "manager_id",
+                "request_origin",
             }
             and value not in (None, "", [], {})
         }
@@ -810,14 +986,20 @@ def _response_model_metadata(
     )
     payload["model_identity_source"] = str(
         payload.get("actual_model_source")
-        or ("authoritative_upstream_metadata" if verified else "no_responder_identity_evidence")
+        or (
+            "authoritative_upstream_metadata"
+            if verified
+            else "no_responder_identity_evidence"
+        )
     )
     if verified:
         payload["verified_model"] = observed
     else:
         payload.pop("verified_model", None)
     if not verified:
-        payload["model_identity_warning"] = "The responding model identity was not independently verified."
+        payload["model_identity_warning"] = (
+            "The responding model identity was not independently verified."
+        )
 
     resolved = resolved_route
     comparison_model = str(payload.get("verified_model") or observed or "").strip()
@@ -915,7 +1097,9 @@ def _select_best_final_reply(
         return streamed, "streamed_only"
     if not streamed_stripped:
         return final, "final_only"
-    if detect_visible_output_contamination(streamed_stripped) and not detect_visible_output_contamination(final_stripped):
+    if detect_visible_output_contamination(
+        streamed_stripped
+    ) and not detect_visible_output_contamination(final_stripped):
         return final, "final_preferred_over_contaminated_stream"
     if final.startswith(streamed):
         return final, "final_extends_streamed"
@@ -1506,7 +1690,9 @@ def _request_state_attachments(request: Request) -> list[Any]:
     return attachments if isinstance(attachments, list) else []
 
 
-def _attachments_enabled_for_request(request: Request, policy: AttachmentPolicy) -> bool:
+def _attachments_enabled_for_request(
+    request: Request, policy: AttachmentPolicy
+) -> bool:
     return policy.enabled or is_repo_ai_internal_request(request)
 
 
@@ -1534,14 +1720,18 @@ def _handle_lite_request(
     assert req_body.model is not None
 
     # text
-    cleaned_msgs, attachments = normalize_chat_messages([m.dict() for m in req_body.messages], getattr(req_body, "attachments", None))
+    cleaned_msgs, attachments = normalize_chat_messages(
+        [m.dict() for m in req_body.messages], getattr(req_body, "attachments", None)
+    )
     state_attachments = _request_state_attachments(request)
     if state_attachments:
         attachments = state_attachments
     # Gate feature flag
     policy = AttachmentPolicy.from_env()
     if attachments and not _attachments_enabled_for_request(request, policy):
-        openai_error("Attachments are disabled for this server.", "attachments_disabled")
+        openai_error(
+            "Attachments are disabled for this server.", "attachments_disabled"
+        )
 
     # text
     req_body.messages = [ChatMessage(**m) for m in cleaned_msgs]
@@ -1571,7 +1761,9 @@ def _handle_lite_request(
                     pass
 
             # text Lite transcripttext
-            transcript = _apply_notion_request_options(build_lite_transcript(user_prompt, req_body.model), req_body)
+            transcript = _apply_notion_request_options(
+                build_lite_transcript(user_prompt, req_body.model), req_body
+            )
 
             # text Notion APItext thread_idtext
             persist_remote_chat = None
@@ -1604,11 +1796,15 @@ def _handle_lite_request(
                     "X-Accel-Buffering": "no",
                 }
                 return StreamingResponse(
-                    _create_lite_stream_generator(
-                        response_id,
-                        req_body.model,
-                        first_item,
-                        stream_gen,
+                    _guard_stream_until_integrity(
+                        _create_lite_stream_generator(
+                            response_id,
+                            req_body.model,
+                            first_item,
+                            stream_gen,
+                        ),
+                        response_id=response_id,
+                        model=req_body.model,
                     ),
                     media_type="text/event-stream",
                     headers=stream_headers,
@@ -1788,12 +1984,21 @@ def _handle_standard_request(
     conversation_id = str(req_body.conversation_id or "").strip()
     user_prompt, history_messages, raw_user_prompt = _prepare_messages(req_body)
 
-    bound_thread_id = _resolve_persistent_thread_id(manager, conversation_id) if manager and conversation_id else ""
+    bound_thread_id = (
+        _resolve_persistent_thread_id(manager, conversation_id)
+        if manager and conversation_id
+        else ""
+    )
     persist_remote_chat = bool(
-        req_body.metadata.get("persist_remote_chat", True) if isinstance(req_body.metadata, dict) else True
+        req_body.metadata.get("persist_remote_chat", True)
+        if isinstance(req_body.metadata, dict)
+        else True
     )
     trusted_import = bool(
-        (req_body.metadata.get("trusted_import") or req_body.metadata.get("import_mode"))
+        (
+            req_body.metadata.get("trusted_import")
+            or req_body.metadata.get("import_mode")
+        )
         if isinstance(req_body.metadata, dict)
         else False
     )
@@ -1801,7 +2006,14 @@ def _handle_standard_request(
         role == "assistant" for role, *_ in history_messages
     ) or (sum(1 for role, *_ in history_messages if role == "user") > 0)
 
-    if history_messages and (bound_thread_id or (persist_remote_chat and not trusted_import and has_assistant_or_multi_user_history)):
+    if history_messages and (
+        bound_thread_id
+        or (
+            persist_remote_chat
+            and not trusted_import
+            and has_assistant_or_multi_user_history
+        )
+    ):
         logger.warning(
             "Rejected client history for persistent Notion thread before account acquisition",
             extra={
@@ -1850,13 +2062,18 @@ def _handle_standard_request(
                     pass
 
             # text
-            cleaned_msgs, attachments = normalize_chat_messages([m.dict() for m in req_body.messages], getattr(req_body, "attachments", None))
+            cleaned_msgs, attachments = normalize_chat_messages(
+                [m.dict() for m in req_body.messages],
+                getattr(req_body, "attachments", None),
+            )
             state_attachments = _request_state_attachments(request)
             if state_attachments:
                 attachments = state_attachments
             policy = AttachmentPolicy.from_env()
             if attachments and not _attachments_enabled_for_request(request, policy):
-                openai_error("Attachments are disabled for this server.", "attachments_disabled")
+                openai_error(
+                    "Attachments are disabled for this server.", "attachments_disabled"
+                )
 
             # text Standard transcripttext
             # text client text
@@ -1867,7 +2084,9 @@ def _handle_standard_request(
                 "context_page_id": _request_context_page_id(req_body, client),
             }
             messages = cleaned_msgs
-            transcript = _apply_notion_request_options(build_standard_transcript(messages, req_body.model, account), req_body)
+            transcript = _apply_notion_request_options(
+                build_standard_transcript(messages, req_body.model, account), req_body
+            )
 
             # text Notion APItext thread_idtext Notion text
             persist_remote_chat = None
@@ -1900,12 +2119,16 @@ def _handle_standard_request(
                     "X-Accel-Buffering": "no",
                 }
                 return StreamingResponse(
-                    _create_standard_stream_generator(
-                        response_id,
-                        req_body.model,
-                        first_item,
-                        stream_gen,
-                        client_type=client_type,
+                    _guard_stream_until_integrity(
+                        _create_standard_stream_generator(
+                            response_id,
+                            req_body.model,
+                            first_item,
+                            stream_gen,
+                            client_type=client_type,
+                        ),
+                        response_id=response_id,
+                        model=req_body.model,
                     ),
                     media_type="text/event-stream",
                     headers=stream_headers,
@@ -2121,10 +2344,14 @@ async def create_chat_completion(
     from app.config import is_standard_mode
 
     try:
-        validate_chat_messages([
-            message.model_dump() if hasattr(message, "model_dump") else message.dict()
-            for message in req_body.messages
-        ])
+        validate_chat_messages(
+            [
+                message.model_dump()
+                if hasattr(message, "model_dump")
+                else message.dict()
+                for message in req_body.messages
+            ]
+        )
     except PromptValidationError as exc:
         return _attachment_error_response(exc)
 
@@ -2196,7 +2423,9 @@ async def create_chat_completion(
             if isinstance(system_msg.content, str):
                 system_msg.content = f"{custom_instructions}\n\n{system_msg.content}"
             elif isinstance(system_msg.content, list):
-                system_msg.content.insert(0, {"type": "text", "text": custom_instructions + "\n\n"})
+                system_msg.content.insert(
+                    0, {"type": "text", "text": custom_instructions + "\n\n"}
+                )
             else:
                 system_msg.content = custom_instructions
         else:
@@ -2214,10 +2443,17 @@ async def create_chat_completion(
         if probe_response:
             response_id = f"chatcmpl-{uuid.uuid4().hex}"
             if req_body.stream:
+
                 def ping_stream_generator() -> Generator[str, None, None]:
-                    yield _build_stream_chunk(response_id, req_body.model, role="assistant")
-                    yield _build_stream_chunk(response_id, req_body.model, content=probe_response)
-                    yield _build_stream_chunk(response_id, req_body.model, finish_reason="stop")
+                    yield _build_stream_chunk(
+                        response_id, req_body.model, role="assistant"
+                    )
+                    yield _build_stream_chunk(
+                        response_id, req_body.model, content=probe_response
+                    )
+                    yield _build_stream_chunk(
+                        response_id, req_body.model, finish_reason="stop"
+                    )
                     yield "data: [DONE]\n\n"
 
                 stream_headers = {
@@ -2236,20 +2472,40 @@ async def create_chat_completion(
                     model=req_body.model,
                     choices=[
                         ChatMessageResponseChoice(
-                            message=ChatMessage(role="assistant", content=probe_response)
+                            message=ChatMessage(
+                                role="assistant", content=probe_response
+                            )
                         )
                     ],
                 )
 
+    if not _sandbox_remote_request_authorized(request, req_body):
+        return _build_error_response(
+            403,
+            code="SANDBOX_REMOTE_AUTH_REQUIRED",
+            message="Sandbox remote-provider access requires explicit request opt-in.",
+            error_type="sandbox_remote_access_denied",
+            suggestion=(
+                "Set X-Sandbox-Allow-Remote: true or metadata.sandbox_allow_remote=true "
+                "for an intentional credentialed integration test."
+            ),
+        )
+
     # Lite text
     if is_lite_mode():
         import anyio
-        return await anyio.to_thread.run_sync(_handle_lite_request, request, req_body, response)
+
+        return await anyio.to_thread.run_sync(
+            _handle_lite_request, request, req_body, response
+        )
 
     # Standard text thinking text
     if is_standard_mode():
         import anyio
-        return await anyio.to_thread.run_sync(_handle_standard_request, request, req_body, response)
+
+        return await anyio.to_thread.run_sync(
+            _handle_standard_request, request, req_body, response
+        )
 
     # Heavy text
     pool = request.app.state.account_pool
@@ -2262,10 +2518,14 @@ async def create_chat_completion(
         else None
     )
 
-    conversation_id = req_body.conversation_id.strip() if req_body.conversation_id else ""
+    conversation_id = (
+        req_body.conversation_id.strip() if req_body.conversation_id else ""
+    )
     restore_history = False
     if not conversation_id:
-        conversation_id = manager.new_conversation(title=_requested_thread_title(req_body))
+        conversation_id = manager.new_conversation(
+            title=_requested_thread_title(req_body)
+        )
         restore_history = True
     elif not manager.conversation_exists(conversation_id):
         logger.warning(
@@ -2284,10 +2544,15 @@ async def create_chat_completion(
     bound_thread_id = _resolve_persistent_thread_id(manager, conversation_id)
 
     persist_remote_chat = bool(
-        req_body.metadata.get("persist_remote_chat", True) if isinstance(req_body.metadata, dict) else True
+        req_body.metadata.get("persist_remote_chat", True)
+        if isinstance(req_body.metadata, dict)
+        else True
     )
     trusted_import = bool(
-        (req_body.metadata.get("trusted_import") or req_body.metadata.get("import_mode"))
+        (
+            req_body.metadata.get("trusted_import")
+            or req_body.metadata.get("import_mode")
+        )
         if isinstance(req_body.metadata, dict)
         else False
     )
@@ -2299,7 +2564,14 @@ async def create_chat_completion(
     # Persistent remote-chat workflows prohibit client-supplied historical dialog
     # before provider dispatch (whether the thread is already bound or newly created),
     # unless an explicit trusted import mode is enabled.
-    if history_messages and (bound_thread_id or (persist_remote_chat and not trusted_import and has_assistant_or_multi_user_history)):
+    if history_messages and (
+        bound_thread_id
+        or (
+            persist_remote_chat
+            and not trusted_import
+            and has_assistant_or_multi_user_history
+        )
+    ):
         logger.warning(
             "Rejected client history for persistent Notion thread",
             extra={
@@ -2373,14 +2645,18 @@ async def create_chat_completion(
 
             # Pass attachments when present
             _cleaned_msgs, attachments = normalize_chat_messages(
-            [m.model_dump() for m in req_body.messages],
+                [m.model_dump() for m in req_body.messages],
                 getattr(req_body, "attachments", None),
             )
             state_attachments = _request_state_attachments(request)
             if state_attachments:
                 attachments = state_attachments
-            if attachments and not _attachments_enabled_for_request(request, AttachmentPolicy.from_env()):
-                openai_error("Attachments are disabled for this server.", "attachments_disabled")
+            if attachments and not _attachments_enabled_for_request(
+                request, AttachmentPolicy.from_env()
+            ):
+                openai_error(
+                    "Attachments are disabled for this server.", "attachments_disabled"
+                )
 
             persist_remote_chat = None
             if req_body.metadata and isinstance(req_body.metadata, dict):
@@ -2435,7 +2711,9 @@ async def create_chat_completion(
                 model_metadata: dict[str, Any] = {}
 
                 try:
-                    for raw_item in _iter_stream_items(first_stream_item, active_stream_gen):
+                    for raw_item in _iter_stream_items(
+                        first_stream_item, active_stream_gen
+                    ):
                         item = _normalize_stream_item(raw_item)
                         item_type = item.get("type")
 
@@ -2585,7 +2863,11 @@ async def create_chat_completion(
                             },
                         )
                         return
-                    if isinstance(exc, NotionUpstreamError) and active_client is not None and getattr(exc, 'retriable', False):
+                    if (
+                        isinstance(exc, NotionUpstreamError)
+                        and active_client is not None
+                        and getattr(exc, "retriable", False)
+                    ):
                         pool.mark_failed(active_client)
                     log_method = (
                         logger.warning
@@ -2685,15 +2967,17 @@ async def create_chat_completion(
                                 )
                             streamed_content_accumulator = final_reply
 
-                    assistant_started, streamed_content_accumulator, correction_chunks = (
-                        _emit_visible_stream_correction(
-                            response_id,
-                            req_body.model,
-                            assistant_started=assistant_started,
-                            streamed_text=streamed_content_accumulator,
-                            sanitized_text=final_reply,
-                            client_type=client_type,
-                        )
+                    (
+                        assistant_started,
+                        streamed_content_accumulator,
+                        correction_chunks,
+                    ) = _emit_visible_stream_correction(
+                        response_id,
+                        req_body.model,
+                        assistant_started=assistant_started,
+                        streamed_text=streamed_content_accumulator,
+                        sanitized_text=final_reply,
+                        client_type=client_type,
                     )
                     for chunk in correction_chunks:
                         yield chunk
@@ -2730,7 +3014,9 @@ async def create_chat_completion(
                                     "event": "output_quarantined",
                                     "error_code": "OUTPUT_CONTAMINATED",
                                     "conversation_id": conversation_id,
-                                    "output_integrity": hygiene_meta.get("output_integrity"),
+                                    "output_integrity": hygiene_meta.get(
+                                        "output_integrity"
+                                    ),
                                     "normal_persistence_blocked": True,
                                 }
                             },
@@ -2756,7 +3042,9 @@ async def create_chat_completion(
                                     }
                                 },
                             )
-                    active_thread_id = str(getattr(client, "current_thread_id", "") or thread_id or "").strip()
+                    active_thread_id = str(
+                        getattr(client, "current_thread_id", "") or thread_id or ""
+                    ).strip()
                     if active_thread_id:
                         model_metadata = dict(model_metadata or {})
                         model_metadata["notion_thread_id"] = active_thread_id
@@ -2793,7 +3081,11 @@ async def create_chat_completion(
                 if active_thread_id:
                     stream_headers["X-Notion-Thread-Id"] = active_thread_id
                 return StreamingResponse(
-                    openai_stream_generator(),
+                    _guard_stream_until_integrity(
+                        openai_stream_generator(),
+                        response_id=response_id,
+                        model=req_body.model,
+                    ),
                     media_type="text/event-stream",
                     headers=stream_headers,
                 )
@@ -2858,7 +3150,9 @@ async def create_chat_completion(
             if memory_degraded:
                 response.headers["X-Memory-Status"] = "degraded"
 
-            notion_thread_id = str(getattr(active_client, "current_thread_id", "") or "").strip()
+            notion_thread_id = str(
+                getattr(active_client, "current_thread_id", "") or ""
+            ).strip()
             if notion_thread_id:
                 model_metadata = dict(model_metadata or {})
                 model_metadata["notion_thread_id"] = notion_thread_id
@@ -2874,11 +3168,7 @@ async def create_chat_completion(
             response_obj = ChatCompletionResponse(
                 id=response_id,
                 model=req_body.model,
-                choices=[
-                    ChatMessageResponseChoice(
-                        message=response_message
-                    )
-                ],
+                choices=[ChatMessageResponseChoice(message=response_message)],
             )
             _attach_response_model_metadata(
                 response_obj, req_body.model, model_metadata, req_body.metadata
