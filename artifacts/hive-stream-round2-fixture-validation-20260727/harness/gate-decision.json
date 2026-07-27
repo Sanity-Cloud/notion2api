@@ -1,0 +1,36 @@
+{
+    "preserved_dissent":  [
+                              "A deliberately failing source.close after an otherwise valid stream is treated as a hard operational failure by the Round 2 acceptance policy.",
+                              "Done-before-finish currently resolves as post-terminal content, leaving the terminal-order branch unreachable for that input.",
+                              "Multiline SSE and physical byte fragmentation remain unsupported discovery cases and are not silently repaired."
+                          ],
+    "harness_gate_pass":  true,
+    "work_unit":  "WU-R2-HARNESS",
+    "rationale":  "Harness implementation and deterministic replay machinery passed. Diagnostic lanes may characterize the cleanup failure and three adjudications without contacting services. The isolated HTTP smoke remains blocked until cleanup failure is resolved or explicitly accepted at a later decision gate.",
+    "product_gate_pass":  false,
+    "harness_content_commit":  "de2eff0",
+    "mission_id":  "hive-stream-round2-fixture-validation-20260727",
+    "matrix_summary":  {
+                           "total_runs":  96,
+                           "fail":  3,
+                           "pass":  84,
+                           "needs_adjudication":  9,
+                           "nondeterministic":  0,
+                           "cleanup_failures":  3,
+                           "false_success_violations":  0
+                       },
+    "decision_schema_version":  "sanitycloud-round2-harness-gate/1",
+    "release":  {
+                    "diagnostic_fixture_lanes_authorized":  true,
+                    "smoke_authorized":  false,
+                    "merge_authorized":  false,
+                    "diagnostic_fixture_lanes":  [
+                                                     "WU-R2-MATRIX",
+                                                     "WU-R2-CONSUMERS",
+                                                     "WU-R2-ENCODING",
+                                                     "WU-R2-FRAMING"
+                                                 ],
+                    "deploy_authorized":  false,
+                    "independent_review_authorized":  false
+                }
+}
