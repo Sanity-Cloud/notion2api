@@ -7,6 +7,8 @@ from fastapi import HTTPException
 
 from app.api.chat import (
     _apply_notion_request_options,
+    _create_lite_stream_generator,
+    _create_standard_stream_generator,
     _request_context_page_id,
     _response_model_metadata,
 )
@@ -209,3 +211,35 @@ def test_all_provider_routes_receive_the_same_governance_contract(model: str) ->
     assert "authority-page" in instructions
     assert "output-root" in instructions
     assert "feedback-root" in instructions
+
+
+@pytest.mark.parametrize(
+    "generator",
+    [_create_lite_stream_generator, _create_standard_stream_generator],
+)
+def test_non_persistent_stream_metadata_preserves_governance_receipt(generator) -> None:
+    request_metadata = {
+        "governance": {
+            "contract_version": "test-v1",
+            "teamspace_id": "space-canonical",
+            "authority_page_id": "authority-page",
+            "documented_output_parent_page_id": "output-root",
+            "procedural_feedback_parent_page_id": "feedback-root",
+            "aligned": True,
+        }
+    }
+
+    chunks = list(
+        generator(
+            "chatcmpl-test",
+            "terra",
+            {"type": "content", "text": "done"},
+            iter(()),
+            request_metadata=request_metadata,
+        )
+    )
+
+    metadata_chunks = [chunk for chunk in chunks if '"type": "model_metadata"' in chunk]
+    assert len(metadata_chunks) == 1
+    assert '"authority_page_id": "authority-page"' in metadata_chunks[0]
+    assert '"aligned": true' in metadata_chunks[0]

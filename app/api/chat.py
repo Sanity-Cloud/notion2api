@@ -1401,6 +1401,8 @@ def _create_lite_stream_generator(
     model_name: str,
     first_item: Any,
     stream_gen: Iterable[Any],
+    *,
+    request_metadata: dict[str, Any] | None = None,
 ) -> Generator[str, None, None]:
     """Lite text contenttext thinking text search"""
     streamed_content_accumulator = ""
@@ -1492,7 +1494,9 @@ def _create_lite_stream_generator(
     for chunk in correction_chunks:
         yield chunk
 
-    metadata_event = _build_model_metadata_event(model_name, model_metadata)
+    metadata_event = _build_model_metadata_event(
+        model_name, model_metadata, request_metadata
+    )
     if metadata_event:
         yield metadata_event
 
@@ -1511,6 +1515,7 @@ def _create_standard_stream_generator(
     stream_gen: Iterable[Any],
     *,
     client_type: str = "",
+    request_metadata: dict[str, Any] | None = None,
 ) -> Generator[str, None, None]:
     """
     Standard text SSE text
@@ -1665,7 +1670,9 @@ def _create_standard_stream_generator(
         }
         yield f"data: {json.dumps(search_metadata, ensure_ascii=False)}\n\n"
 
-    metadata_event = _build_model_metadata_event(model_name, model_metadata)
+    metadata_event = _build_model_metadata_event(
+        model_name, model_metadata, request_metadata
+    )
     if metadata_event:
         yield metadata_event
 
@@ -1870,6 +1877,7 @@ def _handle_lite_request(
                             req_body.model,
                             first_item,
                             stream_gen,
+                            request_metadata=req_body.metadata,
                         ),
                         response_id=response_id,
                         model=req_body.model,
@@ -2195,6 +2203,7 @@ def _handle_standard_request(
                             first_item,
                             stream_gen,
                             client_type=client_type,
+                            request_metadata=req_body.metadata,
                         ),
                         response_id=response_id,
                         model=req_body.model,
