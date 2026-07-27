@@ -3601,6 +3601,20 @@ def create_server(
     server_name = os.getenv("MCP_SERVER_NAME", "notion2api").strip() or "notion2api"
     tool_namespace = os.getenv("SANITYCLOUD_TOOL_NAMESPACE", "").strip()
     invocation_alias = os.getenv("SANITYCLOUD_INVOCATION_ALIAS", "").strip()
+    tool_prefix = re.sub(
+        r"[^a-z0-9_]+",
+        "_",
+        os.getenv("MCP_TOOL_PREFIX", "notion2api").strip().lower(),
+    ).strip("_") or "notion2api"
+
+    def _tool_name(internal_name: str) -> str:
+        suffix = internal_name.removeprefix("notion2api_")
+        return f"{tool_prefix}_{suffix}"
+
+    def _tool_description(description: str) -> str:
+        return description.replace("Notion2API", server_name).replace(
+            "notion2api_", f"{tool_prefix}_"
+        )
     identity_instruction = ""
     if invocation_alias:
         identity_instruction = f"Human invocation alias: {invocation_alias}. "
@@ -3610,7 +3624,7 @@ def create_server(
         name=server_name,
         instructions=(
             identity_instruction
-            + "Use these tools to call the user's private local Notion2API service. "
+            + f"Use these tools to call the user's private local {server_name} service. "
             "Start with notion2api_health or notion2api_list_models if service status or model IDs are uncertain. "
             "Omit session_name to generate a descriptive unique session for new work; legacy 'op' values are also auto-generated. "
             "Chat submissions return immediately. Poll notion2api_get_chat_job and report its progress snapshot without exposing raw private reasoning. "
@@ -3626,7 +3640,7 @@ def create_server(
     )
     register_notion2api_prompts(server)
 
-    @server.tool(description="Check whether the configured Notion2API backend is reachable and healthy.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_health"), description=_tool_description("Check whether the configured Notion2API backend is reachable and healthy."), structured_output=True)
     async def notion2api_health() -> HealthOutput:
         data = await client.get("/health")
         return HealthOutput(
@@ -3640,7 +3654,7 @@ def create_server(
             raw=data,
         )
 
-    @server.tool(description="List Notion2API models from the configured backend.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_list_models"), description=_tool_description("List Notion2API models from the configured backend."), structured_output=True)
     async def notion2api_list_models() -> ListModelsOutput:
         data = await client.get("/v1/models")
         raw_models = data.get("data") if isinstance(data, dict) else None
@@ -3658,7 +3672,7 @@ def create_server(
             error=_error_summary(data),
         )
 
-    @server.tool(description="Submit a prompt to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_chat"), description=_tool_description("Submit a prompt to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id."), structured_output=True)
     async def notion2api_chat(
         prompt: str,
         model: MCPModel = DEFAULT_MODEL,
@@ -3735,10 +3749,10 @@ def create_server(
             wait_seconds=wait_seconds,
         )
 
-    @server.tool(
+    @server.tool(name=_tool_name("notion2api_stage_file"),
         description=(
-            "Stage one ChatGPT-uploaded file and return an opaque staged_file_id. Call this once "
-            "per uploaded file, then pass all ids to notion2api_chat or notion2api_chat_completion."
+            _tool_description("Stage one ChatGPT-uploaded file and return an opaque staged_file_id. Call this once "
+            "per uploaded file, then pass all ids to notion2api_chat or notion2api_chat_completion.")
         ),
         structured_output=True,
     )
@@ -3760,11 +3774,11 @@ def create_server(
         except Exception as exc:
             return StageFileOutput(ok=False, error=f"{type(exc).__name__}: {exc}")
 
-    @server.tool(
+    @server.tool(name=_tool_name("notion2api_chat_with_file"),
         description=(
-            "Send one ChatGPT-uploaded file with a prompt to Notion2API. Use this tool for "
+            _tool_description("Send one ChatGPT-uploaded file with a prompt to Notion2API. Use this tool for "
             "files located in ChatGPT /mnt/data; the top-level file argument triggers connector transfer. "
-            "Terra is the default; omit model unless the user explicitly requests another."
+            "Terra is the default; omit model unless the user explicitly requests another.")
         ),
         structured_output=True,
     )
@@ -3814,10 +3828,10 @@ def create_server(
             caller_metadata=caller_metadata,
         )
 
-    @server.tool(
+    @server.tool(name=_tool_name("notion2api_upload_file_to_page"),
         description=(
-            "Upload one ChatGPT-supplied file directly to a Notion page. The top-level file "
-            "argument supports ChatGPT /mnt/data files and stages them safely for the local backend."
+            _tool_description("Upload one ChatGPT-supplied file directly to a Notion page. The top-level file "
+            "argument supports ChatGPT /mnt/data files and stages them safely for the local backend.")
         ),
         structured_output=True,
     )
@@ -3856,7 +3870,7 @@ def create_server(
             if staged_path is not None:
                 cleanup_staged_mcp_file(staged_path, was_staged)
 
-    @server.tool(description="Submit explicit messages to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_chat_completion"), description=_tool_description("Submit explicit messages to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id."), structured_output=True)
     async def notion2api_chat_completion(
         messages: list[dict[str, Any]],
         model: MCPModel = DEFAULT_MODEL,
@@ -3933,7 +3947,7 @@ def create_server(
             wait_seconds=wait_seconds,
         )
 
-    @server.tool(description="Call Notion2API /v1/responses and return extracted output text plus the raw response. Terra is the default; omit model unless the user explicitly requests another.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_responses"), description=_tool_description("Call Notion2API /v1/responses and return extracted output text plus the raw response. Terra is the default; omit model unless the user explicitly requests another."), structured_output=True)
     async def notion2api_responses(
         input_text: str,
         model: MCPModel = DEFAULT_MODEL,
@@ -3999,7 +4013,7 @@ def create_server(
             error=str(exc),
         )
 
-    @server.tool(description="Create a durable Hive mission with parallel worker lanes and conversation bindings.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_create_mission"), description=_tool_description("Create a durable Hive mission with parallel worker lanes and conversation bindings."), structured_output=True)
     async def notion2api_hive_create_mission(
         title: str,
         objective: str,
@@ -4027,7 +4041,7 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _hive_error_snapshot(exc, mission_id or "")
 
-    @server.tool(description="Read one durable Hive mission, its worker lanes, events, and latest fan-in decision.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_status"), description=_tool_description("Read one durable Hive mission, its worker lanes, events, and latest fan-in decision."), structured_output=True)
     async def notion2api_hive_status(
         mission_id: str,
         event_limit: int = 200,
@@ -4040,7 +4054,7 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _hive_error_snapshot(exc, mission_id)
 
-    @server.tool(description="Append a typed Hive event or SyncPulse and optionally update one worker lane state.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_append_event"), description=_tool_description("Append a typed Hive event or SyncPulse and optionally update one worker lane state."), structured_output=True)
     async def notion2api_hive_append_event(
         mission_id: str,
         event_type: str,
@@ -4069,7 +4083,7 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _hive_error_snapshot(exc, mission_id)
 
-    @server.tool(description="Cancel a Hive mission cooperatively while preserving completed work and its evidence ledger.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_cancel"), description=_tool_description("Cancel a Hive mission cooperatively while preserving completed work and its evidence ledger."), structured_output=True)
     async def notion2api_hive_cancel(
         mission_id: str,
         reason: str,
@@ -4086,7 +4100,7 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _hive_error_snapshot(exc, mission_id)
 
-    @server.tool(description="Record an Emerald City fan-in decision with evidence and preserved dissent.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_fan_in"), description=_tool_description("Record an Emerald City fan-in decision with evidence and preserved dissent."), structured_output=True)
     async def notion2api_hive_fan_in(
         mission_id: str,
         status: str,
@@ -4111,7 +4125,7 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _hive_error_snapshot(exc, mission_id)
 
-    @server.tool(description="List named persistent Notion2API MCP chat sessions with local and remote identifiers.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_list_sessions"), description=_tool_description("List named persistent Notion2API MCP chat sessions with local and remote identifiers."), structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:
         records = _load_session_records()
         items = [
@@ -4126,7 +4140,7 @@ def create_server(
             sessions=items,
         )
 
-    @server.tool(description="Grant Notion's Allow once confirmation for pending connections.web.loadPage calls and resume the interrupted inference through runInferenceTranscript. Resolves the remote thread from a named MCP session unless notion_thread_id is provided.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_allow_unsafe_url_once"), description=_tool_description("Grant Notion's Allow once confirmation for pending connections.web.loadPage calls and resume the interrupted inference through runInferenceTranscript. Resolves the remote thread from a named MCP session unless notion_thread_id is provided."), structured_output=True)
     async def notion2api_allow_unsafe_url_once(
         session_name: str = DEFAULT_SESSION_NAME,
         notion_thread_id: str | None = None,
@@ -4171,7 +4185,7 @@ def create_server(
             raw=data,
         )
 
-    @server.tool(description="Read recent locally persisted messages for a persistent Notion2API MCP session without sending a new chat message. Useful after a client-side timeout.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_get_messages"), description=_tool_description("Read recent locally persisted messages for a persistent Notion2API MCP session without sending a new chat message. Useful after a client-side timeout."), structured_output=True)
     async def notion2api_get_messages(
         session_name: str = DEFAULT_SESSION_NAME,
         limit: int = 10,
@@ -4179,14 +4193,14 @@ def create_server(
     ) -> MessagesOutput:
         return _read_local_messages(session_name=session_name, conversation_id=conversation_id, limit=limit)
 
-    @server.tool(description="Read the latest locally persisted assistant response for a persistent Notion2API MCP session without sending a new chat message. Useful after a client-side timeout.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_get_last_response"), description=_tool_description("Read the latest locally persisted assistant response for a persistent Notion2API MCP session without sending a new chat message. Useful after a client-side timeout."), structured_output=True)
     async def notion2api_get_last_response(
         session_name: str = DEFAULT_SESSION_NAME,
         conversation_id: str | None = None,
     ) -> LastResponseOutput:
         return _read_last_local_response(session_name=session_name, conversation_id=conversation_id)
 
-    @server.tool(description="Inspect a retry-safe Notion2API MCP chat job. Returns bounded activity/tasks, remote chat id, and stall detection without exposing raw private reasoning. When status is indeterminate_output/quarantined, set include_quarantined=true to read generated-but-quarantined text; it is not authoritative.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_get_chat_job"), description=_tool_description("Inspect a retry-safe Notion2API MCP chat job. Returns bounded activity/tasks, remote chat id, and stall detection without exposing raw private reasoning. When status is indeterminate_output/quarantined, set include_quarantined=true to read generated-but-quarantined text; it is not authoritative."), structured_output=True)
     async def notion2api_get_chat_job(
         request_id: str,
         include_last_response: bool = False,
@@ -4212,14 +4226,14 @@ def create_server(
             )
         return result
 
-    @server.tool(description="Cancel a pending or running Notion2API MCP chat job to stop a suspected dead loop or obsolete request.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_cancel_chat_job"), description=_tool_description("Cancel a pending or running Notion2API MCP chat job to stop a suspected dead loop or obsolete request."), structured_output=True)
     async def notion2api_cancel_chat_job(
         request_id: str,
         reason: str = "Cancelled by caller.",
     ) -> ChatJobOutput:
         return _cancel_chat_job(request_id=request_id, reason=reason)
 
-    @server.tool(description="Start a fresh persistent Notion2API MCP chat for a named session.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_reset_session"), description=_tool_description("Start a fresh persistent Notion2API MCP chat for a named session."), structured_output=True)
     async def notion2api_reset_session(session_name: str = DEFAULT_SESSION_NAME) -> SessionActionOutput:
         with _SESSION_STATE_MUTEX:
             key = _session_key(session_name)
@@ -4237,7 +4251,7 @@ def create_server(
             state_path=str(DEFAULT_SESSION_STATE_PATH),
         )
 
-    @server.tool(description="Rename a persistent Notion2API MCP chat session without changing its conversation binding.", structured_output=True)
+    @server.tool(name=_tool_name("notion2api_rename_session"), description=_tool_description("Rename a persistent Notion2API MCP chat session without changing its conversation binding."), structured_output=True)
     async def notion2api_rename_session(
         old_session_name: str,
         new_session_name: str,

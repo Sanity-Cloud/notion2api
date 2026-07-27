@@ -54,6 +54,40 @@ def test_create_server_supports_profile_identity(monkeypatch):
     assert "SanityCloud smart-tool namespace: A!." in server.instructions
 
 
+def test_aigentbee_profile_exposes_only_aigentbee_machine_methods(monkeypatch):
+    monkeypatch.setenv("MCP_SERVER_NAME", "AIgentBee")
+    monkeypatch.setenv("MCP_TOOL_PREFIX", "aigentbee")
+    server = create_server(
+        base_url="http://127.0.0.1:8122",
+        api_key="test-key",
+        timeout=1,
+        host="127.0.0.1",
+        port=8132,
+        mcp_path="/mcp",
+    )
+    names = {tool.name for tool in asyncio.run(server.list_tools())}
+    assert len(names) == 21
+    assert all(name.startswith("aigentbee_") for name in names)
+    assert not any(name.startswith("notion2api_") for name in names)
+    assert "aigentbee_hive_create_mission" in names
+    assert "aigentbee_chat" in names
+
+
+def test_primary_profile_retains_notion2api_machine_methods(monkeypatch):
+    monkeypatch.delenv("MCP_TOOL_PREFIX", raising=False)
+    server = create_server(
+        base_url="http://127.0.0.1:8120",
+        api_key="test-key",
+        timeout=1,
+        host="127.0.0.1",
+        port=8130,
+        mcp_path="/mcp",
+    )
+    names = {tool.name for tool in asyncio.run(server.list_tools())}
+    assert len(names) == 21
+    assert all(name.startswith("notion2api_") for name in names)
+    assert not any(name.startswith("aigentbee_") for name in names)
+
 
 def test_attachment_manifest_redacts_inline_data():
     manifest = mcp_server._attachment_manifest_from_payload({
