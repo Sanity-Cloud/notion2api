@@ -1,0 +1,109 @@
+{
+  "baseline": {
+    "base_commits": [
+      "de52b8ac571f77b130a3c20919cd1666a4af3ce5"
+    ],
+    "path": "artifacts/hive-stream-round2-fixture-validation-20260727/harness/fixture-matrix.json",
+    "preserved": true,
+    "records": 96,
+    "sha256": "683b9a67fe4788a4b860db9da5ff97c72d78762d215534ff50db8bc190fefbed"
+  },
+  "checks": [
+    {
+      "command": "python -m pytest tests/stream_round2/test_fixture_harness.py -q",
+      "exit_code": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_tail": "",
+      "stdout_sha256": "51121d098b94e3f1b7295638fd66af31f843ebe1c8e05d4b6416f261e1488f14",
+      "stdout_tail": ".........                                                                [100%]\n9 passed in 0.58s\n"
+    },
+    {
+      "command": "ruff check tests/stream_round2/harness.py tests/stream_round2/test_fixture_harness.py",
+      "exit_code": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_tail": "",
+      "stdout_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "stdout_tail": "All checks passed!\n"
+    },
+    {
+      "command": "python -m compileall -q tests/stream_round2/harness.py",
+      "exit_code": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_tail": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_tail": ""
+    },
+    {
+      "command": "python -c \"import json,pathlib; [json.loads(p.read_text(encoding='utf-8')) for p in pathlib.Path('artifacts/hive-stream-round2-fixture-validation-20260727/results').glob('*.json')]\"",
+      "exit_code": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_tail": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_tail": ""
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_tail": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_tail": ""
+    }
+  ],
+  "checks_passed": true,
+  "commit_status": "committed; final commit is repository HEAD containing this receipt",
+  "commit_subject": "WU-R2-MATRIX: record harness provenance stop",
+  "execution": {
+    "close_failure_repetitions_executed": 0,
+    "matrix_runs_executed": 0,
+    "reason_not_executed": "Stopped before replay/stress execution because the user-required stop condition for a proven authoritative-harness defect applied. Fixture expectations and application code were not changed.",
+    "required_matrix_runs": 320,
+    "stress_runs_executed": 0
+  },
+  "findings": {
+    "classification_drift": "not assessed",
+    "close_failure_isolation": "not assessed",
+    "double_close": "not assessed",
+    "false_success": "not assessed",
+    "hash_validation": "not assessed; no new matrix output was produced",
+    "missing_cleanup": "not assessed",
+    "replay_divergence": "not assessed",
+    "unbounded_pulls": "not assessed"
+  },
+  "harness_defect": {
+    "field": "BASE_COMMIT",
+    "harness_value": "de52b8ac571f77b130a3c20919cd1666a4af3ce5",
+    "impact": "The authoritative harness stamps every replay row with a provenance commit different from the isolated lane base. Continuing would create 320+ falsely attributed records.",
+    "path": "tests/stream_round2/harness.py",
+    "proven": true,
+    "required_value": "b897d2b4145b21f7aacfeca32af7fef478746d46"
+  },
+  "network_provider_service_actions": "none",
+  "receipt_files": [
+    {
+      "crlf_count": 0,
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/results/receipt.json",
+      "sha256": "20ba4c0cd21ddbadae79531481c9c831579bb791c47cf3145211be78979f6757",
+      "utf8_valid": true
+    },
+    {
+      "crlf_count": 0,
+      "path": "artifacts/hive-stream-round2-fixture-validation-20260727/results/analysis.md",
+      "sha256": "56f0ff7cfa139c5a8b1828adaf64b526f5b05322f3d9a4c77a61a6b3f84c43ec",
+      "utf8_valid": true
+    }
+  ],
+  "recommendation": "Do not proceed. Correct the authoritative harness provenance outside this lane, then rerun this lane from the requested base without changing fixture expectations.",
+  "run_id": "hive-stream-round2-fixture-validation-20260727",
+  "scope": {
+    "branch": "validate/r2-matrix-20260727",
+    "head": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+    "requested_base": "b897d2b4145b21f7aacfeca32af7fef478746d46",
+    "worktree": "X:\\Code\\.worktrees\\notion2api-r2-matrix-20260727"
+  },
+  "smoke": "prohibited; not run",
+  "status": "STOPPED_HARNESS_DEFECT_PROVEN",
+  "timestamp_utc": "2026-07-27T18:12:28.162299+00:00",
+  "work_unit": "WU-R2-MATRIX",
+  "wu_completion": "not updated; execution is blocked and no valid expanded matrix exists"
+}
