@@ -3598,10 +3598,19 @@ def create_server(
 ) -> FastMCP:
     client = Notion2APIClient(base_url=base_url, api_key=api_key, timeout=timeout)
     transport_security = _transport_security_settings(host=host)
+    server_name = os.getenv("MCP_SERVER_NAME", "notion2api").strip() or "notion2api"
+    tool_namespace = os.getenv("SANITYCLOUD_TOOL_NAMESPACE", "").strip()
+    invocation_alias = os.getenv("SANITYCLOUD_INVOCATION_ALIAS", "").strip()
+    identity_instruction = ""
+    if invocation_alias:
+        identity_instruction = f"Human invocation alias: {invocation_alias}. "
+    if tool_namespace:
+        identity_instruction += f"SanityCloud smart-tool namespace: {tool_namespace}. "
     server = FastMCP(
-        name="notion2api",
+        name=server_name,
         instructions=(
-            "Use these tools to call the user's private local Notion2API service. "
+            identity_instruction
+            + "Use these tools to call the user's private local Notion2API service. "
             "Start with notion2api_health or notion2api_list_models if service status or model IDs are uncertain. "
             "Omit session_name to generate a descriptive unique session for new work; legacy 'op' values are also auto-generated. "
             "Chat submissions return immediately. Poll notion2api_get_chat_job and report its progress snapshot without exposing raw private reasoning. "

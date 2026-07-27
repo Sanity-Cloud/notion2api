@@ -37,6 +37,23 @@ def test_create_server_registers_tools():
     assert server is not None
 
 
+def test_create_server_supports_profile_identity(monkeypatch):
+    monkeypatch.setenv("MCP_SERVER_NAME", "AIgentBee")
+    monkeypatch.setenv("SANITYCLOUD_TOOL_NAMESPACE", "A!")
+    monkeypatch.setenv("SANITYCLOUD_INVOCATION_ALIAS", "A!B")
+    server = create_server(
+        base_url="http://127.0.0.1:8122",
+        api_key="test-key",
+        timeout=1,
+        host="127.0.0.1",
+        port=8132,
+        mcp_path="/mcp",
+    )
+    assert server.name == "AIgentBee"
+    assert "Human invocation alias: A!B." in server.instructions
+    assert "SanityCloud smart-tool namespace: A!." in server.instructions
+
+
 
 def test_attachment_manifest_redacts_inline_data():
     manifest = mcp_server._attachment_manifest_from_payload({
