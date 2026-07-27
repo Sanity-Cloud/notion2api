@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 import time
 import uuid
 from difflib import SequenceMatcher
@@ -45,7 +46,7 @@ from app.schemas import (
     ChatMessageResponseChoice,
 )
 from app.thread_title import resolve_requested_thread_title
-from app.stream_protocol import StreamProtocolTracker
+from app.stream_protocol import StreamProtocolTracker, StreamSourceCleanupError
 from app.api.chat_resume_thread_binding import _resolve_persistent_thread_id
 
 router = APIRouter()
@@ -620,19 +621,38 @@ def _build_stream_error_event(response_id: str, model: str, outcome: Any) -> str
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _close_stream_source(source: Iterable[Any]) -> None:
-    """Best-effort close without suppressing cancellation-class exceptions."""
+def _close_stream_source(
+    source: Iterable[Any],
+) -> tuple[bool, StreamSourceCleanupError | None]:
+    """Close a stream once and return a typed, client-safe cleanup result."""
     close = getattr(source, "close", None)
     if not callable(close):
-        return
+        return False, None
     try:
         close()
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "Failed to close interrupted upstream stream",
+            "Failed to close upstream stream",
             exc_info=True,
-            extra={"request_info": {"event": "stream_source_close_failed"}},
+            extra={
+                "request_info": {
+                    "event": "stream_source_close_failed",
+                    "cleanup_error_type": type(exc).__name__,
+                }
+            },
         )
+        return True, StreamSourceCleanupError.from_exception(exc)
+    return True, None
+
+
+def _close_stream_source_preserving_primary(source: Iterable[Any]) -> None:
+    """Preserve real primary failures while exposing explicit-close failures."""
+    active_exception = sys.exc_info()[1]
+    _, cleanup_error = _close_stream_source(source)
+    if cleanup_error is None:
+        return
+    if active_exception is None:
+        raise cleanup_error
 
 
 def _guard_stream_until_integrity(
@@ -655,7 +675,10 @@ def _guard_stream_until_integrity(
     quarantined = False
     forced_limit = False
     tracker = StreamProtocolTracker()
-    source_error: Exception | None = None
+    source_error: BaseException | None = None
+    cleanup_attempted = False
+    cleanup_error: StreamSourceCleanupError | None = None
+    propagating = False
 
     try:
         for raw_chunk in source:
@@ -693,15 +716,31 @@ def _guard_stream_until_integrity(
                 if choice.get("finish_reason") == "content_filter":
                     quarantined = True
     except asyncio.CancelledError:
+        propagating = True
+        raise
+    except GeneratorExit:
+        propagating = True
         raise
     except Exception as exc:
         source_error = exc
     finally:
-        # This also runs for GeneratorExit/client disconnect and cancellation.
-        # It does not synthesize a terminal frame because those exceptions escape.
-        _close_stream_source(source)
+        # Cleanup is attempted exactly once. A cleanup failure becomes the
+        # terminal cause only when no source/cancellation exception is primary.
+        cleanup_attempted, cleanup_error = _close_stream_source(source)
+        if source_error is None and cleanup_error is not None and not propagating:
+            source_error = cleanup_error
 
-    outcome = tracker.finalize(source_error=source_error)
+    outcome = tracker.finalize(
+        source_error=source_error,
+        cleanup_attempted=cleanup_attempted,
+        cleanup_error=cleanup_error,
+    )
+    if isinstance(source_error, StreamSourceCleanupError):
+        yield from metadata_events
+        yield _build_stream_error_event(response_id, model, outcome)
+        yield _build_stream_chunk(response_id, model, finish_reason="error")
+        return
+
     if forced_limit:
         limit_reasons = ["guarded_stream_buffer_limit_exceeded"]
         if total_chunks > MAX_GUARDED_STREAM_BUFFER_CHUNKS:
@@ -1474,7 +1513,7 @@ def _create_lite_stream_generator(
         )
         raise
     finally:
-        _close_stream_source(stream_gen)
+        _close_stream_source_preserving_primary(stream_gen)
     # text
     final_reply, _, hygiene_meta = _finalize_visible_reply(
         streamed_content_accumulator,
@@ -1635,7 +1674,7 @@ def _create_standard_stream_generator(
         )
         raise
     finally:
-        _close_stream_source(stream_gen)
+        _close_stream_source_preserving_primary(stream_gen)
     # text
     final_reply, _, hygiene_meta = _finalize_visible_reply(
         streamed_content_accumulator,

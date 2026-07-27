@@ -33,6 +33,18 @@ class ClassifiedFrame:
         return self.layer == "transport" and self.event_type == "sse_boundary"
 
 
+class StreamSourceCleanupError(Exception):
+    """Typed cleanup signal with safe receipt fields and chained root cause."""
+
+    def __init__(self, original: Exception) -> None:
+        self.original_type = type(original).__name__
+        super().__init__("stream source cleanup failed")
+
+    @classmethod
+    def from_exception(cls, exc: Exception) -> "StreamSourceCleanupError":
+        return cls(exc)
+
+
 @dataclass(frozen=True)
 class StreamOutcome:
     ok: bool
@@ -226,7 +238,13 @@ class StreamProtocolTracker:
             self._visible_digest.update(encoded)
         return frame
 
-    def finalize(self, *, source_error: BaseException | None = None) -> StreamOutcome:
+    def finalize(
+        self,
+        *,
+        source_error: BaseException | None = None,
+        cleanup_attempted: bool = False,
+        cleanup_error: StreamSourceCleanupError | None = None,
+    ) -> StreamOutcome:
         structural_status = "valid"
         content_status = "valid" if self.visible_chars else "empty"
         status = "completed"
@@ -234,7 +252,13 @@ class StreamProtocolTracker:
         classification = "success"
         retriable = False
 
-        if source_error is not None:
+        if isinstance(source_error, StreamSourceCleanupError):
+            status = "failed"
+            code = "ERR_STREAM_SOURCE_CLEANUP"
+            classification = "stream_source_cleanup_failed"
+            retriable = True
+            structural_status = "cleanup_failed"
+        elif source_error is not None:
             status = "failed"
             retriable = True
             if self.visible_chars == 0 and self.finish_count == 0 and self.done_count == 0:
@@ -324,6 +348,12 @@ class StreamProtocolTracker:
             "duplicate_terminal_count": self.duplicate_terminal_count,
             "quarantined_visible_chars": self.quarantined_visible_chars,
             "source_error_type": type(source_error).__name__ if source_error is not None else None,
+            "cleanup": {
+                "attempted": cleanup_attempted,
+                "failed": cleanup_error is not None,
+                "error_type": cleanup_error.original_type if cleanup_error else None,
+                "error_message": "redacted" if cleanup_error else None,
+            },
         }
         return StreamOutcome(
             ok=status == "completed",

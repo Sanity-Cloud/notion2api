@@ -12,6 +12,13 @@
     "base_commit": {
       "type": "string"
     },
+    "cleanup_handling": {
+      "enum": [
+        "not_applicable",
+        "fail_closed",
+        "fail_open"
+      ]
+    },
     "client_interpretation": {
       "type": "string"
     },
@@ -186,6 +193,7 @@
     "underlying_classification",
     "underlying_stream_outcome",
     "operational_outcome",
+    "cleanup_handling",
     "transport_counts",
     "semantic_counts",
     "visible_chars",

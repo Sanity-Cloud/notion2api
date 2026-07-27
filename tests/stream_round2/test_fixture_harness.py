@@ -70,7 +70,7 @@ def test_unsupported_framing_preserves_current_observation():
 def test_atomic_outputs_and_summary(tmp_path: Path):
     rows, summary = harness.run(tmp_path)
     assert summary["harness_gate_pass"] is True
-    assert summary["product_gate_pass"] is False
+    assert summary["product_gate_pass"] is True
     assert json.loads((tmp_path / "fixture-matrix.json").read_text(encoding="utf-8")) == sorted(rows, key=lambda row: (row["fixture_id"], row["repetition"]))
     assert len((tmp_path / "fixture-matrix.jsonl").read_text(encoding="utf-8").splitlines()) == len(rows)
     assert not list(tmp_path.glob("*.tmp"))
@@ -88,9 +88,11 @@ def test_atomic_failure_preserves_existing_target_and_cleans_temp(tmp_path: Path
 def test_summary_counts_need_adjudication_not_failures(tmp_path: Path):
     _, summary = harness.run(tmp_path)
     assert summary["result_counts"]["needs_adjudication"] == 9
-    assert summary["result_counts"].get("fail", 0) == 3
+    assert summary["result_counts"].get("fail", 0) == 0
     assert summary["harness_implementation_failures"] == 0
     assert summary["nondeterministic_repetitions"] == 0
     assert summary["false_success_violations"] == 0
     assert summary["cleanup_failures"] == 3
-    assert summary["product_gate_pass"] is False
+    assert summary["handled_cleanup_failures"] == 3
+    assert summary["unhandled_cleanup_failures"] == 0
+    assert summary["product_gate_pass"] is True

@@ -46,8 +46,11 @@ def test_cleanup_hard_stop_and_propagation_are_preserved():
     cancelled = rows_for("asyncio-cancelled")[0]
     generator_exit = rows_for("generator-exit")[0]
     assert close["underlying_stream_outcome"] == "success"
+    assert close["observed_outcome"] == "stream_source_cleanup_failed"
+    assert close["observed_code"] == "ERR_STREAM_SOURCE_CLEANUP"
     assert close["operational_outcome"] == "cleanup_failure"
-    assert close["close_count"] == 1 and close["result"] == "fail"
+    assert close["cleanup_handling"] == "fail_closed"
+    assert close["close_count"] == 1 and close["result"] == "pass"
     assert cancelled["propagated_exception"] == asyncio.CancelledError.__name__
     assert generator_exit["propagated_exception"] == GeneratorExit.__name__
 
@@ -67,9 +70,11 @@ def test_discoveries_and_bytes_are_not_normalized():
 def test_atomic_write_and_summary_gate_separation(tmp_path: Path):
     rows, summary = harness.run(tmp_path)
     assert summary["harness_gate_pass"] is True
-    assert summary["product_gate_pass"] is False
+    assert summary["product_gate_pass"] is True
     assert summary["cleanup_failures"] == 3
-    assert summary["result_counts"] == {"fail": 3, "needs_adjudication": 9, "pass": 84}
+    assert summary["handled_cleanup_failures"] == 3
+    assert summary["unhandled_cleanup_failures"] == 0
+    assert summary["result_counts"] == {"needs_adjudication": 9, "pass": 87}
     ordered = json.loads((tmp_path / "fixture-matrix.json").read_text(encoding="utf-8"))
     assert ordered == sorted(rows, key=lambda row: (row["fixture_id"], row["repetition"]))
     target = tmp_path / "target.json"

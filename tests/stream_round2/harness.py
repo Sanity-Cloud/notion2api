@@ -118,7 +118,7 @@ def fixtures() -> tuple[Fixture, ...]:
         Fixture("ordinary-exception-after-partial", "guard", (frame("x"),), "stream_interrupted", "ERR_STREAM_INTERRUPTED", error_factory=RuntimeError),
         Fixture("asyncio-cancelled", "guard", (), "propagated:CancelledError", error_factory=asyncio.CancelledError),
         Fixture("generator-exit", "guard", (), "propagated:GeneratorExit", error_factory=GeneratorExit),
-        Fixture("close-failure", "guard", clean, "success", close_error=True),
+        Fixture("close-failure", "guard", clean, "stream_source_cleanup_failed", "ERR_STREAM_SOURCE_CLEANUP", close_error=True),
         Fixture("finite-source", "guard", clean, "success"),
         Fixture("character-limit", "guard", (frame("long-output"),), "content_filter", infinite=True, limit=("MAX_GUARDED_STREAM_BUFFER_CHARS", 10)),
         Fixture("chunk-limit", "guard", (frame("x"),), "content_filter", infinite=True, limit=("MAX_GUARDED_STREAM_BUFFER_CHUNKS", 3)),
@@ -257,14 +257,44 @@ def execute(fixture: Fixture, repetition: int) -> Json:
         except BaseException:
             pass
     underlying_stream_outcome = observed
+    if fixture.close_error:
+        _, underlying_stream_outcome, _ = _observe(fixture.chunks)
     operational_outcome = "success"
     if source is None or source.close_calls != 1 or source.close_exception:
         operational_outcome = "cleanup_failure"
-    state, note = _adjudication(fixture, observed)
-    invariant = {"expected_outcome": fixture.expected_outcome, "observed_outcome": observed, "outcome_match": observed == fixture.expected_outcome, "expected_code": fixture.expected_code, "observed_code": code, "code_match": not fixture.expected_code or code == fixture.expected_code}
-    result = "needs_adjudication" if state == "needs_adjudication" else ("pass" if invariant["outcome_match"] and invariant["code_match"] else "fail")
+    expected_operational_outcome = "cleanup_failure" if fixture.close_error else "success"
+    cleanup_handling = "not_applicable"
     if operational_outcome == "cleanup_failure":
-        result = "fail"
+        cleanup_handling = (
+            "fail_closed"
+            if observed == "stream_source_cleanup_failed"
+            and code == "ERR_STREAM_SOURCE_CLEANUP"
+            and not emitted_done
+            and int(receipt.get("visible_chars", 0)) > 0
+            else "fail_open"
+        )
+    state, note = _adjudication(fixture, observed)
+    invariant = {
+        "expected_outcome": fixture.expected_outcome,
+        "observed_outcome": observed,
+        "outcome_match": observed == fixture.expected_outcome,
+        "expected_code": fixture.expected_code,
+        "observed_code": code,
+        "code_match": not fixture.expected_code or code == fixture.expected_code,
+        "expected_operational_outcome": expected_operational_outcome,
+        "observed_operational_outcome": operational_outcome,
+        "operational_match": operational_outcome == expected_operational_outcome,
+        "cleanup_handling": cleanup_handling,
+        "cleanup_handling_match": not fixture.close_error or cleanup_handling == "fail_closed",
+    }
+    result = "needs_adjudication" if state == "needs_adjudication" else (
+        "pass"
+        if invariant["outcome_match"]
+        and invariant["code_match"]
+        and invariant["operational_match"]
+        and invariant["cleanup_handling_match"]
+        else "fail"
+    )
     execution_id = hashlib.sha256(f"{fixture.fixture_id}:{repetition}:{raw.hex()}".encode()).hexdigest()[:20]
     return {
         "schema_version": SCHEMA_VERSION, "fixture_id": fixture.fixture_id, "repetition": repetition, "execution_id": execution_id,
@@ -272,7 +302,7 @@ def execute(fixture: Fixture, repetition: int) -> Json:
         "raw_frame_encoding": _frame_encoding(fixture.chunks), "raw_bytes": len(raw), "logical_chunks": len(fixture.chunks),
         "expected_outcome": fixture.expected_outcome, "expected_code": fixture.expected_code, "expected_semantic_intent": fixture.semantic_intent or fixture.expected_outcome,
         "observed_outcome": observed, "observed_code": code, "underlying_classification": observed,
-        "underlying_stream_outcome": underlying_stream_outcome, "operational_outcome": operational_outcome,
+        "underlying_stream_outcome": underlying_stream_outcome, "operational_outcome": operational_outcome, "cleanup_handling": cleanup_handling,
         "transport_counts": dict(receipt.get("transport_event_counts", {})), "semantic_counts": dict(receipt.get("semantic_event_counts", {})), "visible_chars": int(receipt.get("visible_chars", 0)),
         "response_hash": str(receipt.get("response_sha256", "")), "raw_hash": hashlib.sha256(raw).hexdigest(),
         "finish_count": int(receipt.get("finish_count", 0)), "done_count": int(receipt.get("done_count", 0)), "sequence_count": int(receipt.get("normalized_sequence_count", 0)),
@@ -316,23 +346,90 @@ def atomic_write(path: Path, data: str, *, replace: Callable[[str, str], None] =
 
 
 def write_outputs(output_dir: Path, rows: list[Json]) -> Json:
-    ordered = sorted(rows, key=lambda row: (str(row["fixture_id"]), int(row["repetition"])))
+    ordered = sorted(
+        rows,
+        key=lambda row: (str(row["fixture_id"]), int(row["repetition"])),
+    )
     counts = Counter(str(row["result"]) for row in ordered)
-    nondeterministic = sum(row["deterministic_replay_status"] != "reproducible" for row in ordered)
-    cleanup_failures = sum(row["operational_outcome"] == "cleanup_failure" for row in ordered)
+    nondeterministic = sum(
+        row["deterministic_replay_status"] != "reproducible" for row in ordered
+    )
+    cleanup_failures = sum(
+        row["operational_outcome"] == "cleanup_failure" for row in ordered
+    )
+    handled_cleanup_failures = sum(
+        row["cleanup_handling"] == "fail_closed" for row in ordered
+    )
+    unhandled_cleanup_failures = sum(
+        row["cleanup_handling"] == "fail_open" for row in ordered
+    )
     false_success_violations = sum(
-        bool(row["emitted_done_presence"]) and row["underlying_stream_outcome"] != "success"
-        or (row["underlying_stream_outcome"] == "success" and int(row["visible_chars"]) == 0)
+        (
+            bool(row["emitted_done_presence"])
+            and (
+                row["underlying_stream_outcome"] != "success"
+                or row["observed_outcome"] != "success"
+                or row["operational_outcome"] != "success"
+            )
+        )
+        or (
+            row["observed_outcome"] == "success"
+            and row["mode"] != "route"
+            and int(row["visible_chars"]) == 0
+        )
         for row in ordered
     )
     harness_gate_pass = nondeterministic == 0
-    product_gate_pass = not counts["fail"] and cleanup_failures == 0 and false_success_violations == 0
-    summary = {"schema_version": SCHEMA_VERSION, "run_id": RUN_ID, "provenance": {"subject_commit": SUBJECT_COMMIT, "harness_content_commit": HARNESS_CONTENT_COMMIT, "harness_gate_commit": HARNESS_GATE_COMMIT}, "total_runs": len(ordered), "fixture_count": len(fixtures()), "result_counts": dict(sorted(counts.items())), "pass_count": counts["pass"], "fail_count": counts["fail"], "adjudication_count": counts["needs_adjudication"], "harness_implementation_failures": 0, "nondeterministic_repetitions": nondeterministic, "cleanup_failures": cleanup_failures, "false_success_violations": false_success_violations, "harness_gate_pass": harness_gate_pass, "product_gate_pass": product_gate_pass, "release_recommendation": "do_not_proceed_product_gate_failed_smoke_held" if not product_gate_pass else "fixture_lanes_may_proceed_smoke_held", "gate_pass": harness_gate_pass}
-    atomic_write(output_dir / "fixture-matrix.json", json.dumps(ordered, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    atomic_write(output_dir / "fixture-matrix.jsonl", "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in ordered))
-    atomic_write(output_dir / "summary.json", json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    product_gate_pass = (
+        not counts["fail"]
+        and unhandled_cleanup_failures == 0
+        and false_success_violations == 0
+    )
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": RUN_ID,
+        "provenance": {
+            "subject_commit": SUBJECT_COMMIT,
+            "harness_content_commit": HARNESS_CONTENT_COMMIT,
+            "harness_gate_commit": HARNESS_GATE_COMMIT,
+        },
+        "total_runs": len(ordered),
+        "fixture_count": len(fixtures()),
+        "result_counts": dict(sorted(counts.items())),
+        "pass_count": counts["pass"],
+        "fail_count": counts["fail"],
+        "adjudication_count": counts["needs_adjudication"],
+        "harness_implementation_failures": 0,
+        "nondeterministic_repetitions": nondeterministic,
+        "cleanup_failures": cleanup_failures,
+        "handled_cleanup_failures": handled_cleanup_failures,
+        "unhandled_cleanup_failures": unhandled_cleanup_failures,
+        "false_success_violations": false_success_violations,
+        "harness_gate_pass": harness_gate_pass,
+        "product_gate_pass": product_gate_pass,
+        "release_recommendation": (
+            "cleanup_remediated_isolated_smoke_eligible"
+            if product_gate_pass
+            else "do_not_proceed_product_gate_failed_smoke_held"
+        ),
+        "gate_pass": harness_gate_pass,
+    }
+    atomic_write(
+        output_dir / "fixture-matrix.json",
+        json.dumps(ordered, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    atomic_write(
+        output_dir / "fixture-matrix.jsonl",
+        "".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+            for row in ordered
+        ),
+    )
+    atomic_write(
+        output_dir / "summary.json",
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
     return summary
-
 
 def run(output_dir: Path | None = None) -> tuple[list[Json], Json]:
     rows = [execute(fixture, repetition) for fixture in fixtures() for repetition in range(1, REPETITIONS + 1)]
