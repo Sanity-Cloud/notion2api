@@ -1,0 +1,60 @@
+{
+  "branch": "integrate/r2-stream-contract-20260727",
+  "commands": [
+    {
+      "command": "node tests/stream_round2/browser_consumer_contracts/browser_consumer_terminal_contract.test.js",
+      "exit_code": 0,
+      "name": "browser_real_parser",
+      "output_file": "node-parser.txt"
+    },
+    {
+      "command": "python -m pytest tests/stream_round2 tests/test_stream_protocol.py tests/test_stream_integrity_guard.py tests/test_stream_parser_safe.py tests/test_mcp_server.py tests/test_request_provenance.py tests/test_chat_output_hygiene.py tests/test_output_hygiene.py tests/test_api_error_contract.py -q",
+      "exit_code": 0,
+      "name": "pytest",
+      "output_file": "pytest.txt",
+      "passed": 182,
+      "seconds": 18.16
+    },
+    {
+      "command": "node --check frontend/js/chat/streaming.js",
+      "exit_code": 0,
+      "name": "node_check",
+      "output_file": "node-check.txt"
+    },
+    {
+      "command": "python -m ruff check app/api/chat.py app/stream_protocol.py app/mcp_server.py tests/test_stream_integrity_guard.py tests/test_mcp_server.py tests/stream_round2",
+      "exit_code": 0,
+      "name": "ruff",
+      "output_file": "ruff.txt"
+    },
+    {
+      "command": "python -m compileall -q app tests/stream_round2",
+      "exit_code": 0,
+      "name": "compileall",
+      "output_file": "compileall.txt"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "name": "diff_check",
+      "output_file": "diff-check.txt"
+    }
+  ],
+  "deploy_authorized": false,
+  "gate": "PASS",
+  "merge_authorized": false,
+  "network_calls": false,
+  "provider_calls": false,
+  "results": {
+    "browser_real_parser": "browser consumer terminal contract: real parser checks passed",
+    "compileall": "passed",
+    "diff_check": "passed",
+    "node_syntax": "passed",
+    "python_tests_passed": 182,
+    "ruff": "passed"
+  },
+  "schema_version": "round2-integration-validation/1",
+  "service_start_or_restart": false,
+  "tested_head": "0dd285a8bb7fda1fa15e0a760703fd549bc83992",
+  "timestamp_utc": "2026-07-27T18:51:58.957716+00:00"
+}

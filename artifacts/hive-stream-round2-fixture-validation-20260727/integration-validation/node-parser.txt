@@ -1,0 +1,1 @@
+browser consumer terminal contract: real parser checks passed
