@@ -103,7 +103,7 @@ def test_generated_mcp_schema_separates_local_paths_from_transferred_files():
 
     tools = asyncio.run(server.list_tools())
     by_name = {tool.name: tool for tool in tools}
-    chat_properties = by_name["notion2api_chat"].inputSchema["properties"]
+    chat_properties = by_name["chat"].inputSchema["properties"]
     attachment_schema = chat_properties["attachments"]
 
     assert "Service-host local file paths" in attachment_schema["description"]
@@ -114,9 +114,9 @@ def test_generated_mcp_schema_separates_local_paths_from_transferred_files():
     assert "require_attachments" in chat_properties
 
     for tool_name in (
-        "notion2api_stage_file",
-        "notion2api_chat_with_file",
-        "notion2api_upload_file_to_page",
+        "stage_file",
+        "chat_with_file",
+        "upload_file_to_page",
     ):
         file_schema = by_name[tool_name].inputSchema["properties"]["file"]
         assert file_schema["type"] == "string"

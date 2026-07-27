@@ -54,9 +54,8 @@ def test_create_server_supports_profile_identity(monkeypatch):
     assert "SanityCloud smart-tool namespace: A!." in server.instructions
 
 
-def test_aigentbee_profile_exposes_only_aigentbee_machine_methods(monkeypatch):
+def test_aigentbee_profile_exposes_bare_machine_methods(monkeypatch):
     monkeypatch.setenv("MCP_SERVER_NAME", "AIgentBee")
-    monkeypatch.setenv("MCP_TOOL_PREFIX", "aigentbee")
     server = create_server(
         base_url="http://127.0.0.1:8122",
         api_key="test-key",
@@ -65,21 +64,25 @@ def test_aigentbee_profile_exposes_only_aigentbee_machine_methods(monkeypatch):
         port=8132,
         mcp_path="/mcp",
     )
-    names = {tool.name for tool in asyncio.run(server.list_tools())}
+    tools = asyncio.run(server.list_tools())
+    names = {tool.name for tool in tools}
     assert len(names) == 21
-    assert all(name.startswith("aigentbee_") for name in names)
-    assert not any(name.startswith("notion2api_") for name in names)
-    assert "aigentbee_hive_create_mission" in names
-    assert "aigentbee_chat" in names
-    assert "aigentbee_health" in server.instructions
-    assert "aigentbee_list_models" in server.instructions
-    assert "aigentbee_get_chat_job" in server.instructions
-    assert "aigentbee_stage_file" in server.instructions
+    assert "hive_create_mission" in names
+    assert "chat" in names
+    assert "health" in names
+    assert "get_chat_job" in names
+    assert not any(name.startswith(("notion2api_", "aigentbee_")) for name in names)
+    assert all("notion2api_" not in (tool.description or "") for tool in tools)
+    assert all("aigentbee_" not in (tool.description or "") for tool in tools)
+    assert "health" in server.instructions
+    assert "list_models" in server.instructions
+    assert "get_chat_job" in server.instructions
+    assert "stage_file" in server.instructions
     assert "notion2api_" not in server.instructions
+    assert "aigentbee_" not in server.instructions
 
 
-def test_primary_profile_retains_notion2api_machine_methods(monkeypatch):
-    monkeypatch.delenv("MCP_TOOL_PREFIX", raising=False)
+def test_primary_profile_exposes_bare_machine_methods():
     server = create_server(
         base_url="http://127.0.0.1:8120",
         api_key="test-key",
@@ -88,10 +91,16 @@ def test_primary_profile_retains_notion2api_machine_methods(monkeypatch):
         port=8130,
         mcp_path="/mcp",
     )
-    names = {tool.name for tool in asyncio.run(server.list_tools())}
+    tools = asyncio.run(server.list_tools())
+    names = {tool.name for tool in tools}
     assert len(names) == 21
-    assert all(name.startswith("notion2api_") for name in names)
-    assert not any(name.startswith("aigentbee_") for name in names)
+    assert "hive_create_mission" in names
+    assert "chat" in names
+    assert "health" in names
+    assert "get_chat_job" in names
+    assert not any(name.startswith(("notion2api_", "aigentbee_")) for name in names)
+    assert all("notion2api_" not in (tool.description or "") for tool in tools)
+    assert "notion2api_" not in server.instructions
 
 
 def test_attachment_manifest_redacts_inline_data():
@@ -559,28 +568,28 @@ def test_mcp_schema_exposes_continuation_and_cancellation():
     )
     tools = asyncio.run(server.list_tools())
     by_name = {tool.name: tool for tool in tools}
-    chat_schema = by_name["notion2api_chat"].inputSchema["properties"]
+    chat_schema = by_name["chat"].inputSchema["properties"]
 
     assert chat_schema["model"]["default"] == "terra"
     assert "conversation_id" in chat_schema
     assert "continue_from_request_id" in chat_schema
-    assert "notion2api_cancel_chat_job" in by_name
+    assert "cancel_chat_job" in by_name
 
     for tool_name in (
-        "notion2api_chat",
-        "notion2api_chat_with_file",
-        "notion2api_chat_completion",
-        "notion2api_responses",
+        "chat",
+        "chat_with_file",
+        "chat_completion",
+        "responses",
     ):
         model_schema = by_name[tool_name].inputSchema["properties"]["model"]
         assert model_schema["default"] == "terra"
         assert "Omit this argument to use Terra" in model_schema["description"]
-    assert "notion2api_stage_file" in by_name
-    assert "notion2api_chat_with_file" in by_name
-    assert "notion2api_upload_file_to_page" in by_name
-    stage_file_schema = by_name["notion2api_stage_file"].inputSchema["properties"]
-    chat_file_schema = by_name["notion2api_chat_with_file"].inputSchema["properties"]
-    page_file_schema = by_name["notion2api_upload_file_to_page"].inputSchema["properties"]
+    assert "stage_file" in by_name
+    assert "chat_with_file" in by_name
+    assert "upload_file_to_page" in by_name
+    stage_file_schema = by_name["stage_file"].inputSchema["properties"]
+    chat_file_schema = by_name["chat_with_file"].inputSchema["properties"]
+    page_file_schema = by_name["upload_file_to_page"].inputSchema["properties"]
     assert stage_file_schema["file"]["format"] == "file"
     assert chat_file_schema["file"]["format"] == "file"
     assert page_file_schema["file"]["format"] == "file"
@@ -588,9 +597,9 @@ def test_mcp_schema_exposes_continuation_and_cancellation():
     assert "require_attachments" in chat_schema
     assert "Service-host local file paths" in chat_schema["attachments"]["description"]
     for tool_name in (
-        "notion2api_chat",
-        "notion2api_chat_with_file",
-        "notion2api_chat_completion",
+        "chat",
+        "chat_with_file",
+        "chat_completion",
     ):
         properties = by_name[tool_name].inputSchema["properties"]
         assert "legacy name 'op'" in properties["session_name"]["description"]

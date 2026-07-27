@@ -608,8 +608,8 @@ FileAttachments = Annotated[
         default=None,
         description=(
             "Service-host local file paths visible to the Notion2API process. Do not pass "
-            "ChatGPT /mnt/data paths here; stage each ChatGPT upload with notion2api_stage_file "
-            "or use notion2api_chat_with_file for one file."
+            "ChatGPT /mnt/data paths here; stage each ChatGPT upload with stage_file "
+            "or use chat_with_file for one file."
         ),
     ),
 ]
@@ -619,7 +619,7 @@ StagedFileIds = Annotated[
     Field(
         default=None,
         description=(
-            "Opaque ids returned by notion2api_stage_file. Use one staging call per ChatGPT "
+            "Opaque ids returned by stage_file. Use one staging call per ChatGPT "
             "upload, then pass all returned ids here for a multi-file request."
         ),
     ),
@@ -650,7 +650,7 @@ MCPWaitSeconds = Annotated[
     Field(
         description=(
             "Deprecated compatibility argument; it is ignored. Chat submissions return "
-            "immediately with a request_id to poll via notion2api_get_chat_job."
+            "immediately with a request_id to poll via get_chat_job."
         )
     ),
 ]
@@ -1638,7 +1638,7 @@ def _normalize_terminal_output(
             "status": "indeterminate_output",
             "retry_safe": False,
             "poll_hint": (
-                "Generated text was quarantined. Poll notion2api_get_chat_job with "
+                "Generated text was quarantined. Poll get_chat_job with "
                 "include_quarantined=true to inspect generated-but-quarantined evidence; "
                 "do not treat it as authoritative or submit a new semantic request blindly."
             ),
@@ -1891,7 +1891,7 @@ def _chat_output_from_backend(
             if status == "completed"
             else (
                 f"Retry with request_id={request_id} or call "
-                "notion2api_get_chat_job."
+                "get_chat_job."
             )
         ),
         "error": _error_summary(data),
@@ -1949,7 +1949,7 @@ def _chat_pending_output(
         "retry_safe": str(job.get("status") or "") in {"running", "pending", "stale"},
         "wait_seconds": wait_seconds,
         "poll_hint": (
-            f"Call notion2api_get_chat_job(request_id='{request_id}') or retry the same chat tool with the same request_id."
+            f"Call get_chat_job(request_id='{request_id}') or retry the same chat tool with the same request_id."
             if str(job.get("status") or "") in {"running", "pending", "stale"}
             else "This request id is terminal; use a new request_id for new work."
         ),
@@ -3601,20 +3601,12 @@ def create_server(
     server_name = os.getenv("MCP_SERVER_NAME", "notion2api").strip() or "notion2api"
     tool_namespace = os.getenv("SANITYCLOUD_TOOL_NAMESPACE", "").strip()
     invocation_alias = os.getenv("SANITYCLOUD_INVOCATION_ALIAS", "").strip()
-    tool_prefix = re.sub(
-        r"[^a-z0-9_]+",
-        "_",
-        os.getenv("MCP_TOOL_PREFIX", "notion2api").strip().lower(),
-    ).strip("_") or "notion2api"
 
     def _tool_name(internal_name: str) -> str:
-        suffix = internal_name.removeprefix("notion2api_")
-        return f"{tool_prefix}_{suffix}"
+        return internal_name.removeprefix("notion2api_")
 
     def _tool_description(description: str) -> str:
-        return description.replace("Notion2API", server_name).replace(
-            "notion2api_", f"{tool_prefix}_"
-        )
+        return description.replace("Notion2API", server_name).replace("notion2api_", "")
     identity_instruction = ""
     if invocation_alias:
         identity_instruction = f"Human invocation alias: {invocation_alias}. "
