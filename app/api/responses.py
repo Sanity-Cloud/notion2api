@@ -93,8 +93,6 @@ def _as_dict(value: Any) -> dict[str, Any]:
         return value
     if hasattr(value, "model_dump"):
         return value.model_dump()
-    if hasattr(value, "dict"):
-        return value.dict()
     return {}
 
 

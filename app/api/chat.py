@@ -435,8 +435,8 @@ def _message_content_to_text(content: Any) -> str:
                     text = str(item.get("text") or "")
                     if text:
                         parts.append(text)
-            elif hasattr(item, "dict") and callable(item.dict):
-                dct = item.dict()
+            elif hasattr(item, "model_dump") and callable(item.model_dump):
+                dct = item.model_dump()
                 item_type = str(dct.get("type") or "").lower()
                 if item_type in {"input_text", "output_text", "text"} or "text" in dct:
                     text = str(dct.get("text") or "")
@@ -1795,7 +1795,8 @@ def _handle_lite_request(
 
     # text
     cleaned_msgs, attachments = normalize_chat_messages(
-        [m.dict() for m in req_body.messages], getattr(req_body, "attachments", None)
+        [m.model_dump() for m in req_body.messages],
+        getattr(req_body, "attachments", None),
     )
     state_attachments = _request_state_attachments(request)
     if state_attachments:
@@ -2140,7 +2141,7 @@ def _handle_standard_request(
 
             # text
             cleaned_msgs, attachments = normalize_chat_messages(
-                [m.dict() for m in req_body.messages],
+                [m.model_dump() for m in req_body.messages],
                 getattr(req_body, "attachments", None),
             )
             state_attachments = _request_state_attachments(request)
@@ -2423,12 +2424,7 @@ async def create_chat_completion(
 
     try:
         validate_chat_messages(
-            [
-                message.model_dump()
-                if hasattr(message, "model_dump")
-                else message.dict()
-                for message in req_body.messages
-            ]
+            [message.model_dump() for message in req_body.messages]
         )
     except PromptValidationError as exc:
         return _attachment_error_response(exc)
@@ -2437,12 +2433,7 @@ async def create_chat_completion(
     # mode, acquiring an account, or creating a remote Notion thread.
     try:
         _preflight_messages, preflight_attachments = normalize_chat_messages(
-            [
-                message.model_dump()
-                if hasattr(message, "model_dump")
-                else message.dict()
-                for message in req_body.messages
-            ],
+            [message.model_dump() for message in req_body.messages],
             getattr(req_body, "attachments", None),
         )
         state_attachments = _request_state_attachments(request)
