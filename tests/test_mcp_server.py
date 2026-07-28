@@ -54,8 +54,9 @@ def test_create_server_supports_profile_identity(monkeypatch):
     assert "SanityCloud smart-tool namespace: A!." in server.instructions
 
 
-def test_aigentbee_profile_exposes_bare_machine_methods(monkeypatch):
+def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     monkeypatch.setenv("MCP_SERVER_NAME", "AIgentBee")
+    monkeypatch.setenv("MCP_TOOL_PREFIX", "aigentbee")
     server = create_server(
         base_url="http://127.0.0.1:8122",
         api_key="test-key",
@@ -67,19 +68,18 @@ def test_aigentbee_profile_exposes_bare_machine_methods(monkeypatch):
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
     assert len(names) == 21
-    assert "hive_create_mission" in names
-    assert "chat" in names
-    assert "health" in names
-    assert "get_chat_job" in names
-    assert not any(name.startswith(("notion2api_", "aigentbee_")) for name in names)
+    assert "aigentbee_hive_create_mission" in names
+    assert "aigentbee_chat" in names
+    assert "aigentbee_health" in names
+    assert "aigentbee_get_chat_job" in names
+    assert all(name.startswith("aigentbee_") for name in names)
+    assert not any(name.startswith("notion2api_") for name in names)
     assert all("notion2api_" not in (tool.description or "") for tool in tools)
-    assert all("aigentbee_" not in (tool.description or "") for tool in tools)
-    assert "health" in server.instructions
-    assert "list_models" in server.instructions
-    assert "get_chat_job" in server.instructions
-    assert "stage_file" in server.instructions
+    assert "aigentbee_health" in server.instructions
+    assert "aigentbee_list_models" in server.instructions
+    assert "aigentbee_get_chat_job" in server.instructions
+    assert "aigentbee_stage_file" in server.instructions
     assert "notion2api_" not in server.instructions
-    assert "aigentbee_" not in server.instructions
 
 
 def test_primary_profile_exposes_bare_machine_methods():

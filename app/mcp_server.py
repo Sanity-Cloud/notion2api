@@ -3624,12 +3624,15 @@ def create_server(
     server_name = os.getenv("MCP_SERVER_NAME", "notion2api").strip() or "notion2api"
     tool_namespace = os.getenv("SANITYCLOUD_TOOL_NAMESPACE", "").strip()
     invocation_alias = os.getenv("SANITYCLOUD_INVOCATION_ALIAS", "").strip()
+    tool_prefix = os.getenv("MCP_TOOL_PREFIX", "").strip().lower().strip("_")
 
     def _tool_name(internal_name: str) -> str:
-        return internal_name.removeprefix("notion2api_")
+        suffix = internal_name.removeprefix("notion2api_")
+        return f"{tool_prefix}_{suffix}" if tool_prefix else suffix
 
     def _tool_description(description: str) -> str:
-        return description.replace("Notion2API", server_name).replace("notion2api_", "")
+        replacement = f"{tool_prefix}_" if tool_prefix else ""
+        return description.replace("Notion2API", server_name).replace("notion2api_", replacement)
     identity_instruction = ""
     if invocation_alias:
         identity_instruction = f"Human invocation alias: {invocation_alias}. "
