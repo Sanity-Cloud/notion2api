@@ -41,6 +41,11 @@ from app.hive_runtime import (
     default_hive_runtime_db_path,
     get_hive_runtime_store,
 )
+from app.hive_workforce import (
+    HiveInvocationPlan,
+    WorkforceSnapshot,
+    get_hive_workforce_store,
+)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
@@ -4616,6 +4621,120 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _hive_error_snapshot(exc, mission_id)
 
+    def _workforce_error_snapshot(exc: Exception) -> WorkforceSnapshot:
+        return WorkforceSnapshot(
+            ok=False,
+            db_path=str(default_hive_runtime_db_path()),
+            error=str(exc),
+        )
+
+    def _invocation_error_plan(exc: Exception, objective: str = "") -> HiveInvocationPlan:
+        return HiveInvocationPlan(
+            ok=False,
+            db_path=str(default_hive_runtime_db_path()),
+            objective=objective,
+            error=str(exc),
+        )
+
+    @server.tool(name=_tool_name("notion2api_hive_register_worker"), description=_tool_description("Create a durable governed worker requisition. New workers begin in REQUISITIONED state and receive no execution authority."), structured_output=True)
+    async def notion2api_hive_register_worker(
+        display_name: str,
+        worker_class: str,
+        role: str,
+        accountable_owner: str,
+        competencies: list[str] | None = None,
+        writable_domains: list[str] | None = None,
+        authority_ceiling: str = "A0",
+        source_boundary: str = "",
+        appointment_scope: str = "",
+        worker_id: str | None = None,
+        actor: str = "notion2api",
+        idempotency_key: str | None = None,
+    ) -> WorkforceSnapshot:
+        try:
+            return get_hive_workforce_store().register_worker(
+                display_name=display_name,
+                worker_class=worker_class,
+                role=role,
+                accountable_owner=accountable_owner,
+                competencies=competencies,
+                writable_domains=writable_domains,
+                authority_ceiling=authority_ceiling,
+                source_boundary=source_boundary,
+                appointment_scope=appointment_scope,
+                worker_id=worker_id,
+                actor=actor,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _workforce_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_transition_worker"), description=_tool_description("Move a governed worker through shadow, probation, appointment, suspension, rejection, or offboarding. Probation and appointment require explicit human approval."), structured_output=True)
+    async def notion2api_hive_transition_worker(
+        worker_id: str,
+        target_stage: str,
+        actor: str,
+        reason: str,
+        human_approval: bool = False,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> WorkforceSnapshot:
+        try:
+            return get_hive_workforce_store().transition_worker(
+                worker_id=worker_id,
+                target_stage=target_stage,
+                actor=actor,
+                reason=reason,
+                human_approval=human_approval,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _workforce_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_list_workers"), description=_tool_description("List durable AIgentBee worker requisitions and appointments, optionally filtered by lifecycle stage or worker class."), structured_output=True)
+    async def notion2api_hive_list_workers(
+        stage: str | None = None,
+        worker_class: str | None = None,
+        limit: int = 100,
+    ) -> WorkforceSnapshot:
+        try:
+            return get_hive_workforce_store().list_workers(
+                stage=stage,
+                worker_class=worker_class,
+                limit=limit,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _workforce_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_plan_invocation"), description=_tool_description("Plan whether a request should use one bounded agent or a multi-lane Hive. This tool is read-only and does not spawn workers, grant credentials, or execute external effects."), structured_output=True)
+    async def notion2api_hive_plan_invocation(
+        objective: str,
+        required_competencies: list[str] | None = None,
+        writable_domains: list[str] | None = None,
+        dependency_count: int = 0,
+        parallelizable_workstreams: int = 1,
+        risk_level: str = "low",
+        authority_ceiling: str = "A0",
+        independent_review_required: bool = False,
+        external_effects: bool = False,
+        preferred_worker_ids: list[str] | None = None,
+    ) -> HiveInvocationPlan:
+        try:
+            return get_hive_workforce_store().plan_invocation(
+                objective=objective,
+                required_competencies=required_competencies,
+                writable_domains=writable_domains,
+                dependency_count=dependency_count,
+                parallelizable_workstreams=parallelizable_workstreams,
+                risk_level=risk_level,
+                authority_ceiling=authority_ceiling,
+                independent_review_required=independent_review_required,
+                external_effects=external_effects,
+                preferred_worker_ids=preferred_worker_ids,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _invocation_error_plan(exc, objective)
     @server.tool(name=_tool_name("notion2api_list_sessions"), description=_tool_description("List named persistent Notion2API MCP chat sessions with local and remote identifiers."), structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:
         records = _load_session_records()

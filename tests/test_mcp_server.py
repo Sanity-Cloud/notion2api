@@ -67,7 +67,7 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 27
+    assert len(names) == 31
     assert "aigentbee_hive_create_mission" in names
     assert "aigentbee_chat" in names
     assert "aigentbee_health" in names
@@ -78,6 +78,10 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     assert "aigentbee_show_swarm_workbench" in names
     assert "aigentbee_get_swarm_workbench" in names
     assert "aigentbee_send_leader_request" in names
+    assert "aigentbee_hive_register_worker" in names
+    assert "aigentbee_hive_transition_worker" in names
+    assert "aigentbee_hive_list_workers" in names
+    assert "aigentbee_hive_plan_invocation" in names
     assert all(name.startswith("aigentbee_") for name in names)
     assert not any(name.startswith("notion2api_") for name in names)
     assert all("notion2api_" not in (tool.description or "") for tool in tools)
@@ -99,7 +103,7 @@ def test_primary_profile_exposes_bare_machine_methods():
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 24
+    assert len(names) == 28
     assert "hive_create_mission" in names
     assert "chat" in names
     assert "health" in names
@@ -107,6 +111,10 @@ def test_primary_profile_exposes_bare_machine_methods():
     assert "list_accounts" in names
     assert "switch_account" in names
     assert "rollback_account_switch" in names
+    assert "hive_register_worker" in names
+    assert "hive_transition_worker" in names
+    assert "hive_list_workers" in names
+    assert "hive_plan_invocation" in names
     assert not any(name.startswith(("notion2api_", "aigentbee_")) for name in names)
     assert all("notion2api_" not in (tool.description or "") for tool in tools)
     assert "notion2api_" not in server.instructions
