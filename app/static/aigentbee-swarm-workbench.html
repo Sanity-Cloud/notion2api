@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AIgentBee Swarm Workbench</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #050505;
+        --panel: #11110f;
+        --panel-2: #181712;
+        --line: #3a3729;
+        --text: #f6f2df;
+        --muted: #aaa58f;
+        --gold: #f0c24f;
+        --gold-2: #8f7026;
+        --green: #58cf8b;
+        --yellow: #f4c95d;
+        --red: #ef6a6a;
+        --blue: #70a9ff;
+        --radius: 22px;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); }
+      button, select, textarea, input { font: inherit; }
+      button { cursor: pointer; }
+      button:disabled { cursor: wait; opacity: .58; }
+
+      .shell {
+        min-height: 680px;
+        padding: 26px;
+        border: 1px solid #4a473d;
+        border-radius: 34px;
+        background:
+          radial-gradient(circle at 92% 2%, rgba(240, 194, 79, .12), transparent 31%),
+          linear-gradient(180deg, #080807, #030303);
+      }
+
+      .header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
+      .eyebrow { color: var(--muted); text-transform: uppercase; letter-spacing: .18em; font-size: 12px; font-weight: 800; }
+      h1 { margin: 7px 0 7px; font-size: clamp(29px, 5vw, 48px); line-height: 1.02; }
+      .subtitle { max-width: 850px; color: var(--muted); font-size: 16px; line-height: 1.55; }
+
+      .refresh {
+        min-width: 154px;
+        padding: 16px 20px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: #181816;
+        color: var(--text);
+        font-weight: 800;
+      }
+      .refresh:hover { border-color: var(--gold-2); }
+
+      .notice {
+        margin-top: 22px;
+        padding: 15px 18px;
+        border: 1px solid var(--gold-2);
+        border-left: 7px solid var(--gold);
+        border-radius: 16px;
+        background: rgba(240, 194, 79, .08);
+        color: #e8d79d;
+        line-height: 1.45;
+      }
+      .notice.error { border-color: #b64242; border-left-color: var(--red); color: #ffb3b3; background: rgba(239,106,106,.08); }
+      .notice.success { border-color: #347e55; border-left-color: var(--green); color: #baf0cf; background: rgba(88,207,139,.08); }
+
+      .tabs { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0; }
+      .tab {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 10px 17px;
+        background: transparent;
+        color: var(--text);
+      }
+      .tab.active { background: var(--text); color: #090909; border-color: var(--text); }
+
+      .view { display: none; }
+      .view.active { display: block; }
+      .grid { display: grid; gap: 14px; }
+      .stats { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+      .two { grid-template-columns: minmax(0, 1.12fr) minmax(320px, .88fr); }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: linear-gradient(180deg, var(--panel), #0c0c0b);
+        padding: 19px;
+      }
+      .card h2, .card h3 { margin: 0 0 10px; }
+      .card h2 { font-size: 22px; }
+      .card h3 { font-size: 17px; }
+      .muted { color: var(--muted); }
+      .objective { line-height: 1.55; white-space: pre-wrap; }
+
+      .stat { padding: 15px; border-radius: 17px; border: 1px solid var(--line); background: var(--panel-2); }
+      .stat strong { display: block; font-size: 25px; }
+      .stat span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+
+      .status { display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; border: 1px solid currentColor; }
+      .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+      .healthy, .completed { color: var(--green); }
+      .active { color: var(--blue); }
+      .waiting, .fan_in { color: var(--yellow); }
+      .blocked, .failed, .cancelled { color: var(--red); }
+      .closed { color: var(--green); }
+
+      .detail-list { display: grid; gap: 9px; }
+      .detail { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; border-top: 1px solid #2b2922; padding-top: 9px; }
+      .detail:first-child { border-top: 0; padding-top: 0; }
+      .detail-label { color: var(--muted); font-size: 13px; }
+      .detail-value { overflow-wrap: anywhere; }
+
+      .members { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 14px; }
+      .member {
+        text-align: left;
+        width: 100%;
+        color: inherit;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: var(--panel);
+        padding: 17px;
+      }
+      .member:hover, .member.selected { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(240,194,79,.25) inset; }
+      .member-header { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+      .member-name { font-weight: 900; line-height: 1.25; }
+      .member-role { margin: 9px 0 5px; color: #e3cf8f; font-size: 14px; }
+      .member-task { color: var(--muted); font-size: 13px; line-height: 1.45; }
+      .member-meta { margin-top: 12px; color: var(--muted); font-size: 12px; }
+
+      .composer label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 13px; font-weight: 700; }
+      select, textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #0b0b0a;
+        color: var(--text);
+        padding: 12px 13px;
+      }
+      textarea { min-height: 150px; resize: vertical; line-height: 1.45; }
+      select:focus, textarea:focus { outline: 2px solid rgba(240,194,79,.35); border-color: var(--gold); }
+      .send {
+        width: 100%;
+        margin-top: 13px;
+        padding: 13px 16px;
+        border: 1px solid #9c7925;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #f1c34f, #c69225);
+        color: #171207;
+        font-weight: 900;
+      }
+      .boundary-small { margin-top: 9px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+      .history { display: grid; gap: 10px; max-height: 520px; overflow: auto; padding-right: 4px; }
+      .message { border: 1px solid var(--line); border-radius: 16px; padding: 13px; background: #0d0d0c; }
+      .message.user { border-left: 4px solid var(--gold); }
+      .message.assistant { border-left: 4px solid var(--blue); }
+      .message-head { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; }
+      .message-body { margin-top: 7px; white-space: pre-wrap; line-height: 1.45; overflow-wrap: anywhere; }
+
+      .events { display: grid; gap: 9px; }
+      .event { border-top: 1px solid #2a2821; padding-top: 10px; }
+      .event:first-child { border-top: 0; padding-top: 0; }
+      .event strong { font-size: 13px; }
+      .event p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+
+      .empty { padding: 30px; border: 1px dashed var(--line); border-radius: 18px; text-align: center; color: var(--muted); }
+      .footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
+
+      @media (max-width: 900px) {
+        .header { flex-direction: column; }
+        .refresh { width: 100%; }
+        .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .two { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 520px) {
+        .shell { padding: 18px; border-radius: 24px; }
+        .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .detail { grid-template-columns: 1fr; gap: 3px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <div>
+          <div class="eyebrow">Life In-Scene · Human-governed agentic operations</div>
+          <h1>AIgentBee Swarm Workbench</h1>
+          <div class="subtitle">Mission evidence, swarm-member roles and tasks, leader-routed requests, and durable Notion chat history. Requests are sent to the accountable leader; this interface never directly controls a worker or shell.</div>
+        </div>
+        <button id="refresh" class="refresh" type="button">Refresh swarm</button>
+      </header>
+
+      <div id="notice" class="notice">Loading current Hive mission evidence.</div>
+
+      <nav class="tabs" aria-label="Workbench views">
+        <button class="tab active" data-view="mission" type="button">Mission</button>
+        <button class="tab" data-view="swarm" type="button">Swarm members</button>
+        <button class="tab" data-view="leader" type="button">Leader chat</button>
+        <button class="tab" data-view="governance" type="button">Governance</button>
+      </nav>
+
+      <section id="mission-view" class="view active">
+        <div id="mission-summary" class="grid two"></div>
+        <div id="mission-stats" class="grid stats" style="margin-top:14px"></div>
+      </section>
+
+      <section id="swarm-view" class="view">
+        <div id="members" class="members"></div>
+      </section>
+
+      <section id="leader-view" class="view">
+        <div class="grid two">
+          <div class="card composer">
+            <h2>Request the leader</h2>
+            <div id="selected-member" class="muted">Select a swarm member first.</div>
+            <label for="request-type">Request type</label>
+            <select id="request-type">
+              <option value="instruction">Instruction</option>
+              <option value="question">Question</option>
+              <option value="review">Review request</option>
+              <option value="status_check">Status check</option>
+              <option value="priority_change">Priority change proposal</option>
+            </select>
+            <label for="request-text">Request</label>
+            <textarea id="request-text" maxlength="6000" placeholder="Describe the bounded request for the selected lane. The leader will accept, revise, defer, or reject it."></textarea>
+            <button id="send-request" class="send" type="button">Send request to leader</button>
+            <div class="boundary-small">The request enters the mission’s persistent leader Notion chat. It is not proof that work was performed and cannot directly invoke a worker or executable command.</div>
+          </div>
+          <div class="card">
+            <h2>Leader history</h2>
+            <div id="leader-meta" class="detail-list" style="margin-bottom:14px"></div>
+            <div id="history" class="history"></div>
+            <button id="load-older" class="refresh" type="button" style="width:100%;margin-top:12px;display:none">Load older history</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="governance-view" class="view">
+        <div class="grid two">
+          <div class="card">
+            <h2>Authority boundary</h2>
+            <div id="governance" class="detail-list"></div>
+          </div>
+          <div class="card">
+            <h2>Recent Hive events</h2>
+            <div id="events" class="events"></div>
+          </div>
+        </div>
+      </section>
+
+      <div id="footer" class="footer">No swarm evidence loaded.</div>
+    </main>
+
+    <script type="module">
+      const pending = new Map();
+      let requestId = 1;
+      const standardBridge = window.mcp;
+      const chatgptBridge = window.openai;
+      const initialOutput = standardBridge?.toolOutput ?? chatgptBridge?.toolOutput ?? null;
+      const initialState = standardBridge?.widgetState ?? chatgptBridge?.widgetState ?? {};
+
+      const state = {
+        data: null,
+        view: ["mission", "swarm", "leader", "governance"].includes(initialState?.view) ? initialState.view : "mission",
+        selectedMemberId: typeof initialState?.selectedMemberId === "string" ? initialState.selectedMemberId : null,
+        missionId: typeof initialState?.missionId === "string" ? initialState.missionId : null,
+        historyLimit: Number.isInteger(initialState?.historyLimit) ? Math.max(1, Math.min(initialState.historyLimit, 50)) : 30,
+      };
+
+      function send(method, params = {}) {
+        const id = requestId++;
+        parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+      }
+
+      async function callTool(name, args = {}) {
+        if (standardBridge?.callTool) return standardBridge.callTool(name, args);
+        if (chatgptBridge?.callTool) return chatgptBridge.callTool(name, args);
+        return send("tools/call", { name, arguments: args });
+      }
+
+      function persistState() {
+        const presentation = { view: state.view, selectedMemberId: state.selectedMemberId, missionId: state.missionId, historyLimit: state.historyLimit };
+        if (standardBridge?.setWidgetState) standardBridge.setWidgetState(presentation);
+        else if (chatgptBridge?.setWidgetState) chatgptBridge.setWidgetState(presentation);
+      }
+
+      function unwrap(value) {
+        const structured = value?.structuredContent ?? value;
+        return structured?.mission && Array.isArray(structured?.members) ? structured : null;
+      }
+
+      function element(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = String(text);
+        return node;
+      }
+
+      function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+      function formatTime(value) {
+        if (!value) return "Not recorded";
+        const ms = Number(value) < 10_000_000_000 ? Number(value) * 1000 : Number(value);
+        const date = new Date(ms);
+        return Number.isNaN(date.getTime()) ? "Not recorded" : date.toLocaleString();
+      }
+      function statusClass(value) { return String(value || "").toLowerCase(); }
+      function statusBadge(value) { return element("span", `status ${statusClass(value)}`, value || "UNKNOWN"); }
+
+      function addDetail(container, label, value) {
+        const row = element("div", "detail");
+        row.append(element("div", "detail-label", label), element("div", "detail-value", value ?? "—"));
+        container.append(row);
+      }
+
+      function setNotice(text, kind = "") {
+        const notice = document.querySelector("#notice");
+        notice.textContent = text;
+        notice.className = `notice${kind ? ` ${kind}` : ""}`;
+      }
+
+      function selectedMember() {
+        return state.data?.members?.find((item) => item.member_id === state.selectedMemberId) ?? null;
+      }
+
+      function renderTabs() {
+        document.querySelectorAll(".tab").forEach((button) => button.classList.toggle("active", button.dataset.view === state.view));
+        document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
+        document.querySelector(`#${state.view}-view`)?.classList.add("active");
+        persistState();
+      }
+
+      function renderMission(data) {
+        const summary = document.querySelector("#mission-summary");
+        const stats = document.querySelector("#mission-stats");
+        clear(summary); clear(stats);
+        const mission = data.mission;
+
+        const identity = element("div", "card");
+        const titleRow = element("div", "member-header");
+        titleRow.append(element("h2", "", mission.title), statusBadge(mission.status));
+        identity.append(titleRow, element("div", "objective", mission.objective || "No objective recorded."));
+        summary.append(identity);
+
+        const details = element("div", "card detail-list");
+        addDetail(details, "Mission ID", mission.mission_id);
+        addDetail(details, "Lifecycle", mission.lifecycle_stage);
+        addDetail(details, "Authority ceiling", mission.authority_ceiling);
+        addDetail(details, "Revision", mission.revision);
+        addDetail(details, "Updated", formatTime(mission.updated_at));
+        addDetail(details, "Leader requests", mission.request_allowed ? "Available" : "Closed");
+        summary.append(details);
+
+        const values = [
+          [mission.member_count, "Members"],
+          [mission.active_count, "Active"],
+          [mission.waiting_count, "Waiting"],
+          [mission.blocked_count, "Blocked"],
+          [mission.completed_count, "Completed"],
+          [mission.failed_count + mission.cancelled_count, "Failed / cancelled"],
+        ];
+        values.forEach(([value, label]) => {
+          const card = element("div", "stat");
+          card.append(element("strong", "", value), element("span", "", label));
+          stats.append(card);
+        });
+      }
+
+      function renderMembers(data) {
+        const container = document.querySelector("#members");
+        clear(container);
+        if (!data.members.length) {
+          container.append(element("div", "empty", "No swarm members are recorded for this mission."));
+          return;
+        }
+        if (!data.members.some((member) => member.member_id === state.selectedMemberId)) {
+          state.selectedMemberId = data.members[0].member_id;
+        }
+        data.members.forEach((member) => {
+          const button = element("button", `member${member.member_id === state.selectedMemberId ? " selected" : ""}`);
+          button.type = "button";
+          const header = element("div", "member-header");
+          header.append(element("div", "member-name", member.name), statusBadge(member.status));
+          button.append(
+            header,
+            element("div", "member-role", member.role),
+            element("div", "member-task", `Current lane: ${member.lane_title || member.task}`),
+            element("div", "member-meta", `Authority ${member.authority_ceiling} · ${member.dependencies.length} dependencies`),
+          );
+          button.addEventListener("click", () => {
+            state.selectedMemberId = member.member_id;
+            renderMembers(state.data);
+            renderLeader(state.data);
+            persistState();
+          });
+          container.append(button);
+        });
+      }
+
+      function renderLeader(data) {
+        const selected = selectedMember();
+        const selectedNode = document.querySelector("#selected-member");
+        selectedNode.textContent = selected ? `${selected.name} — ${selected.role} — ${selected.status}` : "Select a swarm member first.";
+        document.querySelector("#send-request").disabled = !selected || !data.mission.request_allowed;
+
+        const meta = document.querySelector("#leader-meta");
+        clear(meta);
+        const leader = data.leader;
+        addDetail(meta, "Session", leader?.session_name || "Not available");
+        addDetail(meta, "Initialized", leader?.initialized ? "Yes" : "Not yet");
+        addDetail(meta, "Notion thread", leader?.remote_chat_id || "Created after first completed request");
+        addDetail(meta, "History", `${leader?.history_count || 0} shown / ${leader?.total_history_count || 0} total`);
+        addDetail(meta, "History window", `${leader?.history_window_limit || state.historyLimit} messages, chronological`);
+        addDetail(meta, "Persistence", leader?.durable_persisted ? leader.persistence_source : "Non-durable");
+
+        const loadOlder = document.querySelector("#load-older");
+        const canLoadOlder = Boolean(leader?.has_older_messages) && state.historyLimit < 50;
+        loadOlder.style.display = canLoadOlder ? "block" : "none";
+        loadOlder.disabled = !canLoadOlder;
+
+        const history = document.querySelector("#history");
+        clear(history);
+        if (!leader?.messages?.length) {
+          history.append(element("div", "empty", "No leader chat history exists for this mission yet."));
+          return;
+        }
+        leader.messages.forEach((message) => {
+          const card = element("div", `message ${message.role}`);
+          const head = element("div", "message-head");
+          head.append(element("span", "", message.role), element("span", "", formatTime(message.created_at)));
+          card.append(head, element("div", "message-body", message.content));
+          history.append(card);
+        });
+      }
+
+      function renderGovernance(data) {
+        const governance = document.querySelector("#governance");
+        clear(governance);
+        const values = data.governance || {};
+        addDetail(governance, "Authority ceiling", values.authorityCeiling);
+        addDetail(governance, "Request path", values.requestPath);
+        addDetail(governance, "Leader decision required", values.leaderDecisionRequired ? "Yes" : "No");
+        addDetail(governance, "Direct worker execution", values.directWorkerExecution ? "Enabled" : "Not exposed");
+        addDetail(governance, "Arbitrary shell execution", values.arbitraryShellExecution ? "Enabled" : "Not exposed");
+        addDetail(governance, "Execution evidence", values.requestCreatesExecutionEvidence ? "Created by request" : "Requires later Hive evidence");
+        addDetail(governance, "History durability", values.historyDurable ? "Durable" : "Not confirmed");
+
+        const events = document.querySelector("#events");
+        clear(events);
+        if (!data.recent_events?.length) {
+          events.append(element("div", "empty", "No recent Hive events were returned."));
+          return;
+        }
+        data.recent_events.forEach((event) => {
+          const card = element("div", "event");
+          card.append(element("strong", "", event.eventType), element("p", "", `${event.sender} → ${event.recipient} · ${formatTime(event.createdAt)}`));
+          events.append(card);
+        });
+      }
+
+      function render(data) {
+        if (!data?.ok || !data.mission) {
+          state.data = null;
+          setNotice(data?.error || "Swarm evidence is unavailable.", "error");
+          document.querySelector("#footer").textContent = "No swarm evidence loaded.";
+          return;
+        }
+        state.data = data;
+        state.missionId = data.mission.mission_id;
+        if (!data.members.some((member) => member.member_id === state.selectedMemberId)) {
+          state.selectedMemberId = data.members[0]?.member_id || null;
+        }
+        setNotice("Current Hive evidence loaded. Requests are leader-routed and do not directly execute worker actions.");
+        renderMission(data);
+        renderMembers(data);
+        renderLeader(data);
+        renderGovernance(data);
+        renderTabs();
+        document.querySelector("#footer").textContent = `Mission revision ${data.mission.revision} · Evidence generated ${formatTime(data.generated_at)}`;
+      }
+
+      async function refresh() {
+        if (!state.missionId) throw new Error("No mission id is available.");
+        const result = await callTool("aigentbee_show_swarm_workbench", { mission_id: state.missionId, history_limit: state.historyLimit });
+        const data = unwrap(result);
+        if (!data) throw new Error("No swarm workbench output was returned.");
+        render(data);
+      }
+
+      document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => {
+        state.view = button.dataset.view;
+        renderTabs();
+      }));
+
+      document.querySelector("#refresh").addEventListener("click", async () => {
+        const button = document.querySelector("#refresh");
+        button.disabled = true;
+        try {
+          await refresh();
+        } catch {
+          setNotice("Swarm refresh failed. No worker or leader action was attempted.", "error");
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      document.querySelector("#load-older").addEventListener("click", async () => {
+        const button = document.querySelector("#load-older");
+        button.disabled = true;
+        state.historyLimit = Math.min(50, state.historyLimit + 20);
+        persistState();
+        try {
+          await refresh();
+        } catch {
+          setNotice("Older leader history could not be loaded. No operational action was attempted.", "error");
+        }
+      });
+
+      document.querySelector("#send-request").addEventListener("click", async () => {
+        const member = selectedMember();
+        const request = document.querySelector("#request-text").value.trim();
+        const requestType = document.querySelector("#request-type").value;
+        if (!member || !request) {
+          setNotice("Select a swarm member and enter a request.", "error");
+          return;
+        }
+        const button = document.querySelector("#send-request");
+        button.disabled = true;
+        try {
+          const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `widget-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const result = await callTool("aigentbee_send_leader_request", {
+            mission_id: state.missionId,
+            member_id: member.member_id,
+            request,
+            request_type: requestType,
+            requested_by: "ChatGPT user",
+            idempotency_key: idempotencyKey,
+          });
+          const receipt = result?.structuredContent ?? result;
+          if (!receipt?.accepted) throw new Error(receipt?.error || "Leader request was not accepted.");
+          document.querySelector("#request-text").value = "";
+          setNotice(`Request ${receipt.request_id} was submitted to the leader for ${receipt.member_name}. Status: ${receipt.status}.`, "success");
+          setTimeout(() => refresh().catch(() => {}), 1200);
+        } catch (error) {
+          setNotice(error?.message || "Leader request failed. No direct worker action was attempted.", "error");
+        } finally {
+          button.disabled = !state.data?.mission?.request_allowed;
+        }
+      });
+
+      addEventListener("message", (event) => {
+        const message = event.data;
+        if (!message || message.jsonrpc !== "2.0") return;
+        if (message.id && pending.has(message.id)) {
+          const promise = pending.get(message.id);
+          pending.delete(message.id);
+          message.error ? promise.reject(message.error) : promise.resolve(message.result);
+        }
+        if (message.method === "ui/notifications/tool-result") {
+          const data = unwrap(message.params?.structuredContent ?? message.params?.result);
+          if (data) render(data);
+        }
+      });
+
+      parent.postMessage({ jsonrpc: "2.0", method: "ui/initialize", params: {} }, "*");
+      render(unwrap(initialOutput));
+      renderTabs();
+    </script>
+  </body>
+</html>

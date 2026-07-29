@@ -21,6 +21,17 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.attachments.normalizer import validate_chat_messages, validate_prompt_text
+from app.aigentbee_workbench import (
+    LeaderRequestReceipt,
+    MAX_HISTORY_LIMIT,
+    SWARM_WIDGET_URI,
+    SwarmWorkbenchOutput,
+    build_leader_prompt,
+    build_swarm_workbench,
+    leader_session_name,
+    load_swarm_widget_html,
+    validate_leader_request,
+)
 from app.output_hygiene import detect_visible_output_contamination
 from app.output_integrity import assess_output_integrity
 from app.hive_runtime import (
@@ -32,6 +43,7 @@ from app.hive_runtime import (
 )
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 
 try:
     from dotenv import load_dotenv
@@ -3661,6 +3673,425 @@ def create_server(
         transport_security=transport_security,
     )
     register_notion2api_prompts(server)
+
+    if tool_prefix == "aigentbee":
+        widget_meta = {
+            "ui": {"resourceUri": SWARM_WIDGET_URI},
+            "openai/outputTemplate": SWARM_WIDGET_URI,
+            "openai/toolInvocation/invoking": "Loading the AIgentBee Swarm Workbench.",
+            "openai/toolInvocation/invoked": "AIgentBee Swarm Workbench ready",
+        }
+        widget_access_meta = {"openai/widgetAccessible": True}
+
+        @server.resource(
+            SWARM_WIDGET_URI,
+            name="aigentbee-swarm-workbench",
+            title="AIgentBee Swarm Workbench",
+            description=(
+                "A human-governed view of one AIgentBee Hive mission, its swarm members, "
+                "leader Notion chat history, and bounded leader-routed requests."
+            ),
+            mime_type="text/html;profile=mcp-app",
+            meta={
+                "ui": {
+                    "csp": {"connectDomains": [], "resourceDomains": []},
+                    "prefersBorder": True,
+                },
+                "openai/widgetDescription": (
+                    "AIgentBee Swarm Workbench for mission evidence, member roles and tasks, "
+                    "leader chat history, and bounded requests to the accountable leader."
+                ),
+                "openai/widgetPrefersBorder": True,
+            },
+        )
+        def aigentbee_swarm_workbench_resource() -> str:
+            return load_swarm_widget_html()
+
+        def _swarm_workbench_output(
+            mission_id: str,
+            history_limit: int = 30,
+        ) -> SwarmWorkbenchOutput:
+            try:
+                bounded_limit = max(1, min(int(history_limit), MAX_HISTORY_LIMIT))
+                snapshot = get_hive_runtime_store().get_mission(
+                    mission_id,
+                    event_limit=50,
+                    action_limit=50,
+                )
+                session_name = leader_session_name(mission_id)
+                session_record = dict(
+                    _load_session_records().get(_session_key(session_name)) or {}
+                )
+                conversation_id = str(session_record.get("conversation_id") or "").strip()
+                history: MessagesOutput | dict[str, Any]
+                if conversation_id:
+                    history = _read_local_messages(
+                        session_name=session_name,
+                        conversation_id=conversation_id,
+                        limit=bounded_limit,
+                    )
+                else:
+                    history = {}
+                return build_swarm_workbench(
+                    snapshot,
+                    session_record=session_record,
+                    messages_output=history,
+                    history_limit=bounded_limit,
+                )
+            except (HiveRuntimeError, ValueError, TypeError) as exc:
+                return SwarmWorkbenchOutput(
+                    ok=False,
+                    generated_at=_now_ms(),
+                    error=str(exc),
+                    governance={
+                        "authorityCeiling": "observe_only",
+                        "directWorkerExecution": False,
+                        "arbitraryShellExecution": False,
+                        "leaderRoutingAvailable": False,
+                    },
+                )
+
+        @server.tool(
+            name=_tool_name("notion2api_show_swarm_workbench"),
+            description=_tool_description(
+                "Use this when the user wants a visual AIgentBee Hive mission view with swarm members, "
+                "roles, tasks, status, leader chat history, and governance boundaries."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+            meta={**widget_meta, **widget_access_meta},
+            structured_output=True,
+        )
+        async def notion2api_show_swarm_workbench(
+            mission_id: str,
+            history_limit: int = 30,
+        ) -> SwarmWorkbenchOutput:
+            return _swarm_workbench_output(mission_id, history_limit)
+
+        @server.tool(
+            name=_tool_name("notion2api_get_swarm_workbench"),
+            description=_tool_description(
+                "Use this to read one AIgentBee Hive mission, swarm-member role and task state, "
+                "leader session metadata, recent Hive events, and bounded leader chat history without opening the widget."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+            meta=widget_access_meta,
+            structured_output=True,
+        )
+        async def notion2api_get_swarm_workbench(
+            mission_id: str,
+            history_limit: int = 30,
+        ) -> SwarmWorkbenchOutput:
+            return _swarm_workbench_output(mission_id, history_limit)
+
+        @server.tool(
+            name=_tool_name("notion2api_send_leader_request"),
+            description=_tool_description(
+                "Use this to submit one bounded instruction, question, review, status check, or priority proposal "
+                "for a named Hive worker lane to the mission's accountable AIgentBee leader Notion chat. "
+                "This does not directly command a worker or execute a shell action."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+            meta=widget_access_meta,
+            structured_output=True,
+        )
+        async def notion2api_send_leader_request(
+            mission_id: str,
+            member_id: str,
+            request: str,
+            idempotency_key: str,
+            request_type: str = "instruction",
+            requested_by: str = "ChatGPT user",
+        ) -> LeaderRequestReceipt:
+            submitted_at = _now_ms()
+            session_name = ""
+            member_name = ""
+            member_role = ""
+            lane_title = ""
+            mission_revision = 0
+            request_fingerprint = ""
+            normalized_request_id = ""
+            try:
+                if not str(idempotency_key or "").strip():
+                    raise ValueError("idempotency_key is required")
+                normalized_request_id = _normalize_request_id(idempotency_key)
+                snapshot = get_hive_runtime_store().get_mission(
+                    mission_id,
+                    event_limit=50,
+                    action_limit=50,
+                )
+                if not snapshot.ok or not snapshot.found:
+                    raise ValueError(snapshot.error or "Hive mission was not found.")
+                if str(snapshot.status).upper() in {"CLOSED", "CANCELLED"}:
+                    raise ValueError(
+                        f"Mission status {snapshot.status} does not accept new leader requests."
+                    )
+                member = next(
+                    (unit for unit in snapshot.work_units if unit.work_unit_id == member_id),
+                    None,
+                )
+                if member is None:
+                    raise ValueError(
+                        "The selected swarm member does not exist in the current mission."
+                    )
+                clean_request, clean_type, clean_requester = validate_leader_request(
+                    request,
+                    request_type,
+                    requested_by,
+                )
+                member_name = member.title
+                member_role = member.role
+                lane_title = member.title
+                session_name = leader_session_name(mission_id)
+
+                existing_job = _load_chat_job(normalized_request_id)
+                existing_caller = (
+                    existing_job.get("caller")
+                    if isinstance(existing_job, dict)
+                    and isinstance(existing_job.get("caller"), dict)
+                    else {}
+                )
+                existing_intent = next(
+                    (
+                        event
+                        for event in snapshot.events
+                        if event.event_type == "LEADER_REQUEST_INTENT"
+                        and str((event.payload or {}).get("request_id") or "")
+                        == normalized_request_id
+                    ),
+                    None,
+                )
+                existing_intent_payload = (
+                    dict(existing_intent.payload or {}) if existing_intent else {}
+                )
+                mission_revision = int(
+                    existing_caller.get("mission_revision")
+                    or existing_intent_payload.get("mission_revision_at_submission")
+                    or snapshot.revision
+                )
+                prompt, member_name = build_leader_prompt(
+                    snapshot,
+                    member_id,
+                    clean_request,
+                    clean_type,
+                    clean_requester,
+                    mission_revision_at_submission=mission_revision,
+                )
+                request_identity = {
+                    "mission_id": mission_id,
+                    "mission_revision_at_submission": mission_revision,
+                    "member_id": member_id,
+                    "member_name": member_name,
+                    "member_role": member_role,
+                    "lane_title": lane_title,
+                    "request_type": clean_type,
+                    "request_text": clean_request,
+                    "leader_session": session_name,
+                }
+                request_fingerprint = hashlib.sha256(
+                    json.dumps(
+                        request_identity,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                existing_fingerprint = str(
+                    existing_caller.get("request_fingerprint")
+                    or existing_intent_payload.get("request_fingerprint")
+                    or ""
+                )
+                if (existing_job or existing_intent) and (
+                    existing_fingerprint != request_fingerprint
+                ):
+                    raise ValueError(
+                        "idempotency_key is already bound to a different leader request"
+                    )
+
+                hive_store = get_hive_runtime_store()
+                intent_snapshot = hive_store.append_event(
+                    mission_id=mission_id,
+                    event_type="LEADER_REQUEST_INTENT",
+                    sender="aigentbee-swarm-workbench",
+                    recipient="leader",
+                    work_unit_id=member_id,
+                    payload={
+                        "request_id": normalized_request_id,
+                        "request_fingerprint": request_fingerprint,
+                        "request_type": clean_type,
+                        "member_name": member_name,
+                        "member_role": member_role,
+                        "lane_title": lane_title,
+                        "mission_revision_at_submission": mission_revision,
+                        "requested_by_display": clean_requester,
+                        "request_preview": clean_request[:240],
+                        "leader_session": session_name,
+                    },
+                    context_version=mission_revision,
+                    idempotency_key=f"leader-request-intent:{normalized_request_id}",
+                )
+
+                deduplicated = bool(existing_job)
+
+                conversation_id, session_key, session_created = _conversation_id_for_session(
+                    session_name
+                )
+                payload = {
+                    "model": DEFAULT_MODEL,
+                    "messages": _explicit_prompt_messages(prompt, None),
+                    "stream": False,
+                    "conversation_id": conversation_id,
+                    "session_name": session_key,
+                    "notion_mode": "default",
+                    "notion_task": None,
+                    "notion_sources": ["notion"],
+                    "web_access": False,
+                    "notion_persona": "analyst",
+                    "notion_instructions": (
+                        "Act as the accountable AIgentBee leader for the named Hive mission. "
+                        "Evaluate the request against current mission evidence and authority. "
+                        "Accept, revise, defer, or reject it; route accepted work through the existing Hive lane "
+                        "and record later execution as separate evidence. Never treat the request itself as proof of execution."
+                    ),
+                    "metadata": {
+                        "persist_remote_chat": True,
+                        "mcp_session_name": session_key,
+                        "caller": {
+                            "id": "aigentbee-swarm-workbench",
+                            "type": "widget",
+                            "mission_id": mission_id,
+                            "mission_revision": mission_revision,
+                            "work_unit_id": member_id,
+                            "member_role": member_role,
+                            "lane_title": lane_title,
+                            "request_type": clean_type,
+                            "request_fingerprint": request_fingerprint,
+                        },
+                    },
+                }
+                result = await _submit_or_resume_chat_job(
+                    client=client,
+                    path="/v1/chat/completions",
+                    payload=payload,
+                    model=DEFAULT_MODEL,
+                    session_key=session_key,
+                    conversation_id=conversation_id,
+                    session_created=session_created,
+                    request_id=normalized_request_id,
+                    wait_seconds=None,
+                )
+                result_data = dict(result or {})
+                result_request_id = str(
+                    result_data.get("request_id") or normalized_request_id
+                )
+                status = str(result_data.get("status") or "").lower()
+                accepted = bool(
+                    result_request_id
+                    and status
+                    in {
+                        "pending",
+                        "running",
+                        "stale",
+                        "completed",
+                        "indeterminate_output",
+                    }
+                )
+                if not accepted:
+                    request_status = "failed_to_submit"
+                elif deduplicated:
+                    request_status = "deduplicated"
+                elif status in {"pending", "running", "stale"}:
+                    request_status = "queued"
+                elif status == "indeterminate_output":
+                    request_status = "indeterminate_reconciliation_required"
+                else:
+                    request_status = status or "accepted"
+
+                ledger_recorded = False
+                if accepted:
+                    try:
+                        hive_store.append_event(
+                            mission_id=mission_id,
+                            event_type="LEADER_REQUEST_SUBMITTED",
+                            sender="aigentbee-swarm-workbench",
+                            recipient="leader",
+                            work_unit_id=member_id,
+                            payload={
+                                "request_id": result_request_id,
+                                "request_fingerprint": request_fingerprint,
+                                "request_status": request_status,
+                                "request_type": clean_type,
+                                "member_name": member_name,
+                                "member_role": member_role,
+                                "lane_title": lane_title,
+                                "mission_revision_at_submission": mission_revision,
+                                "requested_by_display": clean_requester,
+                                "request_preview": clean_request[:240],
+                                "leader_session": session_key,
+                            },
+                            context_version=int(intent_snapshot.revision),
+                            idempotency_key=f"leader-request-submitted:{result_request_id}",
+                        )
+                        ledger_recorded = True
+                    except (HiveRuntimeError, ValueError):
+                        ledger_recorded = False
+
+                return LeaderRequestReceipt(
+                    ok=accepted,
+                    accepted=accepted,
+                    mission_id=mission_id,
+                    member_id=member_id,
+                    member_name=member_name,
+                    member_role=member_role,
+                    lane_title=lane_title,
+                    mission_revision=mission_revision,
+                    request_type=clean_type,
+                    session_name=session_key,
+                    conversation_id=conversation_id,
+                    request_id=result_request_id,
+                    job_id=str(result_data.get("job_id") or result_request_id),
+                    status=status,
+                    request_status=request_status,
+                    deduplicated=deduplicated,
+                    request_fingerprint=request_fingerprint,
+                    submitted_at=submitted_at,
+                    ledger_recorded=ledger_recorded,
+                    request_preview=clean_request[:240],
+                    error=str(result_data.get("error") or ""),
+                )
+            except (HiveRuntimeError, ValueError, TypeError) as exc:
+                return LeaderRequestReceipt(
+                    ok=False,
+                    accepted=False,
+                    mission_id=mission_id,
+                    member_id=member_id,
+                    member_name=member_name,
+                    member_role=member_role,
+                    lane_title=lane_title,
+                    mission_revision=mission_revision,
+                    request_type=request_type,
+                    session_name=session_name,
+                    request_id=normalized_request_id,
+                    request_status="rejected",
+                    request_fingerprint=request_fingerprint,
+                    submitted_at=submitted_at,
+                    error=str(exc),
+                )
+
 
     @server.tool(name=_tool_name("notion2api_health"), description=_tool_description("Check whether the configured Notion2API backend is reachable and healthy."), structured_output=True)
     async def notion2api_health() -> HealthOutput:
