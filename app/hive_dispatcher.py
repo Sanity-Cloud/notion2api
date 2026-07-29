@@ -15,6 +15,10 @@ from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.hive_external_effects import (
+    EXTERNAL_IMPLEMENTATION_ID,
+    get_hive_external_effect_store,
+)
 from app.hive_materialization import (
     DispatchStatus,
     LeaseStatus,
@@ -133,6 +137,17 @@ BUILTIN_ADAPTER_SPECS: dict[str, BuiltinAdapterSpec] = {
         max_payload_bytes=4096,
         requires_human_approval=True,
         requires_independent_review=False,
+    ),
+    EXTERNAL_IMPLEMENTATION_ID: BuiltinAdapterSpec(
+        implementation_id=EXTERNAL_IMPLEMENTATION_ID,
+        display_name="Certified Sandbox Artifact",
+        capabilities=("sandbox_artifact",),
+        writable_domains=("external_sandbox",),
+        minimum_authority="A2",
+        max_timeout_ms=5000,
+        max_payload_bytes=65536,
+        requires_human_approval=True,
+        requires_independent_review=True,
     ),
 }
 
@@ -1260,10 +1275,19 @@ class HiveExecutionDispatcherStore:
 
     def _run_adapter(
         self,
+        execution_id: str,
+        actor: str,
         implementation_id: str,
         payload: dict[str, Any],
         cancelled: Callable[[], bool],
     ) -> dict[str, Any]:
+        if implementation_id == EXTERNAL_IMPLEMENTATION_ID:
+            return get_hive_external_effect_store(self.path).execute_sandbox_artifact(
+                execution_id=execution_id,
+                payload=payload,
+                actor=actor,
+                cancelled=cancelled,
+            )
         runners: dict[
             str,
             Callable[[dict[str, Any], Callable[[], bool]], dict[str, Any]],
@@ -1629,6 +1653,8 @@ class HiveExecutionDispatcherStore:
         )
         future = executor.submit(
             self._run_adapter,
+            execution_id,
+            actor,
             adapter.implementation_id,
             current.request_payload,
             lambda: self._cancellation_requested(execution_id),
@@ -1648,8 +1674,14 @@ class HiveExecutionDispatcherStore:
                 "duration_ms": duration_ms,
                 "input_sha256": self._fingerprint(current.request_payload),
                 "result_sha256": hashlib.sha256(result_json).hexdigest(),
-                "performed_external_effect": False,
+                "performed_external_effect": bool(
+                    result.get("performed_external_effect", False)
+                ),
             }
+            if result.get("effect_id"):
+                evidence["phase4_effect_id"] = result["effect_id"]
+            if result.get("certification_id"):
+                evidence["phase4_certification_id"] = result["certification_id"]
             target = (
                 ExecutionStatus.REVIEW_REQUIRED.value
                 if current.review_required

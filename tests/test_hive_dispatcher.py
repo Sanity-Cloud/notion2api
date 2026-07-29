@@ -169,6 +169,7 @@ def test_schema_is_additive_and_builtin_adapters_start_disabled(tmp_path):
         "builtin.noop.v1",
         "builtin.evidence_digest.v1",
         "builtin.bounded_delay.v1",
+        "builtin.sandbox_artifact.v1",
     }
     assert {item.status for item in adapters} == {AdapterStatus.DISABLED.value}
 

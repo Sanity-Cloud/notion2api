@@ -67,7 +67,7 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 43
+    assert len(names) == 48
     assert "aigentbee_hive_create_mission" in names
     assert "aigentbee_chat" in names
     assert "aigentbee_health" in names
@@ -94,6 +94,11 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     assert "aigentbee_hive_cancel_execution" in names
     assert "aigentbee_hive_recover_execution" in names
     assert "aigentbee_hive_review_execution" in names
+    assert "aigentbee_hive_certify_external_adapter" in names
+    assert "aigentbee_hive_list_external_certifications" in names
+    assert "aigentbee_hive_transition_external_certification" in names
+    assert "aigentbee_hive_list_external_effects" in names
+    assert "aigentbee_hive_rollback_external_effect" in names
     assert all(name.startswith("aigentbee_") for name in names)
     assert not any(name.startswith("notion2api_") for name in names)
     assert all("notion2api_" not in (tool.description or "") for tool in tools)
@@ -115,7 +120,7 @@ def test_primary_profile_exposes_bare_machine_methods():
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 40
+    assert len(names) == 45
     assert "hive_create_mission" in names
     assert "chat" in names
     assert "health" in names
@@ -139,6 +144,11 @@ def test_primary_profile_exposes_bare_machine_methods():
     assert "hive_cancel_execution" in names
     assert "hive_recover_execution" in names
     assert "hive_review_execution" in names
+    assert "hive_certify_external_adapter" in names
+    assert "hive_list_external_certifications" in names
+    assert "hive_transition_external_certification" in names
+    assert "hive_list_external_effects" in names
+    assert "hive_rollback_external_effect" in names
     assert not any(name.startswith(("notion2api_", "aigentbee_")) for name in names)
     assert all("notion2api_" not in (tool.description or "") for tool in tools)
     assert "notion2api_" not in server.instructions

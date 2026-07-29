@@ -46,6 +46,10 @@ from app.hive_dispatcher import (
     HiveExecutionSnapshot,
     get_hive_execution_dispatcher_store,
 )
+from app.hive_external_effects import (
+    ExternalEffectSnapshot,
+    get_hive_external_effect_store,
+)
 from app.hive_materialization import (
     HiveMaterializationSnapshot,
     get_hive_materialization_store,
@@ -5064,6 +5068,129 @@ def create_server(
             )
         except (HiveRuntimeError, ValueError) as exc:
             return _execution_error_snapshot(exc, execution_id)
+
+    def _external_effect_error_snapshot(exc: Exception) -> ExternalEffectSnapshot:
+        return ExternalEffectSnapshot(
+            ok=False,
+            found=False,
+            db_path=str(default_hive_runtime_db_path()),
+            error=str(exc),
+            certifications=[],
+            effects=[],
+        )
+
+    @server.tool(name=_tool_name("notion2api_hive_certify_external_adapter"), description=_tool_description("Certify the compiled reversible sandbox-artifact adapter with a threat model, credential boundary, rollback contract, independent reviewer, sandbox allowlist, and explicit human approval."), structured_output=True)
+    async def notion2api_hive_certify_external_adapter(
+        adapter_id: str,
+        implementation_id: str,
+        sandbox_name: str,
+        threat_model: dict[str, Any],
+        rollback_contract: dict[str, Any],
+        reviewer_worker_id: str,
+        actor: str,
+        allowed_extensions: list[str] | None = None,
+        max_effect_bytes: int = 65536,
+        credential_boundary: str = "none",
+        human_approval: bool = False,
+        certification_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> ExternalEffectSnapshot:
+        try:
+            return get_hive_external_effect_store().certify_adapter(
+                adapter_id=adapter_id,
+                implementation_id=implementation_id,
+                sandbox_name=sandbox_name,
+                allowed_extensions=allowed_extensions,
+                max_effect_bytes=max_effect_bytes,
+                threat_model=threat_model,
+                credential_boundary=credential_boundary,
+                rollback_contract=rollback_contract,
+                reviewer_worker_id=reviewer_worker_id,
+                actor=actor,
+                human_approval=human_approval,
+                certification_id=certification_id,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _external_effect_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_list_external_certifications"), description=_tool_description("Read durable external-effect adapter certifications and their current certified, suspended, or revoked state."), structured_output=True)
+    async def notion2api_hive_list_external_certifications(
+        certification_id: str = "",
+        status: str = "",
+        limit: int = 100,
+    ) -> ExternalEffectSnapshot:
+        try:
+            return get_hive_external_effect_store().get_certifications(
+                certification_id=certification_id,
+                status=status,
+                limit=limit,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _external_effect_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_transition_external_certification"), description=_tool_description("Human-approved certification control for suspending, re-certifying, or permanently revoking one external-effect adapter certification."), structured_output=True)
+    async def notion2api_hive_transition_external_certification(
+        certification_id: str,
+        target_status: str,
+        actor: str,
+        reason: str,
+        human_approval: bool = False,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> ExternalEffectSnapshot:
+        try:
+            return get_hive_external_effect_store().transition_certification(
+                certification_id=certification_id,
+                target_status=target_status,
+                actor=actor,
+                reason=reason,
+                human_approval=human_approval,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _external_effect_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_list_external_effects"), description=_tool_description("Read Phase 4 dry-run, applied, rolled-back, compensation-failed, and tamper-detected effect receipts."), structured_output=True)
+    async def notion2api_hive_list_external_effects(
+        effect_id: str = "",
+        execution_id: str = "",
+        status: str = "",
+        limit: int = 100,
+    ) -> ExternalEffectSnapshot:
+        try:
+            return get_hive_external_effect_store().get_effects(
+                effect_id=effect_id,
+                execution_id=execution_id,
+                status=status,
+                limit=limit,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _external_effect_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_rollback_external_effect"), description=_tool_description("Restore the certified preimage for one applied sandbox effect after token, target-integrity, reviewer, and human-approval checks."), structured_output=True)
+    async def notion2api_hive_rollback_external_effect(
+        effect_id: str,
+        rollback_token: str,
+        reviewer_worker_id: str,
+        actor: str,
+        reason: str,
+        human_approval: bool = False,
+        idempotency_key: str | None = None,
+    ) -> ExternalEffectSnapshot:
+        try:
+            return get_hive_external_effect_store().rollback_effect(
+                effect_id=effect_id,
+                rollback_token=rollback_token,
+                reviewer_worker_id=reviewer_worker_id,
+                actor=actor,
+                reason=reason,
+                human_approval=human_approval,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _external_effect_error_snapshot(exc)
 
     @server.tool(name=_tool_name("notion2api_list_sessions"), description=_tool_description("List named persistent Notion2API MCP chat sessions with local and remote identifiers."), structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:
