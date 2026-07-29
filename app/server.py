@@ -259,6 +259,7 @@ def health_check(request: Request):
         "accounts_total": status["total"],
         "accounts_cooling": status["cooling"],
         "uptime": int(uptime),
+        "account_selection": pool.get_selection_summary(),
         "governance": pool.get_governance_summary(),
     }
 

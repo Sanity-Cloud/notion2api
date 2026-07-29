@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -95,6 +95,38 @@ class AccountInfoResponse(BaseModel):
     governance: dict[str, Any] = Field(default_factory=dict)
 
 
+class AccountSummaryResponse(BaseModel):
+    account_number: int
+    profile_name: str
+    user_name: str
+    user_email: str
+    space_id: str
+    user_id: str
+    selected: bool
+    next_in_rotation: bool
+    available: bool
+    cooldown_remaining_seconds: float
+    governance_aligned: bool
+
+
+class AccountSelectionResponse(BaseModel):
+    ok: bool
+    mode: Literal["auto", "pinned"]
+    selected_account_number: int | None = None
+    selected_profile_name: str | None = None
+    next_account_number: int | None = None
+    previous_selection: dict[str, Any] = Field(default_factory=dict)
+    effective_for_new_requests: bool = True
+    persistence_enabled: bool = False
+    accounts: list[AccountSummaryResponse] = Field(default_factory=list)
+    governance: dict[str, Any] = Field(default_factory=dict)
+
+
+class AccountSwitchRequest(BaseModel):
+    mode: Literal["auto", "pinned"] = "pinned"
+    selector: str | None = None
+
+
 class AllowUnsafeUrlOnceRequest(BaseModel):
     thread_id: str = Field(min_length=1)
     tool_step_ids: list[str] = Field(default_factory=list)
@@ -116,7 +148,14 @@ class AllowUnsafeUrlOnceResponse(BaseModel):
     reason: str = ""
 
 
-def _error_detail(*, message: str, code: str, error_type: str, param: str | None = None, detail: str = "") -> dict:
+def _error_detail(
+    *,
+    message: str,
+    code: str,
+    error_type: str,
+    param: str | None = None,
+    detail: str = "",
+) -> dict:
     payload = {
         "message": message,
         "type": error_type,
@@ -130,7 +169,9 @@ def _error_detail(*, message: str, code: str, error_type: str, param: str | None
 
 
 @router.post("/notion/upload_file", response_model=UploadPageFileResponse)
-async def upload_page_file(request: Request, body: UploadPageFileRequest) -> UploadPageFileResponse:
+async def upload_page_file(
+    request: Request, body: UploadPageFileRequest
+) -> UploadPageFileResponse:
     """Upload a local file into a page File block using the configured Notion account."""
     try:
         client = request.app.state.account_pool.get_client()
@@ -219,10 +260,116 @@ async def check_page_access(
         ) from exc
 
 
+def _account_selection_response(pool: Any) -> AccountSelectionResponse:
+    summary = pool.get_selection_summary()
+    return AccountSelectionResponse(
+        ok=True,
+        mode=summary["mode"],
+        selected_account_number=summary.get("selected_account_number"),
+        selected_profile_name=summary.get("selected_profile_name"),
+        next_account_number=summary.get("next_account_number"),
+        previous_selection=dict(summary.get("previous_selection") or {}),
+        effective_for_new_requests=bool(
+            summary.get("effective_for_new_requests", True)
+        ),
+        persistence_enabled=bool(summary.get("persistence_enabled", False)),
+        accounts=[
+            AccountSummaryResponse(**item) for item in summary.get("accounts", [])
+        ],
+        governance=pool.get_governance_summary(),
+    )
+
+
+@router.get("/notion/accounts", response_model=AccountSelectionResponse)
+async def list_accounts(request: Request) -> AccountSelectionResponse:
+    """List safe account metadata and the current AIgentBee selection mode."""
+    return _account_selection_response(request.app.state.account_pool)
+
+
+@router.post("/notion/accounts/switch", response_model=AccountSelectionResponse)
+async def switch_account(
+    request: Request,
+    body: AccountSwitchRequest,
+) -> AccountSelectionResponse:
+    """Pin AIgentBee to a named account or restore automatic rotation."""
+    pool = request.app.state.account_pool
+    try:
+        if body.mode == "pinned":
+            selector = str(body.selector or "").strip()
+            if not selector:
+                raise ValueError("selector is required when mode is pinned")
+            candidate = pool.get_client_for_selector(selector)
+            governance = governance_receipt_from_client(candidate)
+            if not governance.get("aligned"):
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error_detail(
+                        message="Selected account is not aligned with the canonical governance contract.",
+                        code="notion_account_governance_mismatch",
+                        error_type="conflict_error",
+                    ),
+                )
+            authority_page_id = str(governance.get("authority_page_id") or "").strip()
+            if authority_page_id:
+                access = await run_in_threadpool(
+                    candidate.check_page_access, authority_page_id
+                )
+                if not access.get("accessible"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_error_detail(
+                            message="Selected account cannot access the canonical governance authority page.",
+                            code="notion_account_authority_unavailable",
+                            error_type="conflict_error",
+                        ),
+                    )
+        pool.switch_account(mode=body.mode, selector=body.selector)
+        return _account_selection_response(pool)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                message=str(exc),
+                code="invalid_notion_account_selector",
+                error_type="invalid_request_error",
+                param="selector",
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                message=str(exc),
+                code="notion_account_unavailable",
+                error_type="conflict_error",
+            ),
+        ) from exc
+    except NotionUpstreamError as exc:
+        raise HTTPException(
+            status_code=503 if exc.retriable else 502,
+            detail=_error_detail(
+                message=str(exc),
+                code="notion_account_validation_failed",
+                error_type="upstream_error",
+                detail=exc.response_excerpt,
+            ),
+        ) from exc
+
+
+@router.post("/notion/accounts/rollback", response_model=AccountSelectionResponse)
+async def rollback_account_switch(request: Request) -> AccountSelectionResponse:
+    """Restore the selection state that existed immediately before the last switch."""
+    pool = request.app.state.account_pool
+    pool.rollback_account_switch()
+    return _account_selection_response(pool)
+
+
 @router.get("/notion/account_info", response_model=AccountInfoResponse)
 async def account_info(request: Request) -> AccountInfoResponse:
-    """Return the active Notion account and resolved Repo AI parent page metadata."""
-    client = request.app.state.account_pool.get_client()
+    """Return the selected Notion account and resolved Repo AI parent page metadata."""
+    client = request.app.state.account_pool.get_metadata_client()
     parent_page_id = client.resolve_repo_ai_parent_page_id()
     parent_accessible = False
     if parent_page_id:
@@ -250,14 +397,17 @@ async def allow_unsafe_url_once(
         thread_id = body.thread_id.strip()
         # Confirmation step IDs are account-scoped. Prefer the exact client
         # that captured this transient step instead of round-robin routing.
-        client = next(
-            (
-                candidate
-                for candidate in getattr(pool, "clients", [])
-                if get_remembered_unsafe_url_steps(candidate, thread_id)
-            ),
-            None,
-        ) or pool.get_client()
+        client = (
+            next(
+                (
+                    candidate
+                    for candidate in getattr(pool, "clients", [])
+                    if get_remembered_unsafe_url_steps(candidate, thread_id)
+                ),
+                None,
+            )
+            or pool.get_client()
+        )
         result = await run_in_threadpool(
             allow_pending_unsafe_urls_once,
             client,
@@ -337,7 +487,9 @@ async def create_page(request: Request, body: CreatePageRequest) -> CreatePageRe
         ) from exc
 
 
-@router.post("/notion/delete_block_children", response_model=DeleteBlockChildrenResponse)
+@router.post(
+    "/notion/delete_block_children", response_model=DeleteBlockChildrenResponse
+)
 async def delete_block_children(
     request: Request,
     body: DeleteBlockChildrenRequest,
@@ -378,7 +530,9 @@ async def delete_block_children(
 
 
 @router.post("/notion/append_blocks", response_model=AppendBlocksResponse)
-async def append_blocks(request: Request, body: AppendBlocksRequest) -> AppendBlocksResponse:
+async def append_blocks(
+    request: Request, body: AppendBlocksRequest
+) -> AppendBlocksResponse:
     """Append public-API-shaped blocks to a page."""
     try:
         client = request.app.state.account_pool.get_client()

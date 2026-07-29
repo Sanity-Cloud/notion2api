@@ -32,7 +32,7 @@ At startup, every configured account is bound to the same non-secret governance 
 The service fails closed when an account points to another teamspace, authority context, or
 documented-output root. The canonical defaults are:
 
-- Teamspace: `fe8b13aa-3ad2-811e-8292-0003b78a02f9`
+- Teamspace: `3aabf4af-15b3-810f-a1e8-004254c8eb80`
 - Ultimate governance authority: `3a8bf4af-15b3-811e-aca0-d011efea6b50`
 - Documented-output root: `1f2e3064-f1f9-424d-9892-ca82f88238d7`
 - Procedural-feedback root: `3a8bf4af-15b3-81f1-a9bf-ebf67111b1ab`
@@ -41,3 +41,16 @@ Environment variables in `.env.example` may override these values as one atomic 
 Per-request context overrides may not replace the canonical authority page. Project-specific
 sources should be supplied as supporting sources, not as a replacement source of truth.
 `/health` and `/v1/notion/account_info` expose the active governance receipt.
+
+## Explicit account selection
+
+When more than one account is configured, the backend supports two selection modes:
+
+- `auto`: round-robin rotation with cooldown failover.
+- `pinned`: all new requests use one named profile until changed.
+
+Use `GET /v1/notion/accounts` to list safe account metadata, `POST /v1/notion/accounts/switch` to change modes, and `POST /v1/notion/accounts/rollback` to restore the immediately preceding selection. MCP profiles expose equivalent `list_accounts`, `switch_account`, and `rollback_account_switch` tools using their configured tool prefix.
+
+Set `NOTION_ACCOUNT_SELECTION_STATE` to persist the Auto/Pinned choice across restarts. The state file contains only the mode and profile name; credentials remain in the protected account configuration.
+
+Account selection affects new requests. Start a new persistent Notion chat after switching profiles because an existing remote thread remains bound to the account that created it.

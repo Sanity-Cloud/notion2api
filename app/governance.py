@@ -6,7 +6,8 @@ from typing import Any, Iterable, Mapping
 
 
 DEFAULT_CONTRACT_VERSION = "sanitycloud-governance-v1"
-DEFAULT_TEAMSPACE_ID = "fe8b13aa-3ad2-811e-8292-0003b78a02f9"
+DEFAULT_WORKSPACE_ID = "034bf4af-15b3-81a9-a6ce-000330e15c65"
+DEFAULT_TEAMSPACE_ID = "3aabf4af-15b3-810f-a1e8-004254c8eb80"
 DEFAULT_AUTHORITY_PAGE_ID = "3a8bf4af-15b3-811e-aca0-d011efea6b50"
 DEFAULT_OUTPUT_PARENT_PAGE_ID = "1f2e3064-f1f9-424d-9892-ca82f88238d7"
 DEFAULT_FEEDBACK_PARENT_PAGE_ID = "3a8bf4af-15b3-81f1-a9bf-ebf67111b1ab"
@@ -25,6 +26,7 @@ class GovernanceContract:
     """Canonical governance and knowledge-routing contract for every provider route."""
 
     version: str
+    workspace_id: str
     teamspace_id: str
     authority_page_id: str
     documented_output_parent_page_id: str
@@ -35,9 +37,13 @@ class GovernanceContract:
         return cls(
             version=_clean(os.getenv("SANITYCLOUD_GOVERNANCE_CONTRACT_VERSION"))
             or DEFAULT_CONTRACT_VERSION,
+            workspace_id=_clean(os.getenv("SANITYCLOUD_NOTION_WORKSPACE_ID"))
+            or DEFAULT_WORKSPACE_ID,
             teamspace_id=_clean(os.getenv("SANITYCLOUD_NOTION_TEAMSPACE_ID"))
             or DEFAULT_TEAMSPACE_ID,
-            authority_page_id=_clean(os.getenv("SANITYCLOUD_GOVERNANCE_AUTHORITY_PAGE_ID"))
+            authority_page_id=_clean(
+                os.getenv("SANITYCLOUD_GOVERNANCE_AUTHORITY_PAGE_ID")
+            )
             or DEFAULT_AUTHORITY_PAGE_ID,
             documented_output_parent_page_id=_clean(
                 os.getenv("SANITYCLOUD_DOCUMENTED_OUTPUT_PARENT_PAGE_ID")
@@ -52,6 +58,7 @@ class GovernanceContract:
     def validated(self) -> "GovernanceContract":
         fields = {
             "version": self.version,
+            "workspace_id": self.workspace_id,
             "teamspace_id": self.teamspace_id,
             "authority_page_id": self.authority_page_id,
             "documented_output_parent_page_id": self.documented_output_parent_page_id,
@@ -67,6 +74,7 @@ class GovernanceContract:
     def receipt(self) -> dict[str, Any]:
         return {
             "contract_version": self.version,
+            "workspace_id": self.workspace_id,
             "teamspace_id": self.teamspace_id,
             "authority_page_id": self.authority_page_id,
             "documented_output_parent_page_id": self.documented_output_parent_page_id,
@@ -76,28 +84,40 @@ class GovernanceContract:
 
     def operating_instruction(self) -> str:
         return (
-            f"SanityCloud governance contract {self.version}: use teamspace "
-            f"{self.teamspace_id}. Treat page {self.authority_page_id} as the ultimate "
-            "governance authority and source of truth. Preserve source lineage and distinguish "
-            "verified evidence, hypotheses, drafts, and adopted decisions. Route durable "
-            f"documented outputs beneath {self.documented_output_parent_page_id}. Route "
-            "procedural feedback, contradictions, exceptions, and lessons learned beneath "
+            f"SanityCloud governance contract {self.version}: use workspace "
+            f"{self.workspace_id} and teamspace {self.teamspace_id}. Treat page "
+            f"{self.authority_page_id} as the ultimate governance authority and source "
+            "of truth. Preserve source lineage and distinguish verified evidence, "
+            "hypotheses, drafts, and adopted decisions. Route durable documented outputs "
+            f"beneath {self.documented_output_parent_page_id}. Route procedural feedback, "
+            "contradictions, exceptions, and lessons learned beneath "
             f"{self.procedural_feedback_parent_page_id}. Do not silently substitute another "
-            "teamspace, authority page, output root, or feedback root."
+            "workspace, teamspace, authority page, output root, or feedback root."
         )
 
-    def bind_accounts(self, accounts: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    def bind_accounts(
+        self, accounts: Iterable[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
         bound: list[dict[str, Any]] = []
         for index, source in enumerate(accounts):
             account = dict(source)
             actual_space = _clean(account.get("space_id"))
             if _normalized_notion_id(actual_space) != _normalized_notion_id(
-                self.teamspace_id
+                self.workspace_id
             ):
                 raise ValueError(
-                    "Notion account teamspace does not match the SanityCloud governance "
+                    "Notion account workspace does not match the SanityCloud governance "
                     f"contract (account {index}: {actual_space or '<missing>'}; expected "
-                    f"{self.teamspace_id})."
+                    f"{self.workspace_id})."
+                )
+
+            configured_teamspace = _clean(account.get("governance_teamspace_id"))
+            if configured_teamspace and _normalized_notion_id(
+                configured_teamspace
+            ) != _normalized_notion_id(self.teamspace_id):
+                raise ValueError(
+                    "Notion account governance_teamspace_id conflicts with the canonical "
+                    f"teamspace (account {index})."
                 )
 
             configured_context = _clean(account.get("context_page_id"))
@@ -120,10 +140,11 @@ class GovernanceContract:
 
             account.update(
                 {
-                    "space_id": self.teamspace_id,
+                    "space_id": actual_space,
                     "context_page_id": self.authority_page_id,
                     "repo_ai_parent_page_id": self.documented_output_parent_page_id,
                     "governance_contract_version": self.version,
+                    "governance_workspace_id": self.workspace_id,
                     "governance_teamspace_id": self.teamspace_id,
                     "governance_authority_page_id": self.authority_page_id,
                     "documented_output_parent_page_id": self.documented_output_parent_page_id,
@@ -137,9 +158,8 @@ class GovernanceContract:
 
 def governance_receipt_from_client(client: Any) -> dict[str, Any]:
     return {
-        "contract_version": _clean(
-            getattr(client, "governance_contract_version", "")
-        ),
+        "contract_version": _clean(getattr(client, "governance_contract_version", "")),
+        "workspace_id": _clean(getattr(client, "governance_workspace_id", "")),
         "teamspace_id": _clean(getattr(client, "governance_teamspace_id", "")),
         "authority_page_id": _clean(
             getattr(client, "governance_authority_page_id", "")
@@ -164,9 +184,11 @@ def resolve_governed_context_page_id(client: Any, requested: str = "") -> str:
     fallback = _clean(getattr(client, "context_page_id", ""))
     canonical = authority or fallback
     requested_clean = _clean(requested)
-    if requested_clean and canonical and _normalized_notion_id(
+    if (
         requested_clean
-    ) != _normalized_notion_id(canonical):
+        and canonical
+        and _normalized_notion_id(requested_clean) != _normalized_notion_id(canonical)
+    ):
         raise ValueError(
             "Requested context_page_id conflicts with the canonical SanityCloud governance "
             f"authority page {canonical}."

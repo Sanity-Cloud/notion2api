@@ -3676,6 +3676,42 @@ def create_server(
             raw=data,
         )
 
+    @server.tool(
+        name=_tool_name("notion2api_list_accounts"),
+        description=_tool_description(
+            "List configured Notion account profiles and show whether Notion2API is in automatic rotation or pinned mode. Raw credentials are never returned."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_list_accounts() -> dict[str, Any]:
+        return await client.get("/v1/notion/accounts")
+
+    @server.tool(
+        name=_tool_name("notion2api_switch_account"),
+        description=_tool_description(
+            "Switch Notion2API to a named account profile. Use mode='pinned' with a profile name, email, user id, or account number; use mode='auto' to restore rotation and failover. Start a new remote chat after changing accounts because existing thread bindings are not migrated."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_switch_account(
+        selector: str | None = None,
+        mode: Literal["pinned", "auto"] = "pinned",
+    ) -> dict[str, Any]:
+        return await client.post(
+            "/v1/notion/accounts/switch",
+            {"selector": selector, "mode": mode},
+        )
+
+    @server.tool(
+        name=_tool_name("notion2api_rollback_account_switch"),
+        description=_tool_description(
+            "Roll back the most recent Notion2API account-selection change. This affects new requests only; existing remote thread bindings are unchanged."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_rollback_account_switch() -> dict[str, Any]:
+        return await client.post("/v1/notion/accounts/rollback", {})
+
     @server.tool(name=_tool_name("notion2api_list_models"), description=_tool_description("List Notion2API models from the configured backend."), structured_output=True)
     async def notion2api_list_models() -> ListModelsOutput:
         data = await client.get("/v1/models")

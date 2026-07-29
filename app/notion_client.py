@@ -230,8 +230,11 @@ class NotionOpusAPI:
         self.governance_contract_version = str(
             account_config.get("governance_contract_version") or ""
         ).strip()
+        self.governance_workspace_id = str(
+            account_config.get("governance_workspace_id") or self.space_id or ""
+        ).strip()
         self.governance_teamspace_id = str(
-            account_config.get("governance_teamspace_id") or self.space_id or ""
+            account_config.get("governance_teamspace_id") or ""
         ).strip()
         self.governance_authority_page_id = str(
             account_config.get("governance_authority_page_id")
@@ -251,7 +254,8 @@ class NotionOpusAPI:
         ).strip()
         self.governance_aligned = bool(
             self.governance_contract_version
-            and self.governance_teamspace_id == self.space_id
+            and self.governance_workspace_id == self.space_id
+            and self.governance_teamspace_id
             and self.governance_authority_page_id == self.context_page_id
             and self.documented_output_parent_page_id == self.repo_ai_parent_page_id
             and self.procedural_feedback_parent_page_id

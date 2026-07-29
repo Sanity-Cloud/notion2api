@@ -22,7 +22,8 @@ from app.schemas import ChatCompletionRequest, ChatMessage
 def _contract() -> GovernanceContract:
     return GovernanceContract(
         version="test-v1",
-        teamspace_id="space-canonical",
+        workspace_id="workspace-canonical",
+        teamspace_id="teamspace-canonical",
         authority_page_id="authority-page",
         documented_output_parent_page_id="output-root",
         procedural_feedback_parent_page_id="feedback-root",
@@ -32,7 +33,7 @@ def _contract() -> GovernanceContract:
 def _account(**overrides) -> dict:
     payload = {
         "token_v2": "token",
-        "space_id": "space-canonical",
+        "space_id": "workspace-canonical",
         "user_id": "user-1",
     }
     payload.update(overrides)
@@ -42,7 +43,10 @@ def _account(**overrides) -> dict:
 def test_contract_binds_every_account_to_one_authority_and_routing_tree() -> None:
     accounts = _contract().bind_accounts([_account(), _account(user_id="user-2")])
 
-    assert {item["space_id"] for item in accounts} == {"space-canonical"}
+    assert {item["space_id"] for item in accounts} == {"workspace-canonical"}
+    assert {item["governance_teamspace_id"] for item in accounts} == {
+        "teamspace-canonical"
+    }
     assert {item["context_page_id"] for item in accounts} == {"authority-page"}
     assert {item["repo_ai_parent_page_id"] for item in accounts} == {"output-root"}
     assert {item["procedural_feedback_parent_page_id"] for item in accounts} == {
@@ -50,8 +54,8 @@ def test_contract_binds_every_account_to_one_authority_and_routing_tree() -> Non
     }
 
 
-def test_contract_rejects_teamspace_drift() -> None:
-    with pytest.raises(ValueError, match="teamspace"):
+def test_contract_rejects_workspace_drift() -> None:
+    with pytest.raises(ValueError, match="workspace"):
         _contract().bind_accounts([_account(space_id="other-space")])
 
 
@@ -68,7 +72,8 @@ def test_client_exposes_complete_governance_receipt() -> None:
     receipt = governance_receipt_from_client(client)
     assert receipt == {
         "contract_version": "test-v1",
-        "teamspace_id": "space-canonical",
+        "workspace_id": "workspace-canonical",
+        "teamspace_id": "teamspace-canonical",
         "authority_page_id": "authority-page",
         "documented_output_parent_page_id": "output-root",
         "procedural_feedback_parent_page_id": "feedback-root",
@@ -182,7 +187,7 @@ def test_mcp_chat_and_responses_outputs_keep_governance_receipt() -> None:
 
 
 def test_runtime_binding_rejects_unaligned_provider_account() -> None:
-    with pytest.raises(ValueError, match="teamspace"):
+    with pytest.raises(ValueError, match="workspace"):
         _contract().bind_accounts([_account(space_id="sandbox-space")])
 
 
@@ -207,7 +212,8 @@ def test_all_provider_routes_receive_the_same_governance_contract(model: str) ->
     _apply_notion_request_options(transcript, request, client)
 
     instructions = transcript[0]["value"]["ephemeralInstructions"]
-    assert "space-canonical" in instructions
+    assert "workspace-canonical" in instructions
+    assert "teamspace-canonical" in instructions
     assert "authority-page" in instructions
     assert "output-root" in instructions
     assert "feedback-root" in instructions
