@@ -41,6 +41,11 @@ from app.hive_runtime import (
     default_hive_runtime_db_path,
     get_hive_runtime_store,
 )
+from app.hive_dispatcher import (
+    HiveAdapterSnapshot,
+    HiveExecutionSnapshot,
+    get_hive_execution_dispatcher_store,
+)
 from app.hive_materialization import (
     HiveMaterializationSnapshot,
     get_hive_materialization_store,
@@ -4875,6 +4880,190 @@ def create_server(
             )
         except (HiveRuntimeError, ValueError) as exc:
             return _materialization_error_snapshot(exc, plan_id)
+
+
+    def _adapter_error_snapshot(exc: Exception) -> HiveAdapterSnapshot:
+        return HiveAdapterSnapshot(
+            ok=False,
+            db_path=str(default_hive_runtime_db_path()),
+            error=str(exc),
+        )
+
+    def _execution_error_snapshot(
+        exc: Exception,
+        execution_id: str = "",
+    ) -> HiveExecutionSnapshot:
+        return HiveExecutionSnapshot(
+            ok=False,
+            found=False,
+            db_path=str(default_hive_runtime_db_path()),
+            error=str(exc),
+            executions=[],
+            reviews=[],
+        )
+
+    @server.tool(name=_tool_name("notion2api_hive_upsert_execution_adapter"), description=_tool_description("Register or update one compiled safe execution adapter. Unknown implementations are rejected, adapters remain disabled unless explicitly human-approved, and compiled capability, domain, timeout, payload, review, and approval limits cannot be weakened."), structured_output=True)
+    async def notion2api_hive_upsert_execution_adapter(
+        adapter_id: str,
+        implementation_id: str,
+        display_name: str,
+        capabilities: list[str] | None = None,
+        writable_domains: list[str] | None = None,
+        required_authority: str = "A0",
+        max_timeout_ms: int = 1000,
+        max_payload_bytes: int = 4096,
+        requires_human_approval: bool = False,
+        requires_independent_review: bool = False,
+        enabled: bool = False,
+        actor: str = "notion2api",
+        human_approval: bool = False,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveAdapterSnapshot:
+        try:
+            return get_hive_execution_dispatcher_store().upsert_adapter(
+                adapter_id=adapter_id,
+                implementation_id=implementation_id,
+                display_name=display_name,
+                capabilities=capabilities,
+                writable_domains=writable_domains,
+                required_authority=required_authority,
+                max_timeout_ms=max_timeout_ms,
+                max_payload_bytes=max_payload_bytes,
+                requires_human_approval=requires_human_approval,
+                requires_independent_review=requires_independent_review,
+                enabled=enabled,
+                actor=actor,
+                human_approval=human_approval,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _adapter_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_list_execution_adapters"), description=_tool_description("List the durable AIgentBee execution-adapter allowlist. Built-in adapters are statically compiled and initially disabled; this operation is read-only."), structured_output=True)
+    async def notion2api_hive_list_execution_adapters(
+        adapter_id: str = "",
+        status: str = "",
+        limit: int = 100,
+    ) -> HiveAdapterSnapshot:
+        try:
+            return get_hive_execution_dispatcher_store().list_adapters(
+                adapter_id=adapter_id,
+                status=status,
+                limit=limit,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _adapter_error_snapshot(exc)
+
+    @server.tool(name=_tool_name("notion2api_hive_execute_dispatch"), description=_tool_description("Execute one READY materialized lane through an enabled compiled adapter after verifying the active lease, appointed worker, capability, writable-domain allowlists, authority ceiling, payload boundary, timeout, and any human-approval requirement. No shell, browser, filesystem, credential, network, or arbitrary code adapter is available."), structured_output=True)
+    async def notion2api_hive_execute_dispatch(
+        plan_id: str,
+        work_unit_id: str,
+        adapter_id: str,
+        requested_capability: str,
+        payload: dict[str, Any],
+        requested_writable_domains: list[str] | None = None,
+        timeout_ms: int = 1000,
+        actor: str = "notion2api",
+        human_approval: bool = False,
+        execution_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveExecutionSnapshot:
+        try:
+            return get_hive_execution_dispatcher_store().execute_dispatch(
+                plan_id=plan_id,
+                work_unit_id=work_unit_id,
+                adapter_id=adapter_id,
+                requested_capability=requested_capability,
+                payload=payload,
+                requested_writable_domains=requested_writable_domains,
+                timeout_ms=timeout_ms,
+                actor=actor,
+                human_approval=human_approval,
+                execution_id=execution_id,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _execution_error_snapshot(exc, execution_id or "")
+
+    @server.tool(name=_tool_name("notion2api_hive_get_execution"), description=_tool_description("Read durable guarded-dispatch executions and independent-review receipts by execution, plan, or work-unit id. With no identifier, returns the most recent bounded set."), structured_output=True)
+    async def notion2api_hive_get_execution(
+        execution_id: str = "",
+        plan_id: str = "",
+        work_unit_id: str = "",
+        limit: int = 100,
+    ) -> HiveExecutionSnapshot:
+        try:
+            return get_hive_execution_dispatcher_store().get_execution(
+                execution_id=execution_id,
+                plan_id=plan_id,
+                work_unit_id=work_unit_id,
+                limit=limit,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _execution_error_snapshot(exc, execution_id)
+
+    @server.tool(name=_tool_name("notion2api_hive_cancel_execution"), description=_tool_description("Request cooperative cancellation of a RUNNING guarded execution or terminally cancel a claimed or review-pending execution while preserving evidence and synchronizing the Phase 2 dispatch receipt."), structured_output=True)
+    async def notion2api_hive_cancel_execution(
+        execution_id: str,
+        actor: str,
+        reason: str,
+        idempotency_key: str | None = None,
+    ) -> HiveExecutionSnapshot:
+        try:
+            return get_hive_execution_dispatcher_store().cancel_execution(
+                execution_id=execution_id,
+                actor=actor,
+                reason=reason,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _execution_error_snapshot(exc, execution_id)
+
+    @server.tool(name=_tool_name("notion2api_hive_recover_execution"), description=_tool_description("Human-approved recovery for a stale CLAIMED or RUNNING guarded execution. Recovery reuses the persisted bounded request, increments the attempt ledger, remains idempotent, and finalizes a pending cancellation instead of rerunning it."), structured_output=True)
+    async def notion2api_hive_recover_execution(
+        execution_id: str,
+        actor: str,
+        reason: str,
+        stale_after_ms: int = 30000,
+        human_approval: bool = False,
+        idempotency_key: str | None = None,
+    ) -> HiveExecutionSnapshot:
+        try:
+            return get_hive_execution_dispatcher_store().recover_execution(
+                execution_id=execution_id,
+                actor=actor,
+                reason=reason,
+                stale_after_ms=stale_after_ms,
+                human_approval=human_approval,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _execution_error_snapshot(exc, execution_id)
+
+    @server.tool(name=_tool_name("notion2api_hive_review_execution"), description=_tool_description("Submit the independent review for a REVIEW_REQUIRED execution. The reviewer must be a distinct APPOINTED GOVERNANCE_REVIEWER with sufficient authority; approval completes the lane and rejection fails it."), structured_output=True)
+    async def notion2api_hive_review_execution(
+        execution_id: str,
+        reviewer_worker_id: str,
+        approved: bool,
+        actor: str,
+        findings: dict[str, Any] | None = None,
+        human_approval: bool = False,
+        idempotency_key: str | None = None,
+    ) -> HiveExecutionSnapshot:
+        try:
+            return get_hive_execution_dispatcher_store().review_execution(
+                execution_id=execution_id,
+                reviewer_worker_id=reviewer_worker_id,
+                approved=approved,
+                actor=actor,
+                findings=findings,
+                human_approval=human_approval,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _execution_error_snapshot(exc, execution_id)
 
     @server.tool(name=_tool_name("notion2api_list_sessions"), description=_tool_description("List named persistent Notion2API MCP chat sessions with local and remote identifiers."), structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:
