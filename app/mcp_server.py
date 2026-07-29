@@ -103,6 +103,7 @@ class HealthOutput(BaseModel):
     accounts_total: int | None = Field(default=None, description="Total configured account count.")
     accounts_cooling: int | None = Field(default=None, description="Number of accounts currently cooling down.")
     uptime: int | float | None = Field(default=None, description="Backend uptime, if reported.")
+    account_selection: dict[str, Any] = Field(default_factory=dict, description="Safe Auto/Pinned account-selection summary.")
     governance: dict[str, Any] = Field(default_factory=dict, description="Canonical governance/teamspace receipt.")
     raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend health response.")
 
@@ -3672,6 +3673,7 @@ def create_server(
             accounts_total=data.get("accounts_total"),
             accounts_cooling=data.get("accounts_cooling"),
             uptime=data.get("uptime"),
+            account_selection=dict(data.get("account_selection") or {}),
             governance=dict(data.get("governance") or {}),
             raw=data,
         )
