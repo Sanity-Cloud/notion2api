@@ -972,7 +972,8 @@ class HiveMaterializationStore:
             "expected_revision": expected_revision,
         }
         fingerprint = self._fingerprint(request)
-        with self._write() as conn:
+        conn = self._connect()
+        try:
             if idempotency_key:
                 existing = conn.execute(
                     """
@@ -991,7 +992,7 @@ class HiveMaterializationStore:
                     return self._snapshot(conn, str(existing["plan_id"]))
             row = conn.execute(
                 """
-                SELECT status, revision
+                SELECT mission_id, status, revision
                 FROM hive_dispatch_receipts
                 WHERE plan_id = ? AND work_unit_id = ?
                 """,
@@ -999,17 +1000,55 @@ class HiveMaterializationStore:
             ).fetchone()
             if not row:
                 raise HiveNotFoundError(f"Dispatch receipt not found: {work_unit_id}")
+            mission_id = str(row["mission_id"])
             current = str(row["status"])
-            if expected_revision is not None and int(row["revision"]) != int(
+            receipt_revision = int(row["revision"])
+            if expected_revision is not None and receipt_revision != int(
                 expected_revision
             ):
                 raise HiveTransitionError(
                     "Stale dispatch revision: expected "
-                    f"{expected_revision}, current {int(row['revision'])}."
+                    f"{expected_revision}, current {receipt_revision}."
                 )
             if target not in DISPATCH_TRANSITIONS.get(current, set()):
                 raise HiveTransitionError(
                     f"Illegal dispatch transition: {current} -> {target}"
+                )
+        finally:
+            conn.close()
+
+        terminal_work_status = target if target in TERMINAL_DISPATCH else None
+        self.runtime.append_event(
+            mission_id=mission_id,
+            event_type=f"DISPATCH_{target}",
+            sender=request["actor"],
+            payload={
+                "plan_id": plan_id,
+                "dispatch_status": target,
+                "evidence": request["evidence"],
+            },
+            work_unit_id=work_unit_id,
+            work_unit_status=terminal_work_status,
+            idempotency_key=f"materialization-dispatch:{fingerprint}",
+        )
+
+        with self._write() as conn:
+            current_row = conn.execute(
+                """
+                SELECT status, revision
+                FROM hive_dispatch_receipts
+                WHERE plan_id = ? AND work_unit_id = ?
+                """,
+                (plan_id, work_unit_id),
+            ).fetchone()
+            if not current_row:
+                raise HiveNotFoundError(f"Dispatch receipt not found: {work_unit_id}")
+            if (
+                str(current_row["status"]) != current
+                or int(current_row["revision"]) != receipt_revision
+            ):
+                raise HiveTransitionError(
+                    "Dispatch receipt changed during runtime synchronization."
                 )
             now = self._now_ms()
             conn.execute(
@@ -1040,6 +1079,7 @@ class HiveMaterializationStore:
                     "from_status": current,
                     "to_status": target,
                     "evidence": request["evidence"],
+                    "mission_work_status": terminal_work_status or "UNCHANGED",
                 },
                 idempotency_key=idempotency_key,
                 fingerprint=fingerprint,

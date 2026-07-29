@@ -306,7 +306,7 @@ def test_three_lane_hive_has_bindings_leases_and_review_dependencies(tmp_path):
 
 
 def test_dispatch_completion_releases_leases_and_enters_fan_in(tmp_path):
-    store, _workforce, _runtime, result = _materialize_three_lane_hive(tmp_path)
+    store, _workforce, runtime, result = _materialize_three_lane_hive(tmp_path)
     current = result
     for receipt in result.dispatch_receipts:
         current = store.record_dispatch_receipt(
@@ -323,6 +323,11 @@ def test_dispatch_completion_releases_leases_and_enters_fan_in(tmp_path):
     assert {item.status for item in current.dispatch_receipts} == {
         DispatchStatus.COMPLETED.value
     }
+    mission = runtime.get_mission(result.mission_id)
+    assert {item.status for item in mission.work_units} == {"COMPLETED"}
+    assert (
+        sum(event.event_type == "DISPATCH_COMPLETED" for event in mission.events) == 3
+    )
     completed = current.dispatch_receipts[0]
     with pytest.raises(HiveTransitionError, match="Illegal dispatch"):
         store.record_dispatch_receipt(
@@ -335,7 +340,7 @@ def test_dispatch_completion_releases_leases_and_enters_fan_in(tmp_path):
 
 
 def test_failed_lane_closes_with_failure_and_releases_leases(tmp_path):
-    store, _workforce, _runtime, result = _materialize_three_lane_hive(tmp_path)
+    store, _workforce, runtime, result = _materialize_three_lane_hive(tmp_path)
     current = result
     for index, receipt in enumerate(result.dispatch_receipts):
         current = store.record_dispatch_receipt(
@@ -348,6 +353,36 @@ def test_failed_lane_closes_with_failure_and_releases_leases(tmp_path):
         )
     assert current.status == MaterializationStatus.CLOSED_WITH_FAILURE.value
     assert {item.status for item in current.leases} == {LeaseStatus.RELEASED.value}
+    mission_statuses = {
+        item.status for item in runtime.get_mission(result.mission_id).work_units
+    }
+    assert mission_statuses == {"COMPLETED", "FAILED"}
+
+
+def test_acknowledgement_records_event_without_closing_work_unit(tmp_path):
+    store, _workforce, runtime, result = _materialize_three_lane_hive(tmp_path)
+    receipt = result.dispatch_receipts[0]
+    acknowledged = store.record_dispatch_receipt(
+        plan_id=result.plan_id,
+        work_unit_id=receipt.work_unit_id,
+        status="ACKNOWLEDGED",
+        actor=receipt.worker_id,
+        evidence={"accepted": True},
+        expected_revision=receipt.revision,
+        idempotency_key="acknowledge-phase2-lane",
+    )
+    updated = next(
+        item
+        for item in acknowledged.dispatch_receipts
+        if item.work_unit_id == receipt.work_unit_id
+    )
+    assert updated.status == DispatchStatus.ACKNOWLEDGED.value
+    mission = runtime.get_mission(result.mission_id)
+    lane = next(
+        item for item in mission.work_units if item.work_unit_id == receipt.work_unit_id
+    )
+    assert lane.status == "ACTIVE"
+    assert mission.events[-1].event_type == "DISPATCH_ACKNOWLEDGED"
 
 
 def test_explicit_lease_revocation_is_durable_and_idempotent(tmp_path):
