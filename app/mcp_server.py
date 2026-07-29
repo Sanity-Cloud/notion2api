@@ -41,6 +41,10 @@ from app.hive_runtime import (
     default_hive_runtime_db_path,
     get_hive_runtime_store,
 )
+from app.hive_materialization import (
+    HiveMaterializationSnapshot,
+    get_hive_materialization_store,
+)
 from app.hive_workforce import (
     HiveInvocationPlan,
     WorkforceSnapshot,
@@ -4735,6 +4739,143 @@ def create_server(
             )
         except (HiveRuntimeError, ValueError) as exc:
             return _invocation_error_plan(exc, objective)
+    def _materialization_error_snapshot(
+        exc: Exception,
+        plan_id: str = "",
+        mission_id: str = "",
+    ) -> HiveMaterializationSnapshot:
+        return HiveMaterializationSnapshot(
+            ok=False,
+            found=False,
+            db_path=str(default_hive_runtime_db_path()),
+            plan_id=plan_id,
+            mission_id=mission_id,
+            error=str(exc),
+        )
+
+    @server.tool(name=_tool_name("notion2api_hive_materialize_invocation"), description=_tool_description("Persist an invocation plan and, when coverage and approval gates pass, create a durable Hive mission with appointed-worker bindings, bounded leases, conversation bindings, and READY dispatch receipts."), structured_output=True)
+    async def notion2api_hive_materialize_invocation(
+        objective: str,
+        required_competencies: list[str] | None = None,
+        writable_domains: list[str] | None = None,
+        dependency_count: int = 0,
+        parallelizable_workstreams: int = 1,
+        risk_level: str = "low",
+        authority_ceiling: str = "A0",
+        independent_review_required: bool = False,
+        external_effects: bool = False,
+        preferred_worker_ids: list[str] | None = None,
+        parent_context_id: str = "",
+        lifecycle_stage: str = "Build",
+        human_approval: bool = False,
+        actor: str = "notion2api",
+        plan_id: str | None = None,
+        mission_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveMaterializationSnapshot:
+        try:
+            return get_hive_materialization_store().materialize_invocation(
+                objective=objective,
+                required_competencies=required_competencies,
+                writable_domains=writable_domains,
+                dependency_count=dependency_count,
+                parallelizable_workstreams=parallelizable_workstreams,
+                risk_level=risk_level,
+                authority_ceiling=authority_ceiling,
+                independent_review_required=independent_review_required,
+                external_effects=external_effects,
+                preferred_worker_ids=preferred_worker_ids,
+                parent_context_id=parent_context_id,
+                lifecycle_stage=lifecycle_stage,
+                human_approval=human_approval,
+                actor=actor,
+                plan_id=plan_id,
+                mission_id=mission_id,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _materialization_error_snapshot(
+                exc,
+                plan_id or "",
+                mission_id or "",
+            )
+
+    @server.tool(name=_tool_name("notion2api_hive_approve_materialization"), description=_tool_description("Approve one AWAITING_APPROVAL invocation plan and materialize it only if the selected workers remain appointed and all authority, domain, competency, and review constraints still pass."), structured_output=True)
+    async def notion2api_hive_approve_materialization(
+        plan_id: str,
+        actor: str,
+        reason: str,
+        idempotency_key: str | None = None,
+    ) -> HiveMaterializationSnapshot:
+        try:
+            return get_hive_materialization_store().approve_materialization(
+                plan_id=plan_id,
+                actor=actor,
+                reason=reason,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _materialization_error_snapshot(exc, plan_id)
+
+    @server.tool(name=_tool_name("notion2api_hive_get_materialization"), description=_tool_description("Read a durable invocation plan, its materialized mission, worker leases, conversation bindings, and dispatch receipts by plan or mission id."), structured_output=True)
+    async def notion2api_hive_get_materialization(
+        plan_id: str = "",
+        mission_id: str = "",
+    ) -> HiveMaterializationSnapshot:
+        try:
+            return get_hive_materialization_store().get_materialization(
+                plan_id=plan_id,
+                mission_id=mission_id,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _materialization_error_snapshot(
+                exc,
+                plan_id,
+                mission_id,
+            )
+
+    @server.tool(name=_tool_name("notion2api_hive_record_dispatch_receipt"), description=_tool_description("Record ACKNOWLEDGED, COMPLETED, FAILED, or CANCELLED execution evidence for one materialized worker lane. When all lanes become terminal, active leases are released and the plan enters fan-in or failure review."), structured_output=True)
+    async def notion2api_hive_record_dispatch_receipt(
+        plan_id: str,
+        work_unit_id: str,
+        status: str,
+        actor: str,
+        evidence: dict[str, Any] | None = None,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveMaterializationSnapshot:
+        try:
+            return get_hive_materialization_store().record_dispatch_receipt(
+                plan_id=plan_id,
+                work_unit_id=work_unit_id,
+                status=status,
+                actor=actor,
+                evidence=evidence,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _materialization_error_snapshot(exc, plan_id)
+
+    @server.tool(name=_tool_name("notion2api_hive_release_materialization_leases"), description=_tool_description("Release or revoke all active worker leases for one materialization plan while preserving its mission, bindings, receipts, and evidence ledger."), structured_output=True)
+    async def notion2api_hive_release_materialization_leases(
+        plan_id: str,
+        actor: str,
+        reason: str,
+        revoke: bool = False,
+        idempotency_key: str | None = None,
+    ) -> HiveMaterializationSnapshot:
+        try:
+            return get_hive_materialization_store().release_leases(
+                plan_id=plan_id,
+                actor=actor,
+                reason=reason,
+                revoke=revoke,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _materialization_error_snapshot(exc, plan_id)
+
     @server.tool(name=_tool_name("notion2api_list_sessions"), description=_tool_description("List named persistent Notion2API MCP chat sessions with local and remote identifiers."), structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:
         records = _load_session_records()
