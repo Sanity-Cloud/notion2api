@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.governance import DEFAULT_AUTHORITY_PAGE_ID, DEFAULT_CONTRACT_VERSION
+
 
 class WorkspaceLibraryRecord(BaseModel):
     record_id: str
@@ -24,6 +26,10 @@ class WorkspaceLibraryRecord(BaseModel):
     scope: str = ""
     exclusions: list[str] = Field(default_factory=list)
     accountable_human: str = ""
+    authority_basis: str = ""
+    authority_owner: str = ""
+    governance_contract: str = ""
+    authority_receipt: dict[str, Any] = Field(default_factory=dict)
     authority_ceiling: str = ""
     source_boundary: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
@@ -37,9 +43,12 @@ class WorkspaceLibraryRecord(BaseModel):
 
 
 class WorkspaceLibraryProjection(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     root_record_id: str
     mission_id: str
+    governance_contract: str = DEFAULT_CONTRACT_VERSION
+    authority_page_id: str = DEFAULT_AUTHORITY_PAGE_ID
+    authorization_basis: str = "governance_plan_inference"
     records: list[WorkspaceLibraryRecord] = Field(default_factory=list)
     evidence_gaps: list[str] = Field(default_factory=list)
 
@@ -69,12 +78,19 @@ def _event_record_type(event_type: str) -> str:
 def build_workspace_library(
     snapshot: Any,
     *,
-    governance_root_id: str = "SanityCloud",
+    governance_root_id: str = DEFAULT_AUTHORITY_PAGE_ID,
     accountable_human: str = "",
+    authority_owner: str = "AIgentBee shared leader",
+    governance_contract: str = DEFAULT_CONTRACT_VERSION,
+    authorization_basis: str = "governance_plan_inference",
+    authority_receipt: dict[str, Any] | None = None,
 ) -> WorkspaceLibraryProjection:
     """Project one Hive mission into a stable organizational-library hierarchy.
 
     Lineage: governance root -> mission/project -> work-unit/branch -> event records.
+    Operational authority is projected from the canonical governance contract,
+    adopted mission plan, authority ceiling, and decision receipts. The legacy
+    accountable_human value is retained only as optional ultimate ownership metadata.
     Missing governance information is reported as an evidence gap and is never
     synthesized from titles, prompts, or model output.
     """
@@ -86,6 +102,15 @@ def build_workspace_library(
     parent_context_id = str(data.get("parent_context_id") or governance_root_id).strip()
     records: list[WorkspaceLibraryRecord] = []
     gaps: list[str] = []
+    authority_ceiling = str(data.get("authority_ceiling") or "").strip()
+    receipt = dict(authority_receipt or data.get("authority_receipt") or {})
+    receipt.setdefault("authorization_basis", authorization_basis)
+    receipt.setdefault("governance_contract", governance_contract)
+    receipt.setdefault("authority_page_id", governance_root_id)
+    receipt.setdefault("authority_ceiling", authority_ceiling)
+    receipt.setdefault("authority_owner", authority_owner)
+    receipt.setdefault("per_action_human_approval_required", False)
+    receipt.setdefault("ultimate_accountability_owner", accountable_human)
 
     mission_record_id = f"project:{mission_id}"
     records.append(
@@ -99,8 +124,14 @@ def build_workspace_library(
             status=str(data.get("status") or ""),
             purpose=str(data.get("objective") or ""),
             accountable_human=accountable_human,
-            authority_ceiling=str(data.get("authority_ceiling") or ""),
+            authority_basis=authorization_basis,
+            authority_owner=authority_owner,
+            governance_contract=governance_contract,
+            authority_receipt=receipt,
+            authority_ceiling=authority_ceiling,
             metadata={
+                "ultimate_accountability_only": bool(accountable_human),
+                "per_action_human_approval_required": False,
                 "lifecycle_stage": str(data.get("lifecycle_stage") or ""),
                 "revision": int(data.get("revision") or 0),
                 "created_at": int(data.get("created_at") or 0),
@@ -109,8 +140,12 @@ def build_workspace_library(
         )
     )
 
-    if not accountable_human:
-        gaps.append(f"{mission_record_id}: accountable_human is not recorded")
+    if not authority_ceiling:
+        gaps.append(f"{mission_record_id}: authority_ceiling is not recorded")
+    if not authority_owner:
+        gaps.append(f"{mission_record_id}: authority_owner is not recorded")
+    if not governance_contract:
+        gaps.append(f"{mission_record_id}: governance_contract is not recorded")
     for field_name in (
         "exclusions",
         "source_boundary",
@@ -156,6 +191,14 @@ def build_workspace_library(
                 status=str(work.get("status") or ""),
                 purpose=str(work.get("role") or ""),
                 scope=str(work.get("writable_domain") or ""),
+                authority_basis=authorization_basis,
+                authority_owner=authority_owner,
+                governance_contract=governance_contract,
+                authority_receipt={
+                    **receipt,
+                    "work_unit_id": work_unit_id,
+                    "authority_ceiling": str(work.get("authority_ceiling") or ""),
+                },
                 authority_ceiling=str(work.get("authority_ceiling") or ""),
                 dependencies=dependencies,
                 metadata={
@@ -187,6 +230,14 @@ def build_workspace_library(
                 title=str(event.get("event_type") or "EVENT"),
                 status=str(payload.get("status") or ""),
                 purpose=str(payload.get("summary") or payload.get("note") or ""),
+                authority_basis=str(payload.get("authorization_basis") or authorization_basis),
+                authority_owner=str(payload.get("authority_owner") or event.get("sender") or authority_owner),
+                governance_contract=str(payload.get("governance_contract") or governance_contract),
+                authority_receipt=(
+                    payload.get("authority_receipt")
+                    if isinstance(payload.get("authority_receipt"), dict)
+                    else receipt
+                ),
                 evidence=(
                     payload.get("evidence")
                     if isinstance(payload.get("evidence"), list)
@@ -215,6 +266,14 @@ def build_workspace_library(
                 title=str(decision.get("status") or "Decision"),
                 status=str(decision.get("status") or ""),
                 purpose=str(decision.get("summary") or ""),
+                authority_basis=str(decision.get("authorization_basis") or authorization_basis),
+                authority_owner=str(decision.get("authority_owner") or authority_owner),
+                governance_contract=str(decision.get("governance_contract") or governance_contract),
+                authority_receipt=(
+                    decision.get("authority_receipt")
+                    if isinstance(decision.get("authority_receipt"), dict)
+                    else receipt
+                ),
                 evidence=(
                     decision.get("evidence")
                     if isinstance(decision.get("evidence"), list)
@@ -232,6 +291,9 @@ def build_workspace_library(
     return WorkspaceLibraryProjection(
         root_record_id=parent_context_id,
         mission_id=mission_id,
+        governance_contract=governance_contract,
+        authority_page_id=governance_root_id,
+        authorization_basis=authorization_basis,
         records=records,
         evidence_gaps=sorted(set(gaps)),
     )
