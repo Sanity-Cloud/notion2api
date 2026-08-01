@@ -9,6 +9,7 @@ import uuid
 from app.chat_history.extractor import collect_hydration_message_ids
 from app.chat_history.har_importer import import_chat_object
 from app.chat_history.notion_sync import HYDRATE_ENDPOINT, _post_json
+from app.identity_scope import identity_scope_from_client
 from app.logger import logger
 
 if TYPE_CHECKING:
@@ -17,13 +18,13 @@ if TYPE_CHECKING:
 
 _PENDING_TTL_SECONDS = 15 * 60
 _PENDING_LOCK = threading.RLock()
-_PENDING_BY_THREAD: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
-_PENDING_UPDATED_AT: dict[tuple[str, str], float] = {}
+_PENDING_BY_THREAD: dict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = {}
+_PENDING_UPDATED_AT: dict[tuple[str, str, str, str], float] = {}
 
 # Deduplicate auto-approval submissions per account/thread/tool-step.
 _APPROVAL_LOCK = threading.RLock()
-_APPROVAL_STATE: dict[tuple[str, str, str], dict[str, Any]] = {}
-_APPROVAL_UPDATED_AT: dict[tuple[str, str, str], float] = {}
+_APPROVAL_STATE: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+_APPROVAL_UPDATED_AT: dict[tuple[str, str, str, str, str], float] = {}
 _AUDIT_RECEIPTS: list[dict[str, Any]] = []
 _AUDIT_RECEIPTS_LIMIT = 200
 
@@ -39,30 +40,30 @@ def external_url_approval_policy() -> str:
     raw = (
         os.getenv("EXTERNAL_URL_APPROVAL_POLICY")
         or os.getenv("Notion__ExternalUrlApprovalPolicy")
-        or "allow_all"
+        or "manual"
     )
     policy = str(raw).strip().lower()
     if policy in {"allow_all", "allow-all", "all"}:
         return "allow_all"
     if policy in {"manual", "prompt", "ask"}:
         return "manual"
-    return "allow_all"
+    return "manual"
 
 
 def auto_continue_external_url_confirmations_enabled() -> bool:
     if os.getenv("AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS") is not None:
-        return _env_flag("AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS", default=True)
+        return _env_flag("AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS", default=False)
     if os.getenv("Notion__AutoContinueExternalUrlConfirmations") is not None:
-        return _env_flag("Notion__AutoContinueExternalUrlConfirmations", default=True)
+        return _env_flag("Notion__AutoContinueExternalUrlConfirmations", default=False)
     return external_url_approval_policy() == "allow_all"
 
 
 def external_url_auto_approve_max_retries() -> int:
-    raw = os.getenv("EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES", "2")
+    raw = os.getenv("EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES", "1")
     try:
-        return max(0, int(raw or "2"))
+        return min(3, max(0, int(raw or "1")))
     except (TypeError, ValueError):
-        return 2
+        return 1
 
 
 def should_auto_continue_external_url_confirmations() -> bool:
@@ -72,14 +73,16 @@ def should_auto_continue_external_url_confirmations() -> bool:
     )
 
 
-def _registry_key(client: "NotionOpusAPI", thread_id: str) -> tuple[str, str]:
-    account = str(getattr(client, "account_key", "") or getattr(client, "user_id", "") or "default")
-    return account, str(thread_id or "").strip()
+def _registry_key(
+    client: "NotionOpusAPI", thread_id: str
+) -> tuple[str, str, str, str]:
+    return identity_scope_from_client(client, thread_id).key
 
 
-def _approval_key(client: "NotionOpusAPI", thread_id: str, tool_step_id: str) -> tuple[str, str, str]:
-    account, clean_thread = _registry_key(client, thread_id)
-    return account, clean_thread, str(tool_step_id or "").strip()
+def _approval_key(
+    client: "NotionOpusAPI", thread_id: str, tool_step_id: str
+) -> tuple[str, str, str, str, str]:
+    return (*_registry_key(client, thread_id), str(tool_step_id or "").strip())
 
 
 def _prune_pending_locked(now: float | None = None) -> None:

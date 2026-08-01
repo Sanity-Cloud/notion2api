@@ -13,6 +13,10 @@ from typing import Any, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.governed_authorization import (
+    GovernedAuthorizationError,
+    require_governed_authorization,
+)
 from app.hive_runtime import (
     HiveIdempotencyConflict,
     HiveNotFoundError,
@@ -345,16 +349,31 @@ class HiveWorkforceStore:
         actor: str,
         reason: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> WorkforceSnapshot:
         target = WorkerStage(str(target_stage).strip().upper()).value
+        authorization_receipt: dict[str, Any] = {}
+        if target in HUMAN_APPROVAL_STAGES:
+            required_authority = (
+                "A2" if target == WorkerStage.APPOINTED.value else "A1"
+            )
+            try:
+                authorization_receipt = require_governed_authorization(
+                    governance_authorization,
+                    required_authority=required_authority,
+                    legacy_human_approval=human_approval,
+                )
+            except GovernedAuthorizationError as exc:
+                raise HiveTransitionError(str(exc)) from exc
         request = {
             "worker_id": self._required(worker_id, "worker_id"),
             "target_stage": target,
             "actor": self._required(actor, "actor"),
             "reason": self._required(reason, "reason"),
             "human_approval": bool(human_approval),
+            "governance_authorization": authorization_receipt,
             "expected_revision": expected_revision,
         }
         fingerprint = self._fingerprint(request)
@@ -380,10 +399,6 @@ class HiveWorkforceStore:
                 )
             if target not in WORKER_TRANSITIONS.get(current, set()):
                 raise HiveTransitionError(f"Illegal worker transition: {current} -> {target}")
-            if target in HUMAN_APPROVAL_STAGES and not human_approval:
-                raise HiveTransitionError(
-                    f"Human approval is required for worker transition to {target}."
-                )
             now = self._now_ms()
             conn.execute(
                 "UPDATE hive_workers SET stage = ?, updated_at = ?, revision = revision + 1 WHERE worker_id = ?",

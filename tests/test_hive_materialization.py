@@ -284,9 +284,10 @@ def test_three_lane_hive_has_bindings_leases_and_review_dependencies(tmp_path):
         DispatchStatus.READY.value
     }
     assert all(
-        item.conversation_id.startswith("aigentbee:phase2-plan:")
+        item.conversation_id.startswith("aigentbee:worker:")
         for item in result.dispatch_receipts
     )
+    assert len({item.conversation_id for item in result.dispatch_receipts}) == 3
 
     mission = runtime.get_mission("phase2-mission")
     assert mission.found is True

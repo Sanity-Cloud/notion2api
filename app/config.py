@@ -119,24 +119,24 @@ ALLOWED_ORIGINS = parse_allowed_origins(
 # External URL confirmations from Notion (connections.web.loadPage / urlSafety).
 # Notion2API treats these as protocol continuation requirements, not local access
 # gates. Authorization gating belongs outside this service.
-# EXTERNAL_URL_APPROVAL_POLICY: allow_all (default) | manual
+# EXTERNAL_URL_APPROVAL_POLICY: manual (default) | allow_all
 # AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS: automatically call allow-once continuation
 EXTERNAL_URL_APPROVAL_POLICY = (
     (
         os.getenv("EXTERNAL_URL_APPROVAL_POLICY")
         or os.getenv("Notion__ExternalUrlApprovalPolicy")
-        or "allow_all"
+        or "manual"
     )
     .strip()
     .lower()
 )
 AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS = _env_flag(
     "AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS",
-    default=_env_flag("Notion__AutoContinueExternalUrlConfirmations", default=True),
+    default=_env_flag("Notion__AutoContinueExternalUrlConfirmations", default=False),
 )
 EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES = max(
     0,
-    int(os.getenv("EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES", "2") or "2"),
+    min(3, int(os.getenv("EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES", "1") or "1")),
 )
 
 # APP_MODE: heavytextlite text standard

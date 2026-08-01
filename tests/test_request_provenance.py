@@ -35,7 +35,7 @@ def test_echoed_model_route_is_observed_but_not_verified() -> None:
     assert "verified_model" not in metadata
 
 
-def test_mismatched_upstream_model_is_recorded_as_verified_substitution() -> None:
+def test_mismatched_upstream_model_remains_observed_without_authoritative_source() -> None:
     metadata = _response_model_metadata(
         "terra",
         {
@@ -45,11 +45,28 @@ def test_mismatched_upstream_model_is_recorded_as_verified_substitution() -> Non
         },
     )
 
+    assert "verified_model" not in metadata
+    assert metadata["model_identity_verified"] is False
+    assert metadata["model_identity_confidence"] == "observed"
+    assert metadata["model_substitution"]["resolved_model"] == "orange-mousse"
+    assert metadata["model_substitution"]["responding_model"] == "baseten-glm-5.2"
+    assert metadata["model_substitution"]["verified"] is False
+
+
+def test_authoritative_upstream_source_can_verify_model_substitution() -> None:
+    metadata = _response_model_metadata(
+        "terra",
+        {
+            "notion_requested_model": "orange-mousse",
+            "actual_model": "baseten-glm-5.2",
+            "actual_model_verified": True,
+            "actual_model_source": "authoritative_upstream_metadata",
+        },
+    )
+
     assert metadata["verified_model"] == "baseten-glm-5.2"
     assert metadata["model_identity_verified"] is True
     assert metadata["model_identity_confidence"] == "verified"
-    assert metadata["model_substitution"]["resolved_model"] == "orange-mousse"
-    assert metadata["model_substitution"]["responding_model"] == "baseten-glm-5.2"
 
 
 def test_unverified_observation_does_not_replace_response_model() -> None:
@@ -70,7 +87,7 @@ def test_unverified_observation_does_not_replace_response_model() -> None:
     assert "verified_model" not in response.model_metadata
 
 
-def test_verified_responder_replaces_response_model() -> None:
+def test_only_authoritatively_verified_responder_replaces_response_model() -> None:
     response = _response()
 
     _attach_response_model_metadata(
@@ -79,7 +96,8 @@ def test_verified_responder_replaces_response_model() -> None:
         {
             "notion_requested_model": "orange-mousse",
             "actual_model": "baseten-glm-5.2",
-            "actual_model_source": "notion_step_model_mismatch",
+            "actual_model_verified": True,
+            "actual_model_source": "authoritative_upstream_metadata",
         },
     )
 

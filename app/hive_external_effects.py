@@ -16,6 +16,10 @@ from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.governed_authorization import (
+    GovernedAuthorizationError,
+    require_governed_authorization,
+)
 from app.hive_runtime import (
     HiveIdempotencyConflict,
     HiveNotFoundError,
@@ -433,13 +437,18 @@ class ExternalEffectCertificationStore:
         reviewer_worker_id: str,
         actor: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         certification_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> ExternalEffectSnapshot:
-        if not human_approval:
-            raise HiveTransitionError(
-                "Human approval is required to certify an external-effect adapter."
+        try:
+            authorization_receipt = require_governed_authorization(
+                governance_authorization,
+                required_authority="A3",
+                legacy_human_approval=human_approval,
             )
+        except GovernedAuthorizationError as exc:
+            raise HiveTransitionError(str(exc)) from exc
         adapter_key = self._required(adapter_id, "adapter_id")
         implementation_key = self._required(implementation_id, "implementation_id")
         if (
@@ -518,7 +527,8 @@ class ExternalEffectCertificationStore:
             **contract,
             "certification_id": cert_key,
             "actor": actor_key,
-            "human_approval": True,
+            "human_approval": bool(human_approval),
+            "governance_authorization": authorization_receipt,
         }
         fingerprint = self._fingerprint(request)
         contract_sha = self._fingerprint(contract)
@@ -636,13 +646,18 @@ class ExternalEffectCertificationStore:
         actor: str,
         reason: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> ExternalEffectSnapshot:
-        if not human_approval:
-            raise HiveTransitionError(
-                "Human approval is required to change certification status."
+        try:
+            authorization_receipt = require_governed_authorization(
+                governance_authorization,
+                required_authority="A3",
+                legacy_human_approval=human_approval,
             )
+        except GovernedAuthorizationError as exc:
+            raise HiveTransitionError(str(exc)) from exc
         target = CertificationStatus(str(target_status).strip().upper()).value
         cert_key = self._required(certification_id, "certification_id")
         request = {
@@ -650,7 +665,8 @@ class ExternalEffectCertificationStore:
             "target_status": target,
             "actor": self._required(actor, "actor"),
             "reason": self._required(reason, "reason"),
-            "human_approval": True,
+            "human_approval": bool(human_approval),
+            "governance_authorization": authorization_receipt,
         }
         fingerprint = self._fingerprint(request)
         with self._write() as conn:
@@ -1049,12 +1065,17 @@ class ExternalEffectCertificationStore:
         actor: str,
         reason: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> ExternalEffectSnapshot:
-        if not human_approval:
-            raise HiveTransitionError(
-                "Human approval is required to roll back an external effect."
+        try:
+            authorization_receipt = require_governed_authorization(
+                governance_authorization,
+                required_authority="A3",
+                legacy_human_approval=human_approval,
             )
+        except GovernedAuthorizationError as exc:
+            raise HiveTransitionError(str(exc)) from exc
         reviewer = self._reviewer(reviewer_worker_id)
         actor_key = self._required(actor, "actor")
         if reviewer.worker_id == actor_key:
@@ -1067,7 +1088,8 @@ class ExternalEffectCertificationStore:
             "reviewer_worker_id": reviewer.worker_id,
             "actor": actor_key,
             "reason": self._required(reason, "reason"),
-            "human_approval": True,
+            "human_approval": bool(human_approval),
+            "governance_authorization": authorization_receipt,
         }
         fingerprint = self._fingerprint(request)
         if idempotency_key:

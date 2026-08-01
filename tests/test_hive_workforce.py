@@ -94,7 +94,7 @@ def test_register_is_idempotent_and_conflicting_reuse_fails(tmp_path):
         )
 
 
-def test_probation_and_appointment_require_human_approval(tmp_path):
+def test_probation_and_appointment_require_governance_authorization(tmp_path):
     store = _store(tmp_path)
     _register(store)
     shadow = store.transition_worker(
@@ -104,7 +104,7 @@ def test_probation_and_appointment_require_human_approval(tmp_path):
         reason="Observe existing work.",
     )
 
-    with pytest.raises(HiveTransitionError, match="Human approval"):
+    with pytest.raises(HiveTransitionError, match="Governance-plan authorization"):
         store.transition_worker(
             worker_id="worker-1",
             target_stage="probation",
@@ -112,6 +112,38 @@ def test_probation_and_appointment_require_human_approval(tmp_path):
             reason="Attempt unauthorized probation.",
             expected_revision=shadow.workers[0].revision,
         )
+
+    governance = {
+        "decision_id": "decision-worker-1",
+        "plan_id": "plan-worker-1",
+        "authorized": True,
+        "governance_aligned": True,
+        "authority_ceiling": "A2",
+        "inferred_risk": "moderate",
+        "confidence": 0.95,
+        "evidence_count": 3,
+        "reversible": True,
+        "source_boundary_ok": True,
+        "writable_domain_ok": True,
+        "dependency_state_ok": True,
+    }
+    probation = store.transition_worker(
+        worker_id="worker-1",
+        target_stage="probation",
+        actor="governance-engine",
+        reason="Plan evidence supports bounded probation.",
+        governance_authorization=governance,
+        expected_revision=shadow.workers[0].revision,
+    )
+    appointed_by_plan = store.transition_worker(
+        worker_id="worker-1",
+        target_stage="appointed",
+        actor="governance-engine",
+        reason="Probation evidence satisfies the appointment plan.",
+        governance_authorization={**governance, "decision_id": "decision-worker-2"},
+        expected_revision=probation.workers[0].revision,
+    )
+    assert appointed_by_plan.workers[0].stage == "APPOINTED"
 
     appointed = _appoint(_store(tmp_path), worker_id="worker-2")
     assert appointed.workers[0].stage == "APPOINTED"
