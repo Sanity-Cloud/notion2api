@@ -30,12 +30,18 @@ The first healthy account is treated as primary. Failed accounts rotate to the n
 
 At startup, every configured account is bound to the same non-secret governance contract.
 The service fails closed when an account points to another teamspace, authority context, or
-documented-output root. The canonical defaults are:
+documented-output root. The sole default authority is the **Sanity Management** workspace
+and its **Sanity-Cloud-InScene** teamspace:
 
-- Teamspace: `3aabf4af-15b3-810f-a1e8-004254c8eb80`
-- Ultimate governance authority: `3a8bf4af-15b3-811e-aca0-d011efea6b50`
-- Documented-output root: `1f2e3064-f1f9-424d-9892-ca82f88238d7`
-- Procedural-feedback root: `3a8bf4af-15b3-81f1-a9bf-ebf67111b1ab`
+- Workspace: `fe8b13aa-3ad2-811e-8292-0003b78a02f9`
+- Teamspace: `3acb13aa-3ad2-8176-9ff3-004220d4868f`
+- Ultimate governance authority: `3acb13aa-3ad2-816c-b6ec-d4930a87e12e`
+- Documented-output root: `3acb13aa-3ad2-8161-b851-f9bb30c31ecc`
+- Procedural-feedback root: `3acb13aa-3ad2-813f-81c9-c659c579c093`
+
+The former SanityCloud-HQ teamspace is named **Sanity-Cloud-InScene-Deprecated** and is
+not enabled by default. Historical access requires explicit inclusion of `sanitycloud-hq`
+in `SANITYCLOUD_ENABLED_WORKSPACES`; it cannot be selected as the default workspace.
 
 Environment variables in `.env.example` may override these values as one atomic contract.
 Per-request context overrides may not replace the canonical authority page. Project-specific
