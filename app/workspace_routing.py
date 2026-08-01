@@ -14,6 +14,8 @@ class WorkspaceDefinition:
     teamspace_name: str
     aliases: tuple[str, ...]
     contract: GovernanceContract
+    authoritative: bool = False
+    deprecated: bool = False
 
     def descriptor(self) -> dict[str, Any]:
         return {
@@ -22,6 +24,8 @@ class WorkspaceDefinition:
             "workspace_id": self.contract.workspace_id,
             "teamspace_name": self.teamspace_name,
             "teamspace_id": self.contract.teamspace_id,
+            "authoritative": self.authoritative,
+            "deprecated": self.deprecated,
             **self.contract.receipt(),
         }
 
@@ -45,31 +49,32 @@ SANITY_MANAGEMENT = WorkspaceDefinition(
         documented_output_parent_page_id="3acb13aa-3ad2-8161-b851-f9bb30c31ecc",
         procedural_feedback_parent_page_id="3acb13aa-3ad2-813f-81c9-c659c579c093",
     ).validated(),
+    authoritative=True,
 )
 
 SANITYCLOUD_HQ = WorkspaceDefinition(
     key="sanitycloud-hq",
-    name="SanityCloud-HQ",
-    teamspace_name="Sanity-Cloud-InScene",
+    name="SanityCloud-HQ (Deprecated)",
+    teamspace_name="Sanity-Cloud-InScene-Deprecated",
     aliases=(
         "sanitycloud-hq",
-        "sanitycloud hq",
-        "sanityhq",
-        "sanity-hq",
-        "hq",
+        "legacy-sanitycloud-hq",
+        "deprecated-sanitycloud-hq",
         "034bf4af-15b3-81a9-a6ce-000330e15c65",
     ),
     contract=GovernanceContract(
-        version="sanitycloud-governance-v1",
+        version="sanitycloud-governance-v1-deprecated",
         workspace_id="034bf4af-15b3-81a9-a6ce-000330e15c65",
         teamspace_id="3aabf4af-15b3-810f-a1e8-004254c8eb80",
         authority_page_id="3a8bf4af-15b3-811e-aca0-d011efea6b50",
         documented_output_parent_page_id="1f2e3064-f1f9-424d-9892-ca82f88238d7",
         procedural_feedback_parent_page_id="3a8bf4af-15b3-81f1-a9bf-ebf67111b1ab",
     ).validated(),
+    deprecated=True,
 )
 
 KNOWN_WORKSPACES = (SANITY_MANAGEMENT, SANITYCLOUD_HQ)
+DEFAULT_WORKSPACES = (SANITY_MANAGEMENT,)
 
 
 def _normalize(value: Any) -> str:
@@ -101,7 +106,7 @@ def resolve_workspace_definition(selector: Any) -> WorkspaceDefinition:
 def configured_workspace_definitions() -> tuple[WorkspaceDefinition, ...]:
     raw = os.getenv("SANITYCLOUD_ENABLED_WORKSPACES", "").strip()
     if not raw:
-        return KNOWN_WORKSPACES
+        return DEFAULT_WORKSPACES
     selected: list[WorkspaceDefinition] = []
     for token in raw.split(","):
         item = resolve_workspace_definition(token)
@@ -115,6 +120,10 @@ def configured_workspace_definitions() -> tuple[WorkspaceDefinition, ...]:
 def default_workspace_definition() -> WorkspaceDefinition:
     selector = os.getenv("SANITYCLOUD_DEFAULT_WORKSPACE", SANITY_MANAGEMENT.key)
     selected = resolve_workspace_definition(selector)
+    if selected.deprecated:
+        raise ValueError(
+            f"Deprecated workspace {selected.key!r} cannot be the default workspace"
+        )
     enabled = configured_workspace_definitions()
     if selected not in enabled:
         raise ValueError(
