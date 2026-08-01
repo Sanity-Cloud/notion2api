@@ -253,8 +253,11 @@ def _error_detail(
 _REPO_AI_PUBLICATION_AUTHORIZATION_BASIS = (
     "trusted_loopback_repo_ai_internal_plan"
 )
+_REPO_AI_INTERNAL_PUBLICATION_CAPABILITIES = PUBLICATION_CAPABILITIES | {
+    "page.delete_children",
+}
 _REPO_AI_INTERNAL_MUTATION_CAPABILITIES = (
-    PUBLICATION_CAPABILITIES | CONFIGURATION_CAPABILITIES
+    _REPO_AI_INTERNAL_PUBLICATION_CAPABILITIES | CONFIGURATION_CAPABILITIES
 )
 
 
@@ -287,7 +290,7 @@ def _repo_ai_internal_plan_authorization(
         "confidence": 1.0,
         "evidence_count": 3,
         "reversible": True,
-        "publication_authorized": requested in PUBLICATION_CAPABILITIES,
+        "publication_authorized": requested in _REPO_AI_INTERNAL_PUBLICATION_CAPABILITIES,
         "authorization_basis": _REPO_AI_PUBLICATION_AUTHORIZATION_BASIS,
         "rationale": (
             "Trusted loopback RepoAI mutation request with governance alignment, "
@@ -311,7 +314,7 @@ def _effective_mutation_policy(
     )
     if not trusted_internal:
         return policy, False
-    is_publication = requested in PUBLICATION_CAPABILITIES
+    is_publication = requested in _REPO_AI_INTERNAL_PUBLICATION_CAPABILITIES
     return (
         MutationPolicy(
             enabled=True,
