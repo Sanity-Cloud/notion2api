@@ -100,6 +100,49 @@ def test_trusted_repoai_publication_gets_capability_without_global_enablement() 
     assert receipt["publication_authorized"] is True
 
 
+def test_trusted_repoai_delete_children_is_bounded_publication_capability() -> None:
+    request = _request()
+    client = _client(key="repoai:run:page.delete_children:abc")
+    plan = _repo_ai_internal_plan_authorization(
+        request,
+        client,
+        "page.delete_children",
+        {"aligned": True},
+    )
+    baseline = MutationPolicy(
+        enabled=False,
+        publication_suppressed=True,
+        capabilities=frozenset(),
+    )
+
+    effective, overridden = _effective_mutation_policy(
+        request,
+        baseline,
+        "page.delete_children",
+        plan,
+    )
+    receipt = require_mutation_capability(
+        "page.delete_children",
+        governance_aligned=True,
+        plan_authorization=plan,
+        policy=effective,
+    )
+
+    assert overridden is True
+    assert effective.publication_suppressed is False
+    assert effective.capabilities == frozenset({"page.delete_children"})
+    assert receipt["publication_authorized"] is True
+    assert not _repo_ai_internal_plan_authorization(
+        request,
+        _client(
+            workspace="sanitycloud-hq",
+            key="repoai:run:page.delete_children:hq",
+        ),
+        "page.delete_children",
+        {"aligned": True},
+    )
+
+
 def test_non_repoai_request_does_not_override_policy() -> None:
     request = _request(marker="0")
     baseline = MutationPolicy(
