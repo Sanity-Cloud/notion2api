@@ -707,6 +707,8 @@ class AdmittedSession:
             "/getrecordvalues",
             "/getdownloadfileurl",
             "/getspaces",
+            "/loadpagechunk",
+            "/loadcachedpagechunk",
             "/search",
         )
         if method.upper() == "GET" or path.endswith(read_like_endpoints):
