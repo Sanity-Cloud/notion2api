@@ -63,7 +63,7 @@ Each applied effect records:
 - A one-time rollback token returned to the authorized caller; only its SHA-256 is persisted.
 - Certification and execution lineage.
 
-Rollback requires human approval, a distinct appointed governance reviewer, a valid rollback token, an unchanged after-image, and the active certification boundary. Target tampering is recorded as `TAMPERED`; restoration failure is recorded as `COMPENSATION_FAILED`.
+Rollback requires a reserved-action authorization receipt, a distinct appointed governance reviewer, a valid rollback token, an unchanged after-image, and the active certification boundary. Target tampering is recorded as `TAMPERED`; restoration failure is recorded as `COMPENSATION_FAILED`.
 
 ## Durable tables
 

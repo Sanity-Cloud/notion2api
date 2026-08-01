@@ -3710,7 +3710,7 @@ def create_server(
             name="aigentbee-swarm-workbench",
             title="AIgentBee Swarm Workbench",
             description=(
-                "A human-governed view of one AIgentBee Hive mission, its swarm members, "
+                "A governance- and plan-governed view of one AIgentBee Hive mission, its swarm members, "
                 "leader Notion chat history, and bounded leader-routed requests."
             ),
             mime_type="text/html;profile=mcp-app",

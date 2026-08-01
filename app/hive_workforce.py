@@ -515,7 +515,7 @@ class HiveWorkforceStore:
             reasons.append(f"{risk.title()} risk requires explicit evidence and fan-in.")
         if external_effects:
             force_hive = True
-            reasons.append("External effects require a human-controlled execution gate.")
+            reasons.append("External effects require a reserved-action authorization receipt and independent review gate.")
 
         mode = "hive" if force_hive or not single_candidates else "single_agent"
         if mode == "single_agent":
