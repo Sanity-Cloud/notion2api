@@ -42,7 +42,7 @@ def runtime_db_path() -> Path:
 def _connect_read_only(path: Path | None = None) -> sqlite3.Connection:
     target = (path or runtime_db_path()).resolve()
     if not target.is_file():
-        raise FileNotFoundError(f"Hive runtime database not found: {target}")
+        raise FileNotFoundError("Hive runtime database not found")
     connection = sqlite3.connect(
         f"file:{target.as_posix()}?mode=ro",
         uri=True,
@@ -127,18 +127,16 @@ def health() -> JSONResponse:
             "status": "ok",
             "service": SERVICE_NAME,
             "read_only": True,
-            "db_path": str(path),
             "mission_count": mission_count,
         }
         return JSONResponse(payload)
-    except (OSError, sqlite3.Error, RuntimeError) as exc:
+    except (OSError, sqlite3.Error, RuntimeError):
         return JSONResponse(
             {
                 "status": "degraded",
                 "service": SERVICE_NAME,
                 "read_only": True,
-                "db_path": str(path),
-                "error": str(exc),
+                "error": "Hive runtime database unavailable",
             },
             status_code=503,
         )
@@ -158,11 +156,10 @@ def list_missions(
                 limit=limit,
             )
     except (OSError, sqlite3.Error, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Hive runtime database unavailable") from exc
     return {
         "ok": True,
         "read_only": True,
-        "db_path": str(runtime_db_path()),
         "count": len(missions),
         "missions": missions,
     }
@@ -237,11 +234,10 @@ def get_mission(
     except HTTPException:
         raise
     except (OSError, sqlite3.Error, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Hive runtime database unavailable") from exc
     return {
         "ok": True,
         "read_only": True,
-        "db_path": str(runtime_db_path()),
         "mission": dict(mission),
         "work_units": work_units,
         "events": events,
