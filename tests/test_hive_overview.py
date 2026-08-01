@@ -96,12 +96,15 @@ def test_health_and_mission_views_are_read_only(tmp_path: Path, monkeypatch) -> 
         assert health.status_code == 200
         assert health.json()["service"] == "hive-overview"
         assert health.json()["read_only"] is True
+        assert "db_path" not in health.json()
         listing = client.get("/api/missions")
         assert listing.status_code == 200
         assert listing.json()["missions"][0]["mission_id"] == "mission-1"
+        assert "db_path" not in listing.json()
         detail = client.get("/api/missions/mission-1")
         assert detail.status_code == 200
         body = detail.json()
+        assert "db_path" not in body
         assert body["work_units"][0]["dependencies"] == []
         assert body["events"][0]["payload"] == {"tests": 3}
         assert body["decision"]["dissent"][0]["severity"] == "watch"
@@ -126,6 +129,8 @@ def test_health_is_degraded_when_database_is_missing(tmp_path: Path, monkeypatch
         response = client.get("/health")
     assert response.status_code == 503
     assert response.json()["status"] == "degraded"
+    assert response.json()["error"] == "Hive runtime database unavailable"
+    assert str(tmp_path) not in response.text
 
 
 def test_lifecycle_scripts_require_pwsh7_and_verify_process_identity() -> None:
