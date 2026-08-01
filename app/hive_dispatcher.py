@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.file_discovery_routing import enforce_dispatch_file_route
 from app.governed_authorization import (
     GovernedAuthorizationError,
     require_governed_authorization,
@@ -1493,6 +1494,14 @@ class HiveExecutionDispatcherStore:
             adapter.requires_independent_review
             or plan_request.get("independent_review_required")
         )
+        file_route = enforce_dispatch_file_route(
+            plan_request=plan_request,
+            adapter_id=adapter.adapter_id,
+            implementation_id=adapter.implementation_id,
+            display_name=adapter.display_name,
+            requested_capability=capability,
+            payload=json.loads(payload_json),
+        )
         request = {
             "execution_id": execution_key,
             "plan_id": plan_key,
@@ -1507,6 +1516,7 @@ class HiveExecutionDispatcherStore:
             "human_approval": bool(human_approval),
             "governance_authorization": dict(governance_authorization or {}),
             "review_required": review_required,
+            "file_route_enforcement": file_route.model_dump(mode="json"),
         }
         fingerprint = self._fingerprint(request)
         with self._connect() as conn:
@@ -1530,8 +1540,8 @@ class HiveExecutionDispatcherStore:
                     if snapshot.executions:
                         self._reconcile_execution_receipt(snapshot.executions[0])
                     return snapshot
-        denial = ""
-        if timeout > adapter.max_timeout_ms:
+        denial = file_route.error if file_route.applies and not file_route.allowed else ""
+        if not denial and timeout > adapter.max_timeout_ms:
             denial = (
                 f"Requested timeout {timeout}ms exceeds adapter limit "
                 f"{adapter.max_timeout_ms}ms."

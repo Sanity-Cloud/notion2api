@@ -13,6 +13,10 @@ from typing import Any, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.file_discovery_routing import (
+    FileRoutingDecision,
+    route_file_operation,
+)
 from app.governed_authorization import (
     GovernedAuthorizationError,
     require_governed_authorization,
@@ -123,6 +127,7 @@ class HiveInvocationPlan(BaseModel):
     selected_workers: list[HiveWorker] = Field(default_factory=list)
     missing_competencies: list[str] = Field(default_factory=list)
     missing_writable_domains: list[str] = Field(default_factory=list)
+    file_discovery_policy: FileRoutingDecision | None = None
     error: str = ""
 
 
@@ -465,6 +470,12 @@ class HiveWorkforceStore:
         independent_review_required: bool = False,
         external_effects: bool = False,
         preferred_worker_ids: list[str] | None = None,
+        file_operation_intent: str = "discover",
+        file_search_text: str = "",
+        file_search_roots: list[str] | None = None,
+        file_types: list[str] | None = None,
+        everything_available: bool = True,
+        degraded_search_authorized: bool = False,
     ) -> HiveInvocationPlan:
         objective_text = self._required(objective, "objective")
         competencies = self._normalized_list(required_competencies)
@@ -480,6 +491,15 @@ class HiveWorkforceStore:
         authority = str(authority_ceiling or "A0").strip().upper()
         if authority not in AUTHORITY_RANK:
             raise ValueError(f"Unsupported authority ceiling: {authority}")
+        file_policy = route_file_operation(
+            intent=file_operation_intent,
+            search_text=file_search_text,
+            requested_roots=file_search_roots,
+            requested_extensions=file_types,
+            everything_available=everything_available,
+            degraded_mode_authorized=degraded_search_authorized,
+            authority_ceiling=authority,
+        )
 
         active = [
             worker
@@ -501,8 +521,10 @@ class HiveWorkforceStore:
             )
         )
 
-        reasons: list[str] = []
-        force_hive = False
+        reasons: list[str] = list(file_policy.reasons)
+        force_hive = not file_policy.allowed
+        if not file_policy.allowed:
+            reasons.append("File discovery is blocked until the canonical provider or governed fallback is available.")
         if int(parallelizable_workstreams) > 1:
             force_hive = True
             reasons.append("Multiple parallel workstreams benefit from bounded worker lanes.")
@@ -604,6 +626,7 @@ class HiveWorkforceStore:
             selected_workers=selected,
             missing_competencies=missing_competencies,
             missing_writable_domains=missing_domains,
+            file_discovery_policy=file_policy,
         )
 
 
