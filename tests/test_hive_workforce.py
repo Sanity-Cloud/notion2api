@@ -209,7 +209,9 @@ def test_invocation_planner_selects_one_bounded_agent(tmp_path):
     )
 
     assert plan.mode == "single_agent"
-    assert plan.human_gate_required is False
+    assert plan.governance_gate_required is False
+    assert plan.human_gate_required is False  # deprecated compatibility mirror
+    assert plan.authorization_basis == "governance_plan_inference"
     assert [item.worker_id for item in plan.selected_workers] == ["worker-1"]
     assert plan.missing_competencies == []
     assert plan.missing_writable_domains == []
@@ -233,7 +235,9 @@ def test_invocation_planner_routes_complex_work_to_hive_and_preserves_gaps(tmp_p
 
     assert plan.mode == "hive"
     assert plan.suggested_lane_count == 3
-    assert plan.human_gate_required is True
+    assert plan.governance_gate_required is True
+    assert plan.human_gate_required is True  # deprecated compatibility mirror
+    assert plan.authorization_basis == "governance_plan_inference"
     assert plan.missing_competencies == ["governance"]
     assert plan.missing_writable_domains == ["deployment"]
-    assert any("human-controlled" in reason for reason in plan.reasons)
+    assert any("reserved-action authorization" in reason for reason in plan.reasons)

@@ -114,7 +114,9 @@ class HiveInvocationPlan(BaseModel):
     objective: str = ""
     mode: str = "single_agent"
     reasons: list[str] = Field(default_factory=list)
+    governance_gate_required: bool = False
     human_gate_required: bool = False
+    authorization_basis: str = "governance_plan_inference"
     requested_authority: str = "A0"
     suggested_lane_count: int = 1
     eligible_worker_count: int = 0
@@ -577,7 +579,7 @@ class HiveWorkforceStore:
             reasons.append(
                 "Selected workers require bounded sub-lanes below the requested authority ceiling."
             )
-        human_gate = (
+        governance_gate = (
             external_effects
             or risk in {"high", "critical"}
             or AUTHORITY_RANK[authority] >= AUTHORITY_RANK["A3"]
@@ -593,7 +595,9 @@ class HiveWorkforceStore:
             objective=objective_text,
             mode=mode,
             reasons=reasons,
-            human_gate_required=human_gate,
+            governance_gate_required=governance_gate,
+            human_gate_required=governance_gate,
+            authorization_basis="governance_plan_inference",
             requested_authority=authority,
             suggested_lane_count=suggested_lane_count,
             eligible_worker_count=eligible_count,

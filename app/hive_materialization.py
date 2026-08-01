@@ -139,7 +139,9 @@ class HiveMaterializationSnapshot(BaseModel):
     parent_context_id: str = ""
     lifecycle_stage: str = ""
     mission_id: str = ""
+    governance_gate_required: bool = False
     human_gate_required: bool = False
+    authorization_basis: str = "governance_plan_inference"
     human_approval: bool = False
     approved_by: str = ""
     work_unit_ids: list[str] = Field(default_factory=list)
@@ -403,7 +405,9 @@ class HiveMaterializationStore:
             parent_context_id=str(row["parent_context_id"]),
             lifecycle_stage=str(row["lifecycle_stage"]),
             mission_id=str(row["mission_id"]),
+            governance_gate_required=bool(row["human_gate_required"]),
             human_gate_required=bool(row["human_gate_required"]),
+            authorization_basis="governance_plan_inference",
             human_approval=bool(row["human_approval"]),
             approved_by=str(row["approved_by"]),
             work_unit_ids=[item.work_unit_id for item in receipts],
@@ -584,7 +588,7 @@ class HiveMaterializationStore:
         )
         authorization_receipt: dict[str, Any] = {}
         authorization_error = ""
-        if plan.human_gate_required and not blocked:
+        if plan.governance_gate_required and not blocked:
             try:
                 authorization_receipt = require_governed_authorization(
                     governance_authorization,
@@ -595,7 +599,7 @@ class HiveMaterializationStore:
                 authorization_error = str(exc)
         if blocked:
             status = MaterializationStatus.BLOCKED.value
-        elif plan.human_gate_required and not authorization_receipt:
+        elif plan.governance_gate_required and not authorization_receipt:
             status = MaterializationStatus.AWAITING_APPROVAL.value
         else:
             status = MaterializationStatus.PREPARING.value
@@ -639,7 +643,7 @@ class HiveMaterializationStore:
                     request["parent_context_id"],
                     request["lifecycle_stage"],
                     mission_key,
-                    int(plan.human_gate_required),
+                    int(plan.governance_gate_required),
                     int(bool(authorization_receipt)),
                     str(authorization_receipt.get("decided_by") or actor)
                     if authorization_receipt
