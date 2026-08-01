@@ -19,9 +19,20 @@ def _is_loopback_host(value: str) -> bool:
 
 
 def is_repo_ai_internal_request(request: Request) -> bool:
-    client_host = request.client.host if request.client else ""
-    request_host = request.url.hostname or ""
-    marker = request.headers.get(REPO_AI_CALLER_HEADER, "")
+    """Recognize only explicit loopback RepoAI calls and fail closed on test stubs."""
+    client = getattr(request, "client", None)
+    if isinstance(client, tuple):
+        client_host = str(client[0] or "") if client else ""
+    else:
+        client_host = str(getattr(client, "host", "") or "")
+
+    url = getattr(request, "url", None)
+    request_host = str(getattr(url, "hostname", "") or "")
+    headers = getattr(request, "headers", None)
+    marker = ""
+    if headers is not None and hasattr(headers, "get"):
+        marker = str(headers.get(REPO_AI_CALLER_HEADER, "") or "")
+
     return (
         marker == REPO_AI_CALLER_VALUE
         and _is_loopback_host(client_host)

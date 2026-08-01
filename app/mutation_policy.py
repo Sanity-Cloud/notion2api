@@ -22,7 +22,10 @@ PUBLICATION_CAPABILITIES = {
     "page.append",
     "page.upload",
 }
-KNOWN_MUTATION_CAPABILITIES = PUBLICATION_CAPABILITIES | {
+CONFIGURATION_CAPABILITIES = {
+    "ai.personalization",
+}
+KNOWN_MUTATION_CAPABILITIES = PUBLICATION_CAPABILITIES | CONFIGURATION_CAPABILITIES | {
     "page.delete_children",
 }
 RISK_RANK = {"low": 0, "moderate": 1, "high": 2, "critical": 3}

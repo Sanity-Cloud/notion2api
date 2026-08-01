@@ -2045,6 +2045,375 @@ class NotionOpusAPI:
             )
         return path, safe_name, normalized_type, file_size
 
+    @staticmethod
+    def _record_value(raw: Any) -> dict[str, Any]:
+        """Unwrap one Notion record-map value without exposing credential material."""
+        if not isinstance(raw, dict):
+            return {}
+        value = raw.get("value")
+        if isinstance(value, dict) and isinstance(value.get("value"), dict):
+            return dict(value["value"])
+        return dict(value) if isinstance(value, dict) else {}
+
+    def _fetch_account_record_map(self) -> dict[str, dict[str, Any]]:
+        """Load records from the ``getSpaces`` branch bound to this exact user."""
+        merged: dict[str, dict[str, Any]] = {}
+
+        def merge_record_map(candidate: Any) -> None:
+            if not isinstance(candidate, dict):
+                return
+            for table, records in candidate.items():
+                if not isinstance(records, dict):
+                    continue
+                merged.setdefault(str(table), {}).update(records)
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                record_map = node.get("recordMap")
+                if isinstance(record_map, dict):
+                    merge_record_map(record_map)
+                if any(key in node for key in ("space_view", "prompt", "space")):
+                    merge_record_map(node)
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        try:
+            response = self._scraper.post(
+                "https://www.notion.so/api/v3/getSpaces",
+                headers=self._build_chat_history_headers(),
+                json={},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise NotionUpstreamError(
+                "Failed to load Notion AI personalization records.",
+                retriable=True,
+                response_excerpt=str(exc)[:300],
+            ) from exc
+        if response.status_code != 200:
+            raise NotionUpstreamError(
+                "Notion AI personalization record load returned an error.",
+                status_code=response.status_code,
+                retriable=response.status_code >= 500 or response.status_code == 429,
+                response_excerpt=_redact_response_excerpt(response.text or ""),
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise NotionUpstreamError(
+                "Notion AI personalization record load returned invalid JSON.",
+                status_code=response.status_code,
+                retriable=True,
+                response_excerpt=(response.text or "")[:300],
+            ) from exc
+
+        expected_user = str(self.user_id or "").replace("-", "").casefold()
+        matched_groups: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            for raw_group in payload.values():
+                if not isinstance(raw_group, dict):
+                    continue
+                users = raw_group.get("notion_user")
+                if not isinstance(users, dict):
+                    continue
+                normalized_users = {
+                    str(user_id).replace("-", "").casefold()
+                    for user_id in users
+                }
+                if expected_user in normalized_users:
+                    matched_groups.append(raw_group)
+
+        if matched_groups:
+            for group in matched_groups:
+                merge_record_map(group)
+        else:
+            # Fail-safe compatibility for account payload variants that do not expose
+            # the user-group wrapper. Ambiguity is still rejected downstream.
+            walk(payload)
+        return merged
+
+    def _resolve_space_view_record(
+        self,
+        record_map: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Resolve the current user's workspace-specific ``space_view`` record."""
+        records = record_map or self._fetch_account_record_map()
+        candidates: list[tuple[int, str, dict[str, Any]]] = []
+        expected_space = str(self.space_id or "").replace("-", "").casefold()
+        expected_user = str(self.user_id or "").replace("-", "").casefold()
+        configured_view = str(self.space_view_id or "").replace("-", "").casefold()
+        for record_id, raw in (records.get("space_view") or {}).items():
+            value = self._record_value(raw)
+            record_space = str(value.get("space_id") or "").replace("-", "").casefold()
+            if record_space != expected_space:
+                continue
+            record_user = str(
+                value.get("user_id")
+                or value.get("notion_user_id")
+                or value.get("created_by_id")
+                or ""
+            ).replace("-", "").casefold()
+            normalized_id = str(record_id).replace("-", "").casefold()
+            score = 0
+            if configured_view and normalized_id == configured_view:
+                score += 100
+            if record_user and record_user == expected_user:
+                score += 50
+            settings = value.get("settings")
+            if isinstance(settings, dict):
+                score += 5
+            candidates.append((score, str(record_id), value))
+        if not candidates:
+            raise NotionUpstreamError(
+                "No space_view record was found for the selected Notion account.",
+                status_code=404,
+                retriable=False,
+                response_excerpt="space_view_not_found",
+            )
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        best_score = candidates[0][0]
+        tied = [item for item in candidates if item[0] == best_score]
+        if len(tied) > 1 and best_score < 50:
+            raise NotionUpstreamError(
+                "The selected Notion account has an ambiguous space_view binding.",
+                status_code=409,
+                retriable=False,
+                response_excerpt="space_view_ambiguous",
+            )
+        _, record_id, value = candidates[0]
+        self.space_view_id = record_id
+        return record_id, value
+
+    @staticmethod
+    def _personalization_from_space_view(value: dict[str, Any]) -> dict[str, Any]:
+        settings = value.get("settings") if isinstance(value, dict) else {}
+        if not isinstance(settings, dict):
+            settings = {}
+        personalization = settings.get("agent_personalization_settings")
+        return dict(personalization) if isinstance(personalization, dict) else {}
+
+    def get_ai_personalization(self) -> dict[str, Any]:
+        """Read the exact account's current Notion AI personalization settings."""
+        record_map = self._fetch_account_record_map()
+        space_view_id, value = self._resolve_space_view_record(record_map)
+        personalization = self._personalization_from_space_view(value)
+        return {
+            "ok": True,
+            "profile_name": self.profile_name,
+            "workspace_key": self.workspace_key,
+            "space_id": self.space_id,
+            "user_id": self.user_id,
+            "space_view_id": space_view_id,
+            "name": str(personalization.get("name") or ""),
+            "context_page_id": str(personalization.get("context_page_id") or ""),
+            "customization_items": [
+                str(item)
+                for item in (personalization.get("customization_items") or [])
+                if str(item).strip()
+            ],
+            "has_already_seen_personalization_settings_modal": bool(
+                personalization.get("has_already_seen_personalization_settings_modal")
+            ),
+        }
+
+    def _instruction_prompt_record(
+        self,
+        record_map: dict[str, dict[str, Any]],
+        context_page_id: str,
+    ) -> tuple[str, bool]:
+        normalized_page = context_page_id.replace("-", "").casefold()
+        for prompt_id, raw in (record_map.get("prompt") or {}).items():
+            value = self._record_value(raw)
+            parent_id = str(value.get("parent_id") or "").replace("-", "").casefold()
+            if (
+                parent_id == normalized_page
+                and str(value.get("prompt_type") or "").strip().lower() == "instruction"
+                and bool(value.get("alive", True))
+            ):
+                return str(prompt_id), True
+        deterministic = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"sanitycloud:notion-ai-instruction:{self.space_id}:{self.user_id}:{context_page_id}",
+        )
+        return str(deterministic), False
+
+    def set_ai_personalization(
+        self,
+        *,
+        name: str,
+        context_page_id: str,
+        customization_items: list[str],
+    ) -> dict[str, Any]:
+        """Assign a governed Notion AI name, instruction page, and accessories."""
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            raise ValueError("name is required")
+        if len(clean_name) > 80:
+            raise ValueError("name must be 80 characters or fewer")
+        normalized_page_id = self._normalize_notion_id(
+            context_page_id,
+            field_name="context_page_id",
+        )
+        clean_items = list(
+            dict.fromkeys(
+                str(item or "").strip().lower()
+                for item in customization_items
+                if str(item or "").strip()
+            )
+        )
+        if len(clean_items) > 4:
+            raise ValueError("customization_items may contain at most four entries")
+        if any(len(item) > 50 for item in clean_items):
+            raise ValueError("customization item names must be 50 characters or fewer")
+        access = self.check_page_access(normalized_page_id)
+        if not access.get("accessible"):
+            raise ValueError(
+                "The selected account cannot read the requested instruction page."
+            )
+
+        record_map = self._fetch_account_record_map()
+        space_view_id, _ = self._resolve_space_view_record(record_map)
+        prompt_id, prompt_exists = self._instruction_prompt_record(
+            record_map,
+            normalized_page_id,
+        )
+        now_ms = int(time.time() * 1000)
+        personalization = {
+            "name": clean_name,
+            "context_page_id": normalized_page_id,
+            "customization_items": clean_items,
+            "recently_used_pages": [
+                {"page_id": normalized_page_id, "used_at": now_ms}
+            ],
+            "has_already_seen_personalization_settings_modal": True,
+        }
+        prompt_args: dict[str, Any]
+        prompt_command = "update" if prompt_exists else "set"
+        if prompt_exists:
+            prompt_args = {"alive": True, "prompt_type": "instruction"}
+        else:
+            prompt_args = {
+                "id": prompt_id,
+                "space_id": self.space_id,
+                "parent_id": normalized_page_id,
+                "parent_table": "block",
+                "version": 1,
+                "created_time": now_ms,
+                "alive": True,
+                "prompt_type": "instruction",
+            }
+        payload = {
+            "requestId": str(uuid.uuid4()),
+            "transactions": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "spaceId": self.space_id,
+                    "debug": {
+                        "userAction": "agentPersonalization.updateSettings",
+                    },
+                    "operations": [
+                        {
+                            "pointer": {
+                                "table": "space_view",
+                                "id": space_view_id,
+                                "spaceId": self.space_id,
+                            },
+                            "command": "update",
+                            "path": ["settings"],
+                            "args": {
+                                "agent_personalization_settings": personalization,
+                            },
+                        },
+                        {
+                            "pointer": {
+                                "table": "prompt",
+                                "id": prompt_id,
+                                "spaceId": self.space_id,
+                            },
+                            "command": prompt_command,
+                            "path": [],
+                            "args": prompt_args,
+                        },
+                    ],
+                }
+            ],
+        }
+        def post_transaction(transaction_payload: dict[str, Any]) -> requests.Response:
+            try:
+                return self._scraper.post(
+                    self.thread_title_url,
+                    headers=self._build_chat_history_headers(),
+                    json=transaction_payload,
+                    timeout=30,
+                )
+            except requests.RequestException as exc:
+                raise NotionUpstreamError(
+                    "Notion AI personalization update failed.",
+                    retriable=True,
+                    response_excerpt=str(exc)[:300],
+                ) from exc
+
+        response = post_transaction(payload)
+        reused_workspace_prompt = False
+        if (
+            response.status_code != 200
+            and "PostgresUniqueViolation" in str(response.text or "")
+        ):
+            # Notion permits one instruction prompt record per workspace/page. When
+            # another account already created it, retry only the account-local
+            # space_view update instead of creating a duplicate prompt record.
+            fallback_payload = {
+                "requestId": str(uuid.uuid4()),
+                "transactions": [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "spaceId": self.space_id,
+                        "debug": {
+                            "userAction": (
+                                "agentPersonalization.updateSettings.reuseInstructionPrompt"
+                            ),
+                        },
+                        "operations": [
+                            payload["transactions"][0]["operations"][0],
+                        ],
+                    }
+                ],
+            }
+            response = post_transaction(fallback_payload)
+            reused_workspace_prompt = response.status_code == 200
+        if response.status_code != 200:
+            raise NotionUpstreamError(
+                "Notion AI personalization update returned an error.",
+                status_code=response.status_code,
+                retriable=response.status_code >= 500 or response.status_code == 429,
+                response_excerpt=_redact_response_excerpt(response.text or ""),
+            )
+
+        verified = self.get_ai_personalization()
+        expected_page = normalized_page_id.replace("-", "").casefold()
+        actual_page = str(verified.get("context_page_id") or "").replace("-", "").casefold()
+        is_verified = bool(
+            verified.get("name") == clean_name
+            and actual_page == expected_page
+            and verified.get("customization_items") == clean_items
+        )
+        if not is_verified:
+            raise NotionUpstreamError(
+                "Notion AI personalization could not be verified after mutation.",
+                status_code=409,
+                retriable=True,
+                response_excerpt="personalization_readback_mismatch",
+            )
+        return {
+            **verified,
+            "prompt_id": "" if reused_workspace_prompt else prompt_id,
+            "reused_workspace_prompt": reused_workspace_prompt,
+            "verified": True,
+        }
+
     def check_page_access(self, page_id: str) -> dict[str, Any]:
         """Check whether this Notion account can read a page through the v3 API."""
         normalized_page_id = self._normalize_notion_id(page_id, field_name="page_id")

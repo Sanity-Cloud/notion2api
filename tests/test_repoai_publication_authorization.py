@@ -117,3 +117,51 @@ def test_non_repoai_request_does_not_override_policy() -> None:
 
     assert overridden is False
     assert effective is baseline
+
+def test_trusted_repoai_personalization_derives_nonpublication_plan() -> None:
+    request = _request()
+    client = _client(key="repoai:run:ai.personalization:abc")
+    plan = _repo_ai_internal_plan_authorization(
+        request,
+        client,
+        "ai.personalization",
+        {"aligned": True},
+    )
+
+    assert plan["authorized"] is True
+    assert plan["publication_authorized"] is False
+    assert plan["action_id"] == "ai.personalization"
+
+
+def test_trusted_repoai_personalization_does_not_unsuppress_publication() -> None:
+    request = _request()
+    plan = _repo_ai_internal_plan_authorization(
+        request,
+        _client(key="repoai:run:ai.personalization:abc"),
+        "ai.personalization",
+        {"aligned": True},
+    )
+    baseline = MutationPolicy(
+        enabled=False,
+        publication_suppressed=True,
+        capabilities=frozenset(),
+    )
+
+    effective, overridden = _effective_mutation_policy(
+        request,
+        baseline,
+        "ai.personalization",
+        plan,
+    )
+    receipt = require_mutation_capability(
+        "ai.personalization",
+        governance_aligned=True,
+        plan_authorization=plan,
+        policy=effective,
+    )
+
+    assert overridden is False
+    assert effective.enabled is True
+    assert effective.publication_suppressed is True
+    assert effective.capabilities == frozenset({"ai.personalization"})
+    assert receipt["publication_authorized"] is False

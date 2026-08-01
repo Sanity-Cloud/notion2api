@@ -13,6 +13,7 @@ from app.core.internal_callers import is_repo_ai_internal_request
 from app.logger import logger
 from app.governance import governance_receipt_from_client
 from app.mutation_policy import (
+    CONFIGURATION_CAPABILITIES,
     PUBLICATION_CAPABILITIES,
     MutationPolicy,
     MutationPolicyError,
@@ -111,6 +112,44 @@ class AccountInfoResponse(BaseModel):
     parent_page_accessible: bool
     context_page_id: str
     governance: dict[str, Any] = Field(default_factory=dict)
+
+
+class AIPersonalizationRequest(BaseModel):
+    profile_name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=80)
+    context_page_id: str = Field(min_length=1)
+    customization_items: list[str] = Field(default_factory=list, max_length=4)
+    workspace: str = "sanity-management"
+    idempotency_key: str = Field(min_length=1)
+
+
+class AIPersonalizationResponse(BaseModel):
+    ok: bool
+    profile_name: str
+    workspace_key: str
+    space_id: str
+    user_id: str
+    space_view_id: str
+    name: str
+    context_page_id: str
+    customization_items: list[str] = Field(default_factory=list)
+    has_already_seen_personalization_settings_modal: bool
+    prompt_id: str
+    reused_workspace_prompt: bool = False
+    verified: bool
+
+
+class AIPersonalizationStatusResponse(BaseModel):
+    ok: bool
+    profile_name: str
+    workspace_key: str
+    space_id: str
+    user_id: str
+    space_view_id: str
+    name: str
+    context_page_id: str
+    customization_items: list[str] = Field(default_factory=list)
+    has_already_seen_personalization_settings_modal: bool
 
 
 class AccountSummaryResponse(BaseModel):
@@ -214,6 +253,9 @@ def _error_detail(
 _REPO_AI_PUBLICATION_AUTHORIZATION_BASIS = (
     "trusted_loopback_repo_ai_internal_plan"
 )
+_REPO_AI_INTERNAL_MUTATION_CAPABILITIES = (
+    PUBLICATION_CAPABILITIES | CONFIGURATION_CAPABILITIES
+)
 
 
 def _repo_ai_internal_plan_authorization(
@@ -229,7 +271,7 @@ def _repo_ai_internal_plan_authorization(
         getattr(client, "request_idempotency_key", "") or ""
     ).strip()
     if (
-        requested not in PUBLICATION_CAPABILITIES
+        requested not in _REPO_AI_INTERNAL_MUTATION_CAPABILITIES
         or not is_repo_ai_internal_request(request)
         or not bool(governance.get("aligned"))
         or workspace_key != "sanity-management"
@@ -245,11 +287,11 @@ def _repo_ai_internal_plan_authorization(
         "confidence": 1.0,
         "evidence_count": 3,
         "reversible": True,
-        "publication_authorized": True,
+        "publication_authorized": requested in PUBLICATION_CAPABILITIES,
         "authorization_basis": _REPO_AI_PUBLICATION_AUTHORIZATION_BASIS,
         "rationale": (
-            "Trusted loopback RepoAI publication request with governance alignment, "
-            "canonical workspace scope, and deterministic idempotency."
+            "Trusted loopback RepoAI mutation request with governance alignment, "
+            "canonical workspace scope, bounded capability, and deterministic idempotency."
         ),
     }
 
@@ -260,25 +302,28 @@ def _effective_mutation_policy(
     capability: str,
     plan_authorization: dict[str, Any],
 ) -> tuple[MutationPolicy, bool]:
-    trusted_publication = bool(
-        str(capability or "").strip().lower() in PUBLICATION_CAPABILITIES
+    requested = str(capability or "").strip().lower()
+    trusted_internal = bool(
+        requested in _REPO_AI_INTERNAL_MUTATION_CAPABILITIES
         and is_repo_ai_internal_request(request)
         and plan_authorization.get("authorization_basis")
         == _REPO_AI_PUBLICATION_AUTHORIZATION_BASIS
     )
-    if not trusted_publication:
+    if not trusted_internal:
         return policy, False
-    requested = str(capability or "").strip().lower()
+    is_publication = requested in PUBLICATION_CAPABILITIES
     return (
         MutationPolicy(
             enabled=True,
-            publication_suppressed=False,
+            publication_suppressed=(
+                False if is_publication else policy.publication_suppressed
+            ),
             capabilities=policy.capabilities | frozenset({requested}),
             minimum_confidence=policy.minimum_confidence,
             minimum_evidence_count=policy.minimum_evidence_count,
             require_reversible=policy.require_reversible,
         ),
-        True,
+        is_publication,
     )
 
 
@@ -311,7 +356,8 @@ async def _resolve_plan_authorization(
     if repo_ai_decision:
         return repo_ai_decision
 
-    trusted_state_decision = getattr(request.state, "plan_authorization", None)
+    request_state = getattr(request, "state", None)
+    trusted_state_decision = getattr(request_state, "plan_authorization", None)
     if isinstance(trusted_state_decision, dict):
         return dict(trusted_state_decision)
 
@@ -354,10 +400,14 @@ async def _require_notion_mutation(
             plan_authorization=plan_authorization,
             policy=effective_policy,
         )
-        if suppression_overridden:
+        if plan_authorization.get("authorization_basis") == (
+            _REPO_AI_PUBLICATION_AUTHORIZATION_BASIS
+        ):
             receipt["authorization_basis"] = (
                 _REPO_AI_PUBLICATION_AUTHORIZATION_BASIS
             )
+            receipt["trusted_internal_override"] = True
+        if suppression_overridden:
             receipt["publication_suppression_override"] = True
             receipt["original_publication_suppressed"] = (
                 active_policy.publication_suppressed
@@ -681,6 +731,92 @@ async def account_info(
         context_page_id=client.context_page_id,
         governance=governance_receipt_from_client(client),
     )
+
+
+@router.get(
+    "/notion/ai_personalization/{profile_name}",
+    response_model=AIPersonalizationStatusResponse,
+)
+async def get_ai_personalization(
+    request: Request,
+    profile_name: str,
+) -> AIPersonalizationStatusResponse:
+    """Read one exact account's Notion AI personalization without changing rotation."""
+    try:
+        client = request.app.state.account_pool.get_client_for_selector(profile_name)
+        result = await run_in_threadpool(client.get_ai_personalization)
+        return AIPersonalizationStatusResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                message=str(exc),
+                code="invalid_notion_account_selector",
+                error_type="invalid_request_error",
+                param="profile_name",
+            ),
+        ) from exc
+    except NotionUpstreamError as exc:
+        raise HTTPException(
+            status_code=503 if exc.retriable else (exc.status_code or 502),
+            detail=_error_detail(
+                message=str(exc),
+                code="notion_ai_personalization_read_failed",
+                error_type="upstream_error",
+                detail=exc.response_excerpt,
+            ),
+        ) from exc
+
+
+@router.post(
+    "/notion/ai_personalization",
+    response_model=AIPersonalizationResponse,
+)
+async def set_ai_personalization(
+    request: Request,
+    body: AIPersonalizationRequest,
+) -> AIPersonalizationResponse:
+    """Assign one exact account's governed Notion AI identity and instruction page."""
+    try:
+        client = request.app.state.account_pool.get_client_for_selector(
+            body.profile_name.strip()
+        )
+        requested_workspace = str(body.workspace or "").strip().casefold()
+        if requested_workspace not in {
+            str(client.workspace_key or "").strip().casefold(),
+            str(client.space_id or "").strip().casefold(),
+        }:
+            raise ValueError(
+                "The selected account does not belong to the requested workspace."
+            )
+        client.request_idempotency_key = body.idempotency_key.strip()
+        await _require_notion_mutation(request, client, "ai.personalization")
+        result = await run_in_threadpool(
+            client.set_ai_personalization,
+            name=body.name.strip(),
+            context_page_id=body.context_page_id.strip(),
+            customization_items=body.customization_items,
+        )
+        return AIPersonalizationResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                message=str(exc),
+                code="invalid_notion_ai_personalization",
+                error_type="invalid_request_error",
+            ),
+        ) from exc
+    except NotionUpstreamError as exc:
+        raise HTTPException(
+            status_code=503 if exc.retriable else (exc.status_code or 502),
+            detail=_error_detail(
+                message=str(exc),
+                code="notion_ai_personalization_update_failed",
+                error_type="upstream_error",
+                detail=exc.response_excerpt,
+            ),
+        ) from exc
 
 
 @router.post("/notion/unsafe_url/allow_once", response_model=AllowUnsafeUrlOnceResponse)
