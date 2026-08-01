@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SanityCloud Hive Overview</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", system-ui, sans-serif; --bg:#090b0f; --panel:#141821; --line:#2d3544; --text:#edf1f7; --muted:#9aa7b8; --accent:#7fc5ff; --ok:#65d397; --warn:#f0c66a; --bad:#ef7f7f; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:linear-gradient(160deg,#0d1119,#06070a 55%); color:var(--text); min-height:100vh; }
+    header { padding:28px clamp(18px,4vw,54px) 18px; border-bottom:1px solid var(--line); background:rgba(10,12,17,.92); position:sticky; top:0; z-index:2; backdrop-filter:blur(12px); }
+    h1 { margin:4px 0 6px; font-size:clamp(28px,4vw,44px); }
+    .eyebrow { color:var(--accent); text-transform:uppercase; letter-spacing:.15em; font-size:12px; font-weight:700; }
+    .sub { color:var(--muted); max-width:900px; line-height:1.5; }
+    .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin-top:16px; }
+    button, select { border:1px solid var(--line); background:#171c25; color:var(--text); border-radius:10px; padding:9px 13px; }
+    button { cursor:pointer; font-weight:700; }
+    button:hover { border-color:var(--accent); }
+    main { display:grid; grid-template-columns:minmax(280px,420px) minmax(0,1fr); gap:18px; padding:22px clamp(18px,4vw,54px) 46px; }
+    .panel { border:1px solid var(--line); border-radius:18px; background:rgba(20,24,33,.93); overflow:hidden; }
+    .panel-head { padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .panel-head h2 { margin:0; font-size:18px; }
+    #missions { max-height:calc(100vh - 225px); overflow:auto; }
+    .mission { width:100%; text-align:left; border:0; border-bottom:1px solid #242b37; border-radius:0; padding:15px 18px; background:transparent; }
+    .mission:hover, .mission.active { background:#1b2230; }
+    .mission-title { font-weight:800; margin-bottom:7px; }
+    .meta { display:flex; gap:8px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+    .pill { border:1px solid currentColor; border-radius:999px; padding:3px 8px; font-weight:700; }
+    .ACTIVE { color:var(--accent); } .CLOSED,.COMPLETED { color:var(--ok); } .WAITING,.FAN_IN { color:var(--warn); } .BLOCKED,.FAILED,.CANCELLED { color:var(--bad); }
+    #detail { padding:20px; min-height:520px; }
+    .empty { color:var(--muted); padding:40px 10px; text-align:center; }
+    .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin:16px 0; }
+    .stat { border:1px solid var(--line); border-radius:13px; padding:12px; background:#10141b; }
+    .stat strong { display:block; font-size:20px; }
+    .stat span { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.08em; }
+    .objective { color:#d9e1eb; line-height:1.55; white-space:pre-wrap; }
+    .section { margin-top:22px; }
+    .section h3 { margin:0 0 10px; font-size:16px; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; }
+    .card { border:1px solid var(--line); border-radius:13px; padding:13px; background:#10141b; }
+    .card-title { font-weight:800; margin-bottom:6px; }
+    .card p { margin:5px 0; color:var(--muted); font-size:13px; line-height:1.4; overflow-wrap:anywhere; }
+    .event { border-top:1px solid #29313f; padding:10px 0; }
+    .event:first-child { border-top:0; }
+    .event strong { font-size:13px; }
+    .event div { color:var(--muted); font-size:12px; margin-top:4px; overflow-wrap:anywhere; }
+    .notice { margin-top:12px; color:var(--muted); font-size:12px; }
+    @media (max-width:900px) { main { grid-template-columns:1fr; } #missions { max-height:380px; } }
+  </style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">SanityCloud · Read-only mission evidence</div>
+  <h1>Hive Overview</h1>
+  <div class="sub">Live mission, worker-lane, fan-in, and dissent evidence from the durable AIgentBee Hive ledger. This dashboard exposes no mutation controls.</div>
+  <div class="toolbar">
+    <button id="refresh" type="button">Refresh</button>
+    <select id="status" aria-label="Filter by mission status">
+      <option value="">All statuses</option><option>ACTIVE</option><option>WAITING</option><option>BLOCKED</option><option>FAN_IN</option><option>CLOSED</option><option>CANCELLED</option>
+    </select>
+    <span id="health" class="notice">Checking service…</span>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <div class="panel-head"><h2>Missions</h2><span id="count" class="meta"></span></div>
+    <div id="missions"><div class="empty">Loading missions…</div></div>
+  </section>
+  <section class="panel"><div id="detail"><div class="empty">Select a mission to inspect its durable evidence.</div></div></section>
+</main>
+<script>
+  const missionList = document.querySelector('#missions');
+  const detail = document.querySelector('#detail');
+  const statusFilter = document.querySelector('#status');
+  const count = document.querySelector('#count');
+  const health = document.querySelector('#health');
+  let selected = '';
+  const escapeHtml = (value='') => String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const fmt = ms => ms ? new Date(Number(ms)).toLocaleString() : '—';
+  const badge = value => `<span class="pill ${escapeHtml(value)}">${escapeHtml(value || 'UNKNOWN')}</span>`;
+
+  async function checkHealth() {
+    try { const r = await fetch('/health'); const d = await r.json(); health.textContent = `${d.status.toUpperCase()} · ${d.mission_count ?? 0} missions · read-only`; }
+    catch { health.textContent = 'Service unavailable'; }
+  }
+
+  async function loadMissions() {
+    missionList.innerHTML = '<div class="empty">Loading missions…</div>';
+    const query = statusFilter.value ? `?status=${encodeURIComponent(statusFilter.value)}` : '';
+    try {
+      const r = await fetch(`/api/missions${query}`); if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json(); count.textContent = `${data.count} shown`;
+      if (!data.missions.length) { missionList.innerHTML = '<div class="empty">No missions match this filter.</div>'; return; }
+      missionList.innerHTML = data.missions.map(m => `<button class="mission ${m.mission_id === selected ? 'active' : ''}" data-id="${escapeHtml(m.mission_id)}"><div class="mission-title">${escapeHtml(m.title)}</div><div class="meta">${badge(m.status)}<span>${escapeHtml(m.lifecycle_stage)}</span><span>${m.work_unit_count} lanes</span><span>${fmt(m.updated_at)}</span></div></button>`).join('');
+      document.querySelectorAll('.mission').forEach(node => node.addEventListener('click', () => loadMission(node.dataset.id)));
+      if (!selected) loadMission(data.missions[0].mission_id);
+    } catch (err) { missionList.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`; }
+  }
+
+  async function loadMission(id) {
+    selected = id; document.querySelectorAll('.mission').forEach(n => n.classList.toggle('active', n.dataset.id === id));
+    detail.innerHTML = '<div class="empty">Loading mission evidence…</div>';
+    try {
+      const r = await fetch(`/api/missions/${encodeURIComponent(id)}?event_limit=30&action_limit=20`); if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json(), m = d.mission, decision = d.decision;
+      const lanes = d.work_units.map(w => `<article class="card"><div class="card-title">${escapeHtml(w.title)}</div><div class="meta">${badge(w.status)}<span>${escapeHtml(w.role)}</span></div><p><b>Authority:</b> ${escapeHtml(w.authority_ceiling)}</p><p><b>Domain:</b> ${escapeHtml(w.writable_domain || 'read-only / unspecified')}</p><p><b>Dependencies:</b> ${escapeHtml((w.dependencies || []).join(', ') || 'none')}</p></article>`).join('') || '<div class="empty">No worker lanes recorded.</div>';
+      const events = d.events.map(e => `<div class="event"><strong>${escapeHtml(e.event_type)}</strong><div>${escapeHtml(e.sender)} → ${escapeHtml(e.recipient)} · ${fmt(e.created_at)}</div><div>${escapeHtml(JSON.stringify(e.payload))}</div></div>`).join('') || '<div class="empty">No events recorded.</div>';
+      const dissent = decision?.dissent?.map(x => `<div class="event"><strong>${escapeHtml(x.severity || 'dissent')}</strong><div>${escapeHtml(x.finding || JSON.stringify(x))}</div></div>`).join('') || '<div class="notice">No dissent recorded in the latest fan-in decision.</div>';
+      detail.innerHTML = `<div class="meta">${badge(m.status)}<span>${escapeHtml(m.lifecycle_stage)}</span><span>${escapeHtml(m.authority_ceiling)}</span></div><h2>${escapeHtml(m.title)}</h2><div class="objective">${escapeHtml(m.objective)}</div><div class="summary"><div class="stat"><strong>${d.work_units.length}</strong><span>Worker lanes</span></div><div class="stat"><strong>${d.events.length}</strong><span>Recent events</span></div><div class="stat"><strong>${d.actions.length}</strong><span>Recent actions</span></div><div class="stat"><strong>${m.revision}</strong><span>Revision</span></div></div><div class="section"><h3>Worker lanes</h3><div class="cards">${lanes}</div></div><div class="section"><h3>Latest fan-in</h3><div class="card">${decision ? `${badge(decision.status)}<p>${escapeHtml(decision.summary)}</p>` : '<p>No fan-in decision recorded.</p>'}</div>${dissent}</div><div class="section"><h3>Recent events</h3>${events}</div><div class="notice">Updated ${fmt(m.updated_at)} · Database ${escapeHtml(d.db_path)}</div>`;
+    } catch (err) { detail.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`; }
+  }
+  document.querySelector('#refresh').addEventListener('click', () => { checkHealth(); loadMissions(); });
+  statusFilter.addEventListener('change', () => { selected=''; loadMissions(); });
+  checkHealth(); loadMissions();
+</script>
+</body>
+</html>
