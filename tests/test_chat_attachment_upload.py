@@ -6,6 +6,17 @@ from app.config import API_KEY
 
 class ChatAttachmentRouteTests(unittest.TestCase):
     def setUp(self):
+        # Route tests must not inherit a checkout-specific public HOST value from .env.
+        self.host_patcher = patch("app.api.attachment_guard.HOST", "127.0.0.1")
+        self.host_patcher.start()
+        self.policy_patcher = patch.dict(
+            "os.environ",
+            {
+                "ALLOW_REMOTE_ATTACHMENT_URLS": "false",
+                "ALLOW_LOCAL_ATTACHMENT_PATHS": "false",
+            },
+        )
+        self.policy_patcher.start()
         self.client = TestClient(app)
         # Ensure FastAPI lifespan events run to initialize state (account_pool, etc.)
         self.client.__enter__()
@@ -18,6 +29,8 @@ class ChatAttachmentRouteTests(unittest.TestCase):
             self.client.__exit__(None, None, None)
         except Exception:
             pass
+        self.policy_patcher.stop()
+        self.host_patcher.stop()
 
     def test_no_attachments_preserves_behavior(self):
         payload = {

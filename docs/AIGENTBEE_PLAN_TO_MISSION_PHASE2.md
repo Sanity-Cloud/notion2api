@@ -76,7 +76,7 @@ When all receipts become terminal:
 - all completed lanes produce `READY_FOR_FAN_IN`;
 - any failed or cancelled lane produces `CLOSED_WITH_FAILURE`;
 - active leases are released automatically;
-- the underlying Hive mission remains available for the existing human-controlled `hive_fan_in` decision.
+- the underlying Hive mission remains available for the governed `hive_fan_in` decision with evidence, authority, and dissent receipts.
 
 Leases may also be explicitly released or revoked without deleting the mission, bindings, or evidence.
 

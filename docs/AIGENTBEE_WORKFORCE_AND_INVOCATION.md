@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This contract defines the first governed workforce-management and invocation-routing slice for AIgentBee. It distinguishes durable worker identity from temporary mission work and keeps execution authority human-controlled.
+This contract defines the first governed workforce-management and invocation-routing slice for AIgentBee. It distinguishes durable worker identity from temporary mission work and keeps execution authority governance- and plan-controlled through durable decision receipts.
 
 The implementation is intentionally limited to:
 

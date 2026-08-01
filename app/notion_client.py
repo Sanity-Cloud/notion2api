@@ -18,6 +18,7 @@ from app.logger import logger
 from app.attachments.notion_upload import NotionAttachmentUploader, NotionAttachmentUploadError
 from app.attachments.models import UploadedAttachment
 from app.model_registry import get_notion_model
+from app.notion_admission import admitted_session
 from app.stream_parser_safe import parse_stream
 
 # text SSL text
@@ -212,6 +213,19 @@ class NotionOpusAPI:
         self.space_view_id = account_config.get("space_view_id", "")
         self.user_name = account_config.get("user_name", "user")
         self.user_email = account_config.get("user_email", "")
+        self.profile_name = str(
+            account_config.get("profile_name")
+            or account_config.get("base_profile_name")
+            or ""
+        ).strip()
+        self.base_profile_name = str(
+            account_config.get("base_profile_name") or self.profile_name or ""
+        ).strip()
+        self.workspace_key = str(account_config.get("workspace_key") or "").strip()
+        self.workspace_name = str(account_config.get("workspace_name") or "").strip()
+        self.teamspace_name = str(account_config.get("teamspace_name") or "").strip()
+        self.chat_scope_key = str(account_config.get("chat_scope_key") or "").strip()
+        self.page_scope_key = str(account_config.get("page_scope_key") or "").strip()
         self.timezone = str(
             account_config.get("timezone")
             or os.getenv("NOTION_TIMEZONE")
@@ -269,12 +283,16 @@ class NotionOpusAPI:
         self.delete_url = "https://www.notion.so/api/v3/saveTransactions"
         self.thread_title_url = "https://app.notion.com/api/v3/saveTransactionsFanout"
         self.account_key = self.user_email or self.user_id or "unknown-account"
+        self.request_idempotency_key = ""
+        self.last_admission_receipt: dict[str, Any] = {}
 
-        # Reuse cloudscraper instance when available; otherwise fall back to requests.Session.
+        # Every fresh client shares one process-wide admission controller through
+        # an HTTP-session proxy. The underlying session remains request-isolated.
         if cloudscraper is not None:
-            self._scraper = cloudscraper.create_scraper()
+            raw_scraper = cloudscraper.create_scraper()
         else:
-            self._scraper = requests.Session()
+            raw_scraper = requests.Session()
+        self._scraper = admitted_session(raw_scraper, self)
         self._scraper_lock = threading.Lock()
 
     def get_ai_model_picker_config(self) -> dict[str, Any]:
@@ -1686,10 +1704,11 @@ class NotionOpusAPI:
             # Create a fresh, isolated scraper for this request to ensure thread safety.
             # Reusing requests.Session concurrently across threads is not thread-safe.
             if cloudscraper is not None:
-                scraper = cloudscraper.create_scraper()
+                raw_scraper = cloudscraper.create_scraper()
             else:
-                scraper = requests.Session()
-            scraper.cookies.clear()
+                raw_scraper = requests.Session()
+            raw_scraper.cookies.clear()
+            scraper = admitted_session(raw_scraper, self)
             response = scraper.post(
                 self.url,
                 headers=headers,
@@ -1705,9 +1724,10 @@ class NotionOpusAPI:
                     extra={"request_info": {"event": "cloudflare_challenge_refresh", "account": self.account_key}},
                 )
                 if cloudscraper is not None:
-                    scraper = cloudscraper.create_scraper()
+                    raw_scraper = cloudscraper.create_scraper()
                 else:
-                    scraper = requests.Session()
+                    raw_scraper = requests.Session()
+                scraper = admitted_session(raw_scraper, self)
                 response = scraper.post(
                     self.url,
                     headers=headers,

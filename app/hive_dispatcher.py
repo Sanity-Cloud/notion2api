@@ -15,6 +15,10 @@ from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.governed_authorization import (
+    GovernedAuthorizationError,
+    require_governed_authorization,
+)
 from app.hive_external_effects import (
     EXTERNAL_IMPLEMENTATION_ID,
     get_hive_external_effect_store,
@@ -718,6 +722,7 @@ class HiveExecutionDispatcherStore:
         enabled: bool,
         actor: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> HiveAdapterSnapshot:
@@ -757,10 +762,16 @@ class HiveExecutionDispatcherStore:
             raise HiveTransitionError(
                 "Adapter payload limit exceeds the compiled implementation limit."
             )
-        if enabled and not human_approval:
-            raise HiveTransitionError(
-                "Human approval is required to enable an execution adapter."
-            )
+        authorization_receipt: dict[str, Any] = {}
+        if enabled:
+            try:
+                authorization_receipt = require_governed_authorization(
+                    governance_authorization,
+                    required_authority=authority,
+                    legacy_human_approval=human_approval,
+                )
+            except GovernedAuthorizationError as exc:
+                raise HiveTransitionError(str(exc)) from exc
         effective_human_approval = bool(
             spec.requires_human_approval or requires_human_approval
         )
@@ -783,6 +794,7 @@ class HiveExecutionDispatcherStore:
             "requires_independent_review": effective_independent_review,
             "actor": self._required(actor, "actor"),
             "human_approval": bool(human_approval),
+            "governance_authorization": authorization_receipt,
             "expected_revision": expected_revision,
         }
         fingerprint = self._fingerprint(request)
@@ -939,6 +951,7 @@ class HiveExecutionDispatcherStore:
         requested_capability: str,
         requested_domains: list[str],
         human_approval: bool,
+        governance_authorization: dict[str, Any] | None,
     ) -> tuple[Any, Any, Any, str]:
         materialized = self.materialization.get_materialization(plan_id=plan_id)
         if not materialized.found:
@@ -1000,10 +1013,15 @@ class HiveExecutionDispatcherStore:
             raise HiveTransitionError(
                 "Worker lease authority is below the adapter requirement."
             )
-        if adapter.requires_human_approval and not human_approval:
-            raise HiveTransitionError(
-                "This adapter requires explicit human approval for each execution."
-            )
+        if adapter.requires_human_approval:
+            try:
+                require_governed_authorization(
+                    governance_authorization,
+                    required_authority=adapter.required_authority,
+                    legacy_human_approval=human_approval,
+                )
+            except GovernedAuthorizationError as exc:
+                raise HiveTransitionError(str(exc)) from exc
         return materialized, receipt, lease, worker
 
     def _insert_execution(
@@ -1434,6 +1452,7 @@ class HiveExecutionDispatcherStore:
         timeout_ms: int,
         actor: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         execution_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> HiveExecutionSnapshot:
@@ -1486,6 +1505,7 @@ class HiveExecutionDispatcherStore:
             "timeout_ms": timeout,
             "actor": self._required(actor, "actor"),
             "human_approval": bool(human_approval),
+            "governance_authorization": dict(governance_authorization or {}),
             "review_required": review_required,
         }
         fingerprint = self._fingerprint(request)
@@ -1526,6 +1546,7 @@ class HiveExecutionDispatcherStore:
                     requested_capability=capability,
                     requested_domains=domains,
                     human_approval=human_approval,
+                    governance_authorization=governance_authorization,
                 )
             except HiveTransitionError as exc:
                 denial = str(exc)
@@ -1899,18 +1920,24 @@ class HiveExecutionDispatcherStore:
         reason: str,
         stale_after_ms: int = 30000,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> HiveExecutionSnapshot:
-        if not human_approval:
-            raise HiveTransitionError(
-                "Human approval is required to recover a stale execution."
+        try:
+            authorization_receipt = require_governed_authorization(
+                governance_authorization,
+                required_authority="A2",
+                legacy_human_approval=human_approval,
             )
+        except GovernedAuthorizationError as exc:
+            raise HiveTransitionError(str(exc)) from exc
         request = {
             "execution_id": self._required(execution_id, "execution_id"),
             "actor": self._required(actor, "actor"),
             "reason": self._required(reason, "reason"),
             "stale_after_ms": max(0, int(stale_after_ms)),
-            "human_approval": True,
+            "human_approval": bool(human_approval),
+            "governance_authorization": authorization_receipt,
         }
         fingerprint = self._fingerprint(request)
         cancelled = False
@@ -2025,12 +2052,18 @@ class HiveExecutionDispatcherStore:
         actor: str,
         findings: dict[str, Any] | None = None,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> HiveExecutionSnapshot:
-        if not human_approval:
-            raise HiveTransitionError(
-                "Human approval is required to submit an execution review."
+        try:
+            authorization_receipt = require_governed_authorization(
+                governance_authorization,
+                required_authority="A2",
+                legacy_human_approval=human_approval,
+                require_reversible=False,
             )
+        except GovernedAuthorizationError as exc:
+            raise HiveTransitionError(str(exc)) from exc
         request = {
             "execution_id": self._required(execution_id, "execution_id"),
             "reviewer_worker_id": self._required(
@@ -2039,7 +2072,8 @@ class HiveExecutionDispatcherStore:
             "approved": bool(approved),
             "actor": self._required(actor, "actor"),
             "findings": findings or {},
-            "human_approval": True,
+            "human_approval": bool(human_approval),
+            "governance_authorization": authorization_receipt,
         }
         self._validate_payload_keys(request["findings"], path="findings")
         fingerprint = self._fingerprint(request)

@@ -19,7 +19,7 @@ The runtime Hive database remains the technical event store. Notion remains the 
 
 ## Required project/branch fields
 
-Every project or branch should record: parent record, purpose, scope, exclusions, accountable human, authority ceiling, source boundary, dependencies, risks, acceptance criteria, decision gates, fan-in owner, and closure/transition condition.
+Every project or branch should record: parent record, purpose, scope, exclusions, optional ultimate accountable owner, agentic authority basis, authority owner, authority ceiling, source boundary, dependencies, risks, acceptance criteria, decision gates, fan-in owner, and closure/transition condition.
 
 Missing fields are returned in `evidence_gaps`; they are never fabricated.
 

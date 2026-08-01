@@ -201,7 +201,7 @@ def test_certification_requires_independent_reviewer_and_no_credentials(
         role="reviewer",
         competencies=["governance"],
     )
-    with pytest.raises(HiveTransitionError, match="Human approval"):
+    with pytest.raises(HiveTransitionError, match="Governance-plan authorization"):
         effects.certify_adapter(
             adapter_id="builtin.sandbox_artifact.v1",
             implementation_id="builtin.sandbox_artifact.v1",

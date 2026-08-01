@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -9,6 +11,11 @@ from starlette.concurrency import run_in_threadpool
 from app.attachments.errors import AttachmentError
 from app.logger import logger
 from app.governance import governance_receipt_from_client
+from app.mutation_policy import (
+    MutationPolicy,
+    MutationPolicyError,
+    require_mutation_capability,
+)
 from app.notion_client import NotionUpstreamError
 from app.unsafe_url_continuation import (
     allow_pending_unsafe_urls_once,
@@ -23,6 +30,8 @@ class UploadPageFileRequest(BaseModel):
     file_path: str = Field(min_length=1)
     filename: str | None = None
     content_type: str | None = None
+    workspace: str | None = None
+    idempotency_key: str | None = None
 
 
 class UploadPageFileResponse(BaseModel):
@@ -38,6 +47,7 @@ class UploadPageFileResponse(BaseModel):
 
 class CheckPageAccessRequest(BaseModel):
     page_id: str = Field(min_length=1)
+    workspace: str | None = None
 
 
 class CheckPageAccessResponse(BaseModel):
@@ -52,6 +62,8 @@ class CheckPageAccessResponse(BaseModel):
 class CreatePageRequest(BaseModel):
     title: str = Field(min_length=1)
     parent_page_id: str | None = None
+    workspace: str | None = None
+    idempotency_key: str | None = None
 
 
 class CreatePageResponse(BaseModel):
@@ -66,6 +78,8 @@ class CreatePageResponse(BaseModel):
 class DeleteBlockChildrenRequest(BaseModel):
     page_id: str = Field(min_length=1)
     preserve_types: list[str] = Field(default_factory=list)
+    workspace: str | None = None
+    idempotency_key: str | None = None
 
 
 class DeleteBlockChildrenResponse(BaseModel):
@@ -77,6 +91,8 @@ class DeleteBlockChildrenResponse(BaseModel):
 class AppendBlocksRequest(BaseModel):
     page_id: str = Field(min_length=1)
     children: list[dict[str, Any]] = Field(default_factory=list)
+    workspace: str | None = None
+    idempotency_key: str | None = None
 
 
 class AppendBlocksResponse(BaseModel):
@@ -98,6 +114,10 @@ class AccountInfoResponse(BaseModel):
 class AccountSummaryResponse(BaseModel):
     account_number: int
     profile_name: str
+    base_profile_name: str = ""
+    workspace_key: str = ""
+    workspace_name: str = ""
+    teamspace_name: str = ""
     user_name: str
     user_email: str
     space_id: str
@@ -109,17 +129,38 @@ class AccountSummaryResponse(BaseModel):
     governance_aligned: bool
 
 
+class WorkspaceSummaryResponse(BaseModel):
+    workspace_key: str
+    workspace_name: str
+    workspace_id: str
+    teamspace_name: str
+    teamspace_id: str
+    selected: bool
+    account_count: int
+
+
 class AccountSelectionResponse(BaseModel):
     ok: bool
     mode: Literal["auto", "pinned"]
+    workspace_mode: Literal["pinned"] = "pinned"
+    workspace_key: str = ""
+    workspace_name: str = ""
+    workspace_id: str = ""
+    teamspace_name: str = ""
+    teamspace_id: str = ""
     selected_account_number: int | None = None
     selected_profile_name: str | None = None
     next_account_number: int | None = None
     previous_selection: dict[str, Any] = Field(default_factory=dict)
     effective_for_new_requests: bool = True
     persistence_enabled: bool = False
+    workspaces: list[WorkspaceSummaryResponse] = Field(default_factory=list)
     accounts: list[AccountSummaryResponse] = Field(default_factory=list)
     governance: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkspaceSwitchRequest(BaseModel):
+    selector: str = Field(min_length=1)
 
 
 class AccountSwitchRequest(BaseModel):
@@ -167,6 +208,98 @@ def _error_detail(
         payload["detail"] = detail
     return {"error": payload}
 
+async def _resolve_plan_authorization(
+    request: Request,
+    client: Any,
+    capability: str,
+    governance: dict[str, Any],
+) -> dict[str, Any]:
+    decision_engine = getattr(
+        request.app.state, "mutation_decision_engine", None
+    )
+    if callable(decision_engine):
+        decision = decision_engine(
+            request=request,
+            client=client,
+            capability=capability,
+            governance=governance,
+        )
+        if inspect.isawaitable(decision):
+            decision = await decision
+        return dict(decision or {}) if isinstance(decision, dict) else {}
+
+    trusted_state_decision = getattr(request.state, "plan_authorization", None)
+    if isinstance(trusted_state_decision, dict):
+        return dict(trusted_state_decision)
+
+    configured_decision = getattr(request.app.state, "plan_authorization", None)
+    if isinstance(configured_decision, dict):
+        return dict(configured_decision)
+    return {}
+
+
+async def _require_notion_mutation(
+    request: Request,
+    client: Any,
+    capability: str,
+) -> dict[str, object]:
+    policy = getattr(request.app.state, "mutation_policy", None)
+    if policy is not None and not isinstance(policy, MutationPolicy):
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                message="The runtime mutation policy is invalid.",
+                code="invalid_mutation_policy",
+                error_type="server_error",
+            ),
+        )
+    governance = governance_receipt_from_client(client)
+    plan_authorization = await _resolve_plan_authorization(
+        request, client, capability, governance
+    )
+    try:
+        return require_mutation_capability(
+            capability,
+            governance_aligned=bool(governance.get("aligned")),
+            plan_authorization=plan_authorization,
+            policy=policy,
+        )
+    except MutationPolicyError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=_error_detail(
+                message=str(exc),
+                code="notion_mutation_not_authorized",
+                error_type="permission_error",
+                param="capability",
+            ),
+        ) from exc
+
+
+
+def _client_for_workspace(
+    pool: Any,
+    selector: str | None,
+    idempotency_key: str | None = None,
+) -> Any:
+    workspace = str(selector or "").strip()
+    client = (
+        pool.get_client_for_workspace(workspace)
+        if workspace
+        else pool.get_client()
+    )
+    client.request_idempotency_key = str(idempotency_key or "").strip()
+    return client
+
+
+def _metadata_client_for_workspace(pool: Any, selector: str | None) -> Any:
+    workspace = str(selector or "").strip()
+    return (
+        pool.get_metadata_client_for_workspace(workspace)
+        if workspace
+        else pool.get_metadata_client()
+    )
+
 
 @router.post("/notion/upload_file", response_model=UploadPageFileResponse)
 async def upload_page_file(
@@ -174,7 +307,12 @@ async def upload_page_file(
 ) -> UploadPageFileResponse:
     """Upload a local file into a page File block using the configured Notion account."""
     try:
-        client = request.app.state.account_pool.get_client()
+        client = _client_for_workspace(
+            request.app.state.account_pool,
+            body.workspace,
+            body.idempotency_key,
+        )
+        await _require_notion_mutation(request, client, "page.upload")
         result = await run_in_threadpool(
             client.upload_file_to_page,
             page_id=body.page_id.strip(),
@@ -235,7 +373,9 @@ async def check_page_access(
 ) -> CheckPageAccessResponse:
     """Check whether the configured Notion account can read a page."""
     try:
-        client = request.app.state.account_pool.get_client()
+        client = _client_for_workspace(
+            request.app.state.account_pool, body.workspace
+        )
         result = await run_in_threadpool(client.check_page_access, body.page_id.strip())
         return CheckPageAccessResponse(**result)
     except ValueError as exc:
@@ -265,6 +405,12 @@ def _account_selection_response(pool: Any) -> AccountSelectionResponse:
     return AccountSelectionResponse(
         ok=True,
         mode=summary["mode"],
+        workspace_mode="pinned",
+        workspace_key=str(summary.get("workspace_key") or ""),
+        workspace_name=str(summary.get("workspace_name") or ""),
+        workspace_id=str(summary.get("workspace_id") or ""),
+        teamspace_name=str(summary.get("teamspace_name") or ""),
+        teamspace_id=str(summary.get("teamspace_id") or ""),
         selected_account_number=summary.get("selected_account_number"),
         selected_profile_name=summary.get("selected_profile_name"),
         next_account_number=summary.get("next_account_number"),
@@ -273,6 +419,10 @@ def _account_selection_response(pool: Any) -> AccountSelectionResponse:
             summary.get("effective_for_new_requests", True)
         ),
         persistence_enabled=bool(summary.get("persistence_enabled", False)),
+        workspaces=[
+            WorkspaceSummaryResponse(**item)
+            for item in summary.get("workspaces", [])
+        ],
         accounts=[
             AccountSummaryResponse(**item) for item in summary.get("accounts", [])
         ],
@@ -284,6 +434,49 @@ def _account_selection_response(pool: Any) -> AccountSelectionResponse:
 async def list_accounts(request: Request) -> AccountSelectionResponse:
     """List safe account metadata and the current AIgentBee selection mode."""
     return _account_selection_response(request.app.state.account_pool)
+
+
+@router.post("/notion/workspaces/switch", response_model=AccountSelectionResponse)
+async def switch_workspace(
+    request: Request,
+    body: WorkspaceSwitchRequest,
+) -> AccountSelectionResponse:
+    """Select one workspace; account rotation remains automatic inside it."""
+    pool = request.app.state.account_pool
+    switched = False
+    try:
+        pool.switch_workspace(body.selector)
+        switched = True
+        candidate = pool.get_metadata_client()
+        governance = governance_receipt_from_client(candidate)
+        if not governance.get("aligned"):
+            raise RuntimeError(
+                "Selected workspace is not aligned with its governance contract"
+            )
+        authority_page_id = str(governance.get("authority_page_id") or "").strip()
+        if authority_page_id:
+            access = await run_in_threadpool(
+                candidate.check_page_access, authority_page_id
+            )
+            if not access.get("accessible"):
+                raise RuntimeError(
+                    "Selected workspace authority page is not accessible"
+                )
+        return _account_selection_response(pool)
+    except (ValueError, RuntimeError) as exc:
+        if switched:
+            pool.rollback_account_switch()
+        raise HTTPException(
+            status_code=400 if isinstance(exc, ValueError) else 409,
+            detail=_error_detail(
+                message=str(exc),
+                code="invalid_notion_workspace_selector",
+                error_type="invalid_request_error"
+                if isinstance(exc, ValueError)
+                else "conflict_error",
+                param="selector",
+            ),
+        ) from exc
 
 
 @router.post("/notion/accounts/switch", response_model=AccountSelectionResponse)
@@ -367,9 +560,14 @@ async def rollback_account_switch(request: Request) -> AccountSelectionResponse:
 
 
 @router.get("/notion/account_info", response_model=AccountInfoResponse)
-async def account_info(request: Request) -> AccountInfoResponse:
-    """Return the selected Notion account and resolved Repo AI parent page metadata."""
-    client = request.app.state.account_pool.get_metadata_client()
+async def account_info(
+    request: Request,
+    workspace: str | None = None,
+) -> AccountInfoResponse:
+    """Return account and Repo AI parent metadata for one request-scoped workspace."""
+    client = _metadata_client_for_workspace(
+        request.app.state.account_pool, workspace
+    )
     parent_page_id = client.resolve_repo_ai_parent_page_id()
     parent_accessible = False
     if parent_page_id:
@@ -440,7 +638,12 @@ async def allow_unsafe_url_once(
 async def create_page(request: Request, body: CreatePageRequest) -> CreatePageResponse:
     """Create a child page using the configured Notion account."""
     try:
-        client = request.app.state.account_pool.get_client()
+        client = _client_for_workspace(
+            request.app.state.account_pool,
+            body.workspace,
+            body.idempotency_key,
+        )
+        await _require_notion_mutation(request, client, "page.create")
         requested_parent = str(body.parent_page_id or "").strip()
         if requested_parent:
             parent_page_id = client._normalize_notion_id(
@@ -496,7 +699,12 @@ async def delete_block_children(
 ) -> DeleteBlockChildrenResponse:
     """Delete child blocks from a page, preserving selected block types."""
     try:
-        client = request.app.state.account_pool.get_client()
+        client = _client_for_workspace(
+            request.app.state.account_pool,
+            body.workspace,
+            body.idempotency_key,
+        )
+        await _require_notion_mutation(request, client, "page.delete_children")
         deleted_count = await run_in_threadpool(
             client.delete_block_children,
             body.page_id.strip(),
@@ -535,7 +743,12 @@ async def append_blocks(
 ) -> AppendBlocksResponse:
     """Append public-API-shaped blocks to a page."""
     try:
-        client = request.app.state.account_pool.get_client()
+        client = _client_for_workspace(
+            request.app.state.account_pool,
+            body.workspace,
+            body.idempotency_key,
+        )
+        await _require_notion_mutation(request, client, "page.append")
         appended_count = await run_in_threadpool(
             client.append_integration_blocks,
             body.page_id.strip(),

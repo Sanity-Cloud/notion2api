@@ -1,11 +1,14 @@
 import json
 import os
 
-from app.governance import GovernanceContract
+from app.workspace_routing import (
+    default_workspace_definition,
+    expand_accounts_for_workspaces,
+)
 from dotenv import load_dotenv
 
-# text .env textoverride=True text .env text
-load_dotenv(override=True)
+# Explicit process/profile settings take precedence over repository .env defaults.
+load_dotenv(override=False)
 
 REQUIRED_ACCOUNT_FIELDS = {"token_v2", "space_id", "user_id"}
 
@@ -88,13 +91,13 @@ def load_accounts():
 # Parse secret-backed account configuration without creating provider clients.
 # Runtime startup performs the fail-closed governance binding so isolated config
 # loaders can validate mounted secrets without acquiring provider authority.
-GOVERNANCE_CONTRACT = GovernanceContract.from_env()
+GOVERNANCE_CONTRACT = default_workspace_definition().contract
 ACCOUNTS = load_accounts()
 
 
 def get_governed_accounts() -> list[dict]:
     """Return accounts bound to the canonical governance/teamspace contract."""
-    return GOVERNANCE_CONTRACT.bind_accounts(ACCOUNTS)
+    return expand_accounts_for_workspaces(ACCOUNTS)
 
 
 def _secret_value(name: str, default: str = "") -> str:
@@ -119,24 +122,24 @@ ALLOWED_ORIGINS = parse_allowed_origins(
 # External URL confirmations from Notion (connections.web.loadPage / urlSafety).
 # Notion2API treats these as protocol continuation requirements, not local access
 # gates. Authorization gating belongs outside this service.
-# EXTERNAL_URL_APPROVAL_POLICY: allow_all (default) | manual
+# EXTERNAL_URL_APPROVAL_POLICY: manual (default) | allow_all
 # AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS: automatically call allow-once continuation
 EXTERNAL_URL_APPROVAL_POLICY = (
     (
         os.getenv("EXTERNAL_URL_APPROVAL_POLICY")
         or os.getenv("Notion__ExternalUrlApprovalPolicy")
-        or "allow_all"
+        or "manual"
     )
     .strip()
     .lower()
 )
 AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS = _env_flag(
     "AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS",
-    default=_env_flag("Notion__AutoContinueExternalUrlConfirmations", default=True),
+    default=_env_flag("Notion__AutoContinueExternalUrlConfirmations", default=False),
 )
 EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES = max(
     0,
-    int(os.getenv("EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES", "2") or "2"),
+    min(3, int(os.getenv("EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES", "1") or "1")),
 )
 
 # APP_MODE: heavytextlite text standard

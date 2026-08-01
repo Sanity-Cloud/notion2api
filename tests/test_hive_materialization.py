@@ -142,7 +142,7 @@ def test_no_worker_path_is_durably_blocked_and_idempotent(tmp_path):
         )
 
 
-def test_human_gate_waits_for_approval_then_materializes(tmp_path):
+def test_governance_gate_waits_for_authorization_then_materializes(tmp_path):
     store, workforce, runtime = _stores(tmp_path)
     worker = _appoint(
         workforce,
@@ -162,6 +162,9 @@ def test_human_gate_waits_for_approval_then_materializes(tmp_path):
         idempotency_key="approval-request",
     )
     assert prepared.status == MaterializationStatus.AWAITING_APPROVAL.value
+    assert prepared.governance_gate_required is True
+    assert prepared.human_gate_required is True  # persisted compatibility mirror
+    assert prepared.authorization_basis == "governance_plan_inference"
     assert runtime.get_mission("approval-mission").found is False
 
     approved = store.approve_materialization(
@@ -171,7 +174,9 @@ def test_human_gate_waits_for_approval_then_materializes(tmp_path):
         idempotency_key="approve-approval-plan",
     )
     assert approved.status == MaterializationStatus.MATERIALIZED.value
-    assert approved.human_approval is True
+    assert approved.governance_gate_required is True
+    assert approved.authorization_basis == "governance_plan_inference"
+    assert approved.human_approval is True  # deprecated persisted compatibility field
     assert approved.approved_by == "accountable-human"
     assert len(approved.leases) == len(approved.dispatch_receipts) == 1
     assert runtime.get_mission("approval-mission").found is True
@@ -284,9 +289,10 @@ def test_three_lane_hive_has_bindings_leases_and_review_dependencies(tmp_path):
         DispatchStatus.READY.value
     }
     assert all(
-        item.conversation_id.startswith("aigentbee:phase2-plan:")
+        item.conversation_id.startswith("aigentbee:worker:")
         for item in result.dispatch_receipts
     )
+    assert len({item.conversation_id for item in result.dispatch_receipts}) == 3
 
     mission = runtime.get_mission("phase2-mission")
     assert mission.found is True

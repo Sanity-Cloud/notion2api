@@ -13,6 +13,10 @@ from typing import Any, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.governed_authorization import (
+    GovernedAuthorizationError,
+    require_governed_authorization,
+)
 from app.hive_runtime import (
     HiveIdempotencyConflict,
     HiveNotFoundError,
@@ -20,6 +24,11 @@ from app.hive_runtime import (
     HiveWorkUnitSpec,
     default_hive_runtime_db_path,
     get_hive_runtime_store,
+)
+from app.hive_multithread import (
+    leader_conversation_id,
+    plan_lane_dependencies,
+    worker_conversation_id,
 )
 from app.hive_workforce import (
     AUTHORITY_RANK,
@@ -130,7 +139,9 @@ class HiveMaterializationSnapshot(BaseModel):
     parent_context_id: str = ""
     lifecycle_stage: str = ""
     mission_id: str = ""
+    governance_gate_required: bool = False
     human_gate_required: bool = False
+    authorization_basis: str = "governance_plan_inference"
     human_approval: bool = False
     approved_by: str = ""
     work_unit_ids: list[str] = Field(default_factory=list)
@@ -394,7 +405,9 @@ class HiveMaterializationStore:
             parent_context_id=str(row["parent_context_id"]),
             lifecycle_stage=str(row["lifecycle_stage"]),
             mission_id=str(row["mission_id"]),
+            governance_gate_required=bool(row["human_gate_required"]),
             human_gate_required=bool(row["human_gate_required"]),
+            authorization_basis="governance_plan_inference",
             human_approval=bool(row["human_approval"]),
             approved_by=str(row["approved_by"]),
             work_unit_ids=[item.work_unit_id for item in receipts],
@@ -475,6 +488,7 @@ class HiveMaterializationStore:
         parent_context_id: str = "",
         lifecycle_stage: str = "Build",
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         actor: str = "notion2api",
         plan_id: str | None = None,
         mission_id: str | None = None,
@@ -516,6 +530,7 @@ class HiveMaterializationStore:
             "parent_context_id": str(parent_context_id or "").strip(),
             "lifecycle_stage": self._required(lifecycle_stage, "lifecycle_stage"),
             "mission_id": mission_key,
+            "governance_authorization": dict(governance_authorization or {}),
         }
         fingerprint = self._fingerprint(request)
         replay_plan_id = ""
@@ -571,9 +586,20 @@ class HiveMaterializationStore:
             or not selected_ids
             or (plan.mode == "hive" and len(selected_ids) < plan.suggested_lane_count)
         )
+        authorization_receipt: dict[str, Any] = {}
+        authorization_error = ""
+        if plan.governance_gate_required and not blocked:
+            try:
+                authorization_receipt = require_governed_authorization(
+                    governance_authorization,
+                    required_authority=plan.requested_authority,
+                    legacy_human_approval=human_approval,
+                )
+            except GovernedAuthorizationError as exc:
+                authorization_error = str(exc)
         if blocked:
             status = MaterializationStatus.BLOCKED.value
-        elif plan.human_gate_required and not human_approval:
+        elif plan.governance_gate_required and not authorization_receipt:
             status = MaterializationStatus.AWAITING_APPROVAL.value
         else:
             status = MaterializationStatus.PREPARING.value
@@ -617,9 +643,11 @@ class HiveMaterializationStore:
                     request["parent_context_id"],
                     request["lifecycle_stage"],
                     mission_key,
-                    int(plan.human_gate_required),
-                    int(human_approval),
-                    actor if human_approval else "",
+                    int(plan.governance_gate_required),
+                    int(bool(authorization_receipt)),
+                    str(authorization_receipt.get("decided_by") or actor)
+                    if authorization_receipt
+                    else "",
                     idempotency_key,
                     fingerprint,
                     now,
@@ -637,6 +665,8 @@ class HiveMaterializationStore:
                     "selected_worker_ids": selected_ids,
                     "missing_competencies": plan.missing_competencies,
                     "missing_writable_domains": plan.missing_writable_domains,
+                    "authorization": authorization_receipt,
+                    "authorization_error": authorization_error,
                 },
                 fingerprint=fingerprint,
                 created_at=now,
@@ -788,7 +818,7 @@ class HiveMaterializationStore:
         non_review_ids: list[str] = []
         for index, worker in enumerate(ordered, start=1):
             work_id = f"{mission_id}-lane-{index:02d}-{worker.worker_id}"
-            conversation_id = f"aigentbee:{plan_id}:{worker.worker_id}"
+            conversation_id = worker_conversation_id(plan_id, worker.worker_id)
             requested_domains = set(request["writable_domains"])
             lease_domains = sorted(
                 requested_domains.intersection(worker.writable_domains)
@@ -810,16 +840,18 @@ class HiveMaterializationStore:
             if worker.worker_class != WorkerClass.GOVERNANCE_REVIEWER.value:
                 non_review_ids.append(work_id)
 
-        previous = ""
-        remaining_dependencies = int(request["dependency_count"])
+        dependency_plan = plan_lane_dependencies(
+            [lane["work_unit_id"] for lane in lanes],
+            reviewer_ids=[
+                lane["work_unit_id"]
+                for lane in lanes
+                if lane["worker"].worker_class == WorkerClass.GOVERNANCE_REVIEWER.value
+            ],
+            dependency_count=int(request["dependency_count"]),
+            parallelizable_workstreams=int(request["parallelizable_workstreams"]),
+        )
         for lane in lanes:
-            worker = lane["worker"]
-            if worker.worker_class == WorkerClass.GOVERNANCE_REVIEWER.value:
-                lane["dependencies"] = list(non_review_ids)
-            elif previous and remaining_dependencies > 0:
-                lane["dependencies"] = [previous]
-                remaining_dependencies -= 1
-            previous = lane["work_unit_id"]
+            lane["dependencies"] = dependency_plan[lane["work_unit_id"]]
 
         specs = [
             HiveWorkUnitSpec(
@@ -915,6 +947,21 @@ class HiveMaterializationStore:
                     "mission_id": mission_id,
                     "work_unit_ids": [item["work_unit_id"] for item in lanes],
                     "worker_ids": selected_ids,
+                    "topology": "one_leader_many_independent_workers",
+                    "leader_conversation_id": leader_conversation_id(mission_id),
+                    "worker_conversation_ids": {
+                        item["worker"].worker_id: item["conversation_id"]
+                        for item in lanes
+                    },
+                    "parallelizable_workstreams": int(
+                        request["parallelizable_workstreams"]
+                    ),
+                    "dependency_plan": {
+                        item["work_unit_id"]: item["dependencies"]
+                        for item in lanes
+                    },
+                    "communication_bus": "hive_events",
+                    "shared_pooled_tool_list": False,
                 },
             )
             return self._snapshot(conn, plan_id)

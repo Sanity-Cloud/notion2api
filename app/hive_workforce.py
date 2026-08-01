@@ -13,6 +13,10 @@ from typing import Any, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.governed_authorization import (
+    GovernedAuthorizationError,
+    require_governed_authorization,
+)
 from app.hive_runtime import (
     HiveIdempotencyConflict,
     HiveNotFoundError,
@@ -110,7 +114,9 @@ class HiveInvocationPlan(BaseModel):
     objective: str = ""
     mode: str = "single_agent"
     reasons: list[str] = Field(default_factory=list)
+    governance_gate_required: bool = False
     human_gate_required: bool = False
+    authorization_basis: str = "governance_plan_inference"
     requested_authority: str = "A0"
     suggested_lane_count: int = 1
     eligible_worker_count: int = 0
@@ -345,16 +351,31 @@ class HiveWorkforceStore:
         actor: str,
         reason: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> WorkforceSnapshot:
         target = WorkerStage(str(target_stage).strip().upper()).value
+        authorization_receipt: dict[str, Any] = {}
+        if target in HUMAN_APPROVAL_STAGES:
+            required_authority = (
+                "A2" if target == WorkerStage.APPOINTED.value else "A1"
+            )
+            try:
+                authorization_receipt = require_governed_authorization(
+                    governance_authorization,
+                    required_authority=required_authority,
+                    legacy_human_approval=human_approval,
+                )
+            except GovernedAuthorizationError as exc:
+                raise HiveTransitionError(str(exc)) from exc
         request = {
             "worker_id": self._required(worker_id, "worker_id"),
             "target_stage": target,
             "actor": self._required(actor, "actor"),
             "reason": self._required(reason, "reason"),
             "human_approval": bool(human_approval),
+            "governance_authorization": authorization_receipt,
             "expected_revision": expected_revision,
         }
         fingerprint = self._fingerprint(request)
@@ -380,10 +401,6 @@ class HiveWorkforceStore:
                 )
             if target not in WORKER_TRANSITIONS.get(current, set()):
                 raise HiveTransitionError(f"Illegal worker transition: {current} -> {target}")
-            if target in HUMAN_APPROVAL_STAGES and not human_approval:
-                raise HiveTransitionError(
-                    f"Human approval is required for worker transition to {target}."
-                )
             now = self._now_ms()
             conn.execute(
                 "UPDATE hive_workers SET stage = ?, updated_at = ?, revision = revision + 1 WHERE worker_id = ?",
@@ -500,7 +517,7 @@ class HiveWorkforceStore:
             reasons.append(f"{risk.title()} risk requires explicit evidence and fan-in.")
         if external_effects:
             force_hive = True
-            reasons.append("External effects require a human-controlled execution gate.")
+            reasons.append("External effects require a reserved-action authorization receipt and independent review gate.")
 
         mode = "hive" if force_hive or not single_candidates else "single_agent"
         if mode == "single_agent":
@@ -562,7 +579,7 @@ class HiveWorkforceStore:
             reasons.append(
                 "Selected workers require bounded sub-lanes below the requested authority ceiling."
             )
-        human_gate = (
+        governance_gate = (
             external_effects
             or risk in {"high", "critical"}
             or AUTHORITY_RANK[authority] >= AUTHORITY_RANK["A3"]
@@ -578,7 +595,9 @@ class HiveWorkforceStore:
             objective=objective_text,
             mode=mode,
             reasons=reasons,
-            human_gate_required=human_gate,
+            governance_gate_required=governance_gate,
+            human_gate_required=governance_gate,
+            authorization_basis="governance_plan_inference",
             requested_authority=authority,
             suggested_lane_count=suggested_lane_count,
             eligible_worker_count=eligible_count,

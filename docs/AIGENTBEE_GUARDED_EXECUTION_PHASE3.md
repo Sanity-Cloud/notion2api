@@ -30,9 +30,9 @@ Built-in implementations:
 
 - `builtin.noop.v1`: deterministic no-op receipt generation.
 - `builtin.evidence_digest.v1`: deterministic digest of bounded JSON evidence; independent review is mandatory.
-- `builtin.bounded_delay.v1`: cooperative timeout and cancellation validation; human approval is mandatory for every execution.
+- `builtin.bounded_delay.v1`: cooperative timeout and cancellation validation; a governed authorization receipt is mandatory for every execution.
 
-All built-ins seed as `DISABLED`. Enabling an adapter requires explicit human approval. Compiled capability, writable-domain, timeout, payload-size, review, and approval limits cannot be weakened through the registry.
+All built-ins seed as `DISABLED`. Enabling an adapter requires an adopted-plan authorization receipt within the configured authority ceiling. Compiled capability, writable-domain, timeout, payload-size, review, and approval limits cannot be weakened through the registry.
 
 No built-in adapter provides shell, process, browser, network, filesystem, credential, environment, URL, or arbitrary-code access.
 
@@ -50,7 +50,7 @@ A new execution requires all of the following:
 8. Lease authority meets the adapter requirement.
 9. The payload is JSON-serializable and within the byte limit.
 10. Blocked execution keys such as `command`, `shell`, `path`, `url`, `token`, and `credential` are absent.
-11. Any required per-execution human approval is present.
+11. Any required per-execution governed authorization receipt is present.
 
 Failure at a policy precondition produces a durable `DENIED` execution and leaves the lane available for a corrected request.
 

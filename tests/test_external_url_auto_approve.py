@@ -25,13 +25,17 @@ def _reset_external_url_state(monkeypatch):
     reset_external_url_approval_state_for_tests()
 
 
-def test_policy_defaults_to_allow_all_and_auto_continue():
-    assert external_url_approval_policy() == "allow_all"
-    assert should_auto_continue_external_url_confirmations() is True
+def test_policy_defaults_to_manual_and_no_auto_continue(monkeypatch):
+    monkeypatch.delenv("EXTERNAL_URL_APPROVAL_POLICY", raising=False)
+    monkeypatch.delenv("Notion__ExternalUrlApprovalPolicy", raising=False)
+    monkeypatch.delenv("AUTO_CONTINUE_EXTERNAL_URL_CONFIRMATIONS", raising=False)
+    monkeypatch.delenv("Notion__AutoContinueExternalUrlConfirmations", raising=False)
+    assert external_url_approval_policy() == "manual"
+    assert should_auto_continue_external_url_confirmations() is False
 
 
 def test_mn_gov_and_arbitrary_domains_are_auto_approved_without_hostname_filter():
-    client = SimpleNamespace(account_key="acct-1", user_id="user-1")
+    client = SimpleNamespace(account_key="acct-1", user_id="user-1", space_id="space-1")
     calls: list[dict] = []
 
     def _continue(**kwargs):
@@ -74,7 +78,7 @@ def test_mn_gov_and_arbitrary_domains_are_auto_approved_without_hostname_filter(
 
 
 def test_multiple_and_mixed_urls_approved_without_manual_review():
-    client = SimpleNamespace(account_key="acct-1", user_id="user-1")
+    client = SimpleNamespace(account_key="acct-1", user_id="user-1", space_id="space-1")
     client.continue_confirmed_tool_steps = lambda **kwargs: {
         "approved": True,
         "stream_completed": True,
@@ -109,7 +113,7 @@ def test_multiple_and_mixed_urls_approved_without_manual_review():
 
 
 def test_duplicate_tool_step_events_produce_one_approval_call():
-    client = SimpleNamespace(account_key="acct-1", user_id="user-1")
+    client = SimpleNamespace(account_key="acct-1", user_id="user-1", space_id="space-1")
     calls: list[dict] = []
 
     def _continue(**kwargs):
@@ -147,7 +151,7 @@ def test_duplicate_tool_step_events_produce_one_approval_call():
 
 
 def test_approval_failure_is_operational_error_not_access_denial():
-    client = SimpleNamespace(account_key="acct-1", user_id="user-1")
+    client = SimpleNamespace(account_key="acct-1", user_id="user-1", space_id="space-1")
     client.continue_confirmed_tool_steps = lambda **kwargs: {
         "approved": False,
         "stream_completed": True,
@@ -175,7 +179,7 @@ def test_approval_failure_is_operational_error_not_access_denial():
 
 
 def test_audit_receipt_includes_required_fields():
-    client = SimpleNamespace(account_key="acct-audit", user_id="user-1")
+    client = SimpleNamespace(account_key="acct-audit", user_id="user-1", space_id="space-1")
     client.continue_confirmed_tool_steps = lambda **kwargs: {
         "approved": True,
         "stream_completed": True,
@@ -316,7 +320,7 @@ def test_stream_response_auto_approves_without_waiting_for_user():
 
 
 def test_claim_requires_usable_tool_step_id():
-    client = SimpleNamespace(account_key="acct-1", user_id="user-1")
+    client = SimpleNamespace(account_key="acct-1", user_id="user-1", space_id="space-1")
     claim = claim_external_url_auto_approval(
         client,
         thread_id="thread-1",
