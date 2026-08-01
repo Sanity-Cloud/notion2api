@@ -32,6 +32,7 @@ from app.core.errors import openai_error_payload
 from app.core.internal_callers import is_repo_ai_internal_request
 from app.limiter import limiter
 from app.logger import logger, setup_uvicorn_logging
+from app.notion_admission import get_notion_admission_controller
 
 
 apply_attachment_runtime_config()
@@ -261,6 +262,7 @@ def health_check(request: Request):
         "uptime": int(uptime),
         "account_selection": pool.get_selection_summary(),
         "governance": pool.get_governance_summary(),
+        "notion_admission": get_notion_admission_controller().snapshot(),
     }
 
 

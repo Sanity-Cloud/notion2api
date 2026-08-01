@@ -135,6 +135,10 @@ class HealthOutput(BaseModel):
     uptime: int | float | None = Field(default=None, description="Backend uptime, if reported.")
     account_selection: dict[str, Any] = Field(default_factory=dict, description="Safe Auto/Pinned account-selection summary.")
     governance: dict[str, Any] = Field(default_factory=dict, description="Canonical governance/teamspace receipt.")
+    notion_admission: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Shared Notion admission queue, throttling, and idempotency receipt.",
+    )
     raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend health response.")
 
 
@@ -4124,6 +4128,7 @@ def create_server(
             uptime=data.get("uptime"),
             account_selection=dict(data.get("account_selection") or {}),
             governance=dict(data.get("governance") or {}),
+            notion_admission=dict(data.get("notion_admission") or {}),
             raw=data,
         )
 
@@ -4136,6 +4141,21 @@ def create_server(
     )
     async def notion2api_list_accounts() -> dict[str, Any]:
         return await client.get("/v1/notion/accounts")
+
+    @server.tool(
+        name=_tool_name("notion2api_switch_workspace"),
+        description=_tool_description(
+            "Select one Notion workspace explicitly. Account rotation remains automatic "
+            "inside that workspace. Existing persistent chats retain their original "
+            "workspace/account binding and are not migrated."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_switch_workspace(selector: str) -> dict[str, Any]:
+        return await client.post(
+            "/v1/notion/workspaces/switch",
+            {"selector": selector},
+        )
 
     @server.tool(
         name=_tool_name("notion2api_switch_account"),

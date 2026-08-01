@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 
-DEFAULT_CONTRACT_VERSION = "sanitycloud-governance-v1"
-DEFAULT_WORKSPACE_ID = "034bf4af-15b3-81a9-a6ce-000330e15c65"
-DEFAULT_TEAMSPACE_ID = "3aabf4af-15b3-810f-a1e8-004254c8eb80"
-DEFAULT_AUTHORITY_PAGE_ID = "3a8bf4af-15b3-811e-aca0-d011efea6b50"
-DEFAULT_OUTPUT_PARENT_PAGE_ID = "1f2e3064-f1f9-424d-9892-ca82f88238d7"
-DEFAULT_FEEDBACK_PARENT_PAGE_ID = "3a8bf4af-15b3-81f1-a9bf-ebf67111b1ab"
+DEFAULT_CONTRACT_VERSION = "sanitycloud-governance-v2-sanity-management"
+DEFAULT_WORKSPACE_ID = "fe8b13aa-3ad2-811e-8292-0003b78a02f9"
+DEFAULT_TEAMSPACE_ID = "3acb13aa-3ad2-8176-9ff3-004220d4868f"
+DEFAULT_AUTHORITY_PAGE_ID = "3acb13aa-3ad2-816c-b6ec-d4930a87e12e"
+DEFAULT_OUTPUT_PARENT_PAGE_ID = "3acb13aa-3ad2-8161-b851-f9bb30c31ecc"
+DEFAULT_FEEDBACK_PARENT_PAGE_ID = "3acb13aa-3ad2-813f-81c9-c659c579c093"
 
 
 def _clean(value: Any) -> str:

@@ -100,6 +100,23 @@ def _bind_governance_request_metadata(
                     param=f"metadata.governance.{key}",
                 )
     metadata["governance"] = receipt
+    caller = metadata.get("caller") if isinstance(metadata.get("caller"), dict) else {}
+    explicit_idempotency = str(
+        metadata.get("idempotency_key")
+        or metadata.get("request_fingerprint")
+        or metadata.get("mcp_request_id")
+        or caller.get("request_fingerprint")
+        or ""
+    ).strip()
+    session_name = str(
+        metadata.get("mcp_session_name")
+        or metadata.get("session_name")
+        or ""
+    ).strip()
+    caller_type = str(caller.get("type") or caller.get("caller_type") or "").strip()
+    if not explicit_idempotency and session_name:
+        explicit_idempotency = f"leader-session:{caller_type or 'unknown'}:{session_name}"
+    client.request_idempotency_key = explicit_idempotency
     req_body.metadata = metadata
     return receipt
 
@@ -315,7 +332,21 @@ def _bound_thread_history_replay_response(
     )
 
 
-def _resolve_request_model(request: Request, model: str | None) -> str:
+def _request_workspace_selector(req_body: ChatCompletionRequest) -> str:
+    metadata = req_body.metadata if isinstance(req_body.metadata, dict) else {}
+    return str(
+        metadata.get("workspace_key")
+        or metadata.get("workspace")
+        or metadata.get("workspace_id")
+        or ""
+    ).strip()
+
+
+def _resolve_request_model(
+    request: Request,
+    model: str | None,
+    workspace_selector: str = "",
+) -> str:
     normalized_model = normalize_model_id(model)
     if not normalized_model:
         openai_error("The 'model' field is required.", "model_required")
@@ -323,7 +354,11 @@ def _resolve_request_model(request: Request, model: str | None) -> str:
     restricted = set()
     try:
         pool = request.app.state.account_pool
-        client = pool.get_client(wait_if_cooling=False)
+        client = (
+            pool.get_metadata_client_for_workspace(workspace_selector)
+            if workspace_selector
+            else pool.get_metadata_client()
+        )
         from app.model_registry import get_restricted_models_for_space, get_notion_model
 
         restricted = get_restricted_models_for_space(client)
@@ -376,6 +411,106 @@ def _request_context_page_id(req_body: ChatCompletionRequest, client: Any) -> st
             param="metadata.context_page_id",
         )
         raise AssertionError("openai_error must raise") from exc
+
+
+def _conversation_scope_for_client(client: Any) -> dict[str, str]:
+    return {
+        "workspace_id": str(getattr(client, "space_id", "") or "").strip(),
+        "teamspace_id": str(
+            getattr(client, "governance_teamspace_id", "") or ""
+        ).strip(),
+        "user_id": str(getattr(client, "user_id", "") or "").strip(),
+        "profile_name": str(
+            getattr(client, "profile_name", "")
+            or getattr(client, "base_profile_name", "")
+            or ""
+        ).strip(),
+        "publication_parent_page_id": str(
+            getattr(client, "documented_output_parent_page_id", "") or ""
+        ).strip(),
+        "governance_contract_version": str(
+            getattr(client, "governance_contract_version", "") or ""
+        ).strip(),
+    }
+
+
+def _bind_or_verify_conversation_scope(
+    manager: Any,
+    conversation_id: str,
+    client: Any,
+) -> dict[str, str]:
+    try:
+        return manager.bind_conversation_scope(
+            conversation_id,
+            **_conversation_scope_for_client(client),
+        )
+    except ValueError as exc:
+        openai_error(
+            str(exc),
+            "conversation_scope_mismatch",
+            status_code=409,
+            param="conversation_id",
+        )
+        raise AssertionError("openai_error must raise") from exc
+
+
+def _client_for_requested_workspace(pool: Any, req_body: ChatCompletionRequest) -> Any:
+    selector = _request_workspace_selector(req_body)
+    return (
+        pool.get_client_for_workspace(selector)
+        if selector
+        else pool.get_client()
+    )
+
+
+def _outer_retry_limit(
+    pool: Any,
+    req_body: ChatCompletionRequest,
+    *,
+    persistent_thread: bool = False,
+) -> int:
+    if persistent_thread:
+        return 1
+    selector = _request_workspace_selector(req_body)
+    try:
+        return max(1, int(pool.get_workspace_account_count(selector)))
+    except Exception:
+        return 1
+
+
+def _client_for_conversation(
+    pool: Any,
+    manager: Any,
+    conversation_id: str,
+    req_body: ChatCompletionRequest,
+) -> Any:
+    stored_scope = manager.get_conversation_scope(conversation_id)
+    stored_workspace = str(stored_scope.get("workspace_id") or "").strip()
+    stored_user = str(stored_scope.get("user_id") or "").strip()
+    requested_workspace = _request_workspace_selector(req_body)
+
+    if stored_workspace and stored_user:
+        if requested_workspace:
+            requested_client = pool.get_metadata_client_for_workspace(requested_workspace)
+            if (
+                requested_client.space_id.replace("-", "").casefold()
+                != stored_workspace.replace("-", "").casefold()
+            ):
+                openai_error(
+                    "Requested workspace conflicts with the persistent chat binding.",
+                    "conversation_workspace_mismatch",
+                    status_code=409,
+                    param="metadata.workspace_key",
+                )
+        client = pool.get_client_for_binding(
+            workspace_id=stored_workspace,
+            user_id=stored_user,
+        )
+    else:
+        client = _client_for_requested_workspace(pool, req_body)
+
+    _bind_or_verify_conversation_scope(manager, conversation_id, client)
+    return client
 
 
 def _request_computer_use_review(req_body: ChatCompletionRequest) -> bool:
@@ -1790,7 +1925,11 @@ def _handle_lite_request(
     """text Lite text"""
     pool = request.app.state.account_pool
 
-    req_body.model = _resolve_request_model(request, req_body.model)
+    req_body.model = _resolve_request_model(
+        request,
+        req_body.model,
+        _request_workspace_selector(req_body),
+    )
     assert req_body.model is not None
 
     # text
@@ -1814,12 +1953,12 @@ def _handle_lite_request(
     user_prompt = _prepare_messages_lite(req_body)
 
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    max_retries = max(3, len(pool.clients))
+    max_retries = _outer_retry_limit(pool, req_body)
 
     for attempt in range(1, max_retries + 1):
         client = None
         try:
-            client = pool.get_client()
+            client = _client_for_requested_workspace(pool, req_body)
             _bind_governance_request_metadata(req_body, client)
 
             # Read poll configuration from headers if available
@@ -2111,18 +2250,31 @@ def _handle_standard_request(
             history_message_count=len(history_messages),
         )
 
-    req_body.model = _resolve_request_model(request, req_body.model)
+    req_body.model = _resolve_request_model(
+        request,
+        req_body.model,
+        _request_workspace_selector(req_body),
+    )
     assert req_body.model is not None
 
     pool = request.app.state.account_pool
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    max_retries = max(3, len(pool.clients))
+    max_retries = _outer_retry_limit(
+        pool,
+        req_body,
+        persistent_thread=bool(bound_thread_id),
+    )
     client_type = _client_type_from_request(request)
 
     for attempt in range(1, max_retries + 1):
         client = None
         try:
-            client = pool.get_client()
+            if manager and conversation_id:
+                client = _client_for_conversation(
+                    pool, manager, conversation_id, req_body
+                )
+            else:
+                client = _client_for_requested_workspace(pool, req_body)
             _bind_governance_request_metadata(req_body, client)
 
             # Read poll configuration from headers if available
@@ -2502,7 +2654,11 @@ async def create_chat_completion(
             new_system_msg = ChatMessage(role="system", content=custom_instructions)
             req_body.messages.insert(0, new_system_msg)
 
-    req_body.model = _resolve_request_model(request, req_body.model)
+    req_body.model = _resolve_request_model(
+        request,
+        req_body.model,
+        _request_workspace_selector(req_body),
+    )
     assert req_body.model is not None
 
     # Check for local smoke/preflight messages to avoid creating new chats in Notion.
@@ -2690,12 +2846,18 @@ async def create_chat_completion(
                 )
 
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    max_retries = max(3, len(pool.clients))
+    max_retries = _outer_retry_limit(
+        pool,
+        req_body,
+        persistent_thread=bool(bound_thread_id),
+    )
 
     for attempt in range(1, max_retries + 1):
         client = None
         try:
-            client = pool.get_client()
+            client = _client_for_conversation(
+                pool, manager, conversation_id, req_body
+            )
             _bind_governance_request_metadata(req_body, client)
             transcript_payload = manager.get_transcript_payload(
                 notion_client=client,

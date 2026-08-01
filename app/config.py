@@ -1,11 +1,14 @@
 import json
 import os
 
-from app.governance import GovernanceContract
+from app.workspace_routing import (
+    default_workspace_definition,
+    expand_accounts_for_workspaces,
+)
 from dotenv import load_dotenv
 
-# text .env textoverride=True text .env text
-load_dotenv(override=True)
+# Explicit process/profile settings take precedence over repository .env defaults.
+load_dotenv(override=False)
 
 REQUIRED_ACCOUNT_FIELDS = {"token_v2", "space_id", "user_id"}
 
@@ -88,13 +91,13 @@ def load_accounts():
 # Parse secret-backed account configuration without creating provider clients.
 # Runtime startup performs the fail-closed governance binding so isolated config
 # loaders can validate mounted secrets without acquiring provider authority.
-GOVERNANCE_CONTRACT = GovernanceContract.from_env()
+GOVERNANCE_CONTRACT = default_workspace_definition().contract
 ACCOUNTS = load_accounts()
 
 
 def get_governed_accounts() -> list[dict]:
     """Return accounts bound to the canonical governance/teamspace contract."""
-    return GOVERNANCE_CONTRACT.bind_accounts(ACCOUNTS)
+    return expand_accounts_for_workspaces(ACCOUNTS)
 
 
 def _secret_value(name: str, default: str = "") -> str:

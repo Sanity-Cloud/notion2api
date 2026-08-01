@@ -159,7 +159,25 @@ class ConversationManager:
             # text thread text model text transcripttext thread text
             # text threadtext
             self._ensure_column(conn, "conversations", "thread_model TEXT")
+            self._ensure_column(conn, "conversations", "workspace_id TEXT")
+            self._ensure_column(conn, "conversations", "teamspace_id TEXT")
+            self._ensure_column(conn, "conversations", "user_id TEXT")
+            self._ensure_column(conn, "conversations", "profile_name TEXT")
+            self._ensure_column(conn, "conversations", "publication_parent_page_id TEXT")
+            self._ensure_column(conn, "conversations", "governance_contract_version TEXT")
             self._ensure_column(conn, "messages", "thinking TEXT")
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_conversations_chat_scope
+                ON conversations(workspace_id, user_id, created_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_conversations_page_scope
+                ON conversations(workspace_id, teamspace_id, created_at DESC)
+                """
+            )
 
             # Backfill next_round_index for pre-migration conversations that already had history.
             conn.execute(
@@ -590,6 +608,13 @@ class ConversationManager:
         self,
         title: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        *,
+        workspace_id: str = "",
+        teamspace_id: str = "",
+        user_id: str = "",
+        profile_name: str = "",
+        publication_parent_page_id: str = "",
+        governance_contract_version: str = "",
     ) -> str:
         conv_id = str(conversation_id or "").strip() or str(uuid.uuid4())
         created_at = int(datetime.datetime.now().timestamp())
@@ -597,15 +622,36 @@ class ConversationManager:
         with self._get_conn() as conn:
             conn.execute(
                 """
-                INSERT INTO conversations (id, title, created_at, next_round_index)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO conversations (
+                    id, title, created_at, next_round_index,
+                    workspace_id, teamspace_id, user_id, profile_name,
+                    publication_parent_page_id, governance_contract_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (conv_id, clean_title, created_at, 0),
+                (
+                    conv_id,
+                    clean_title,
+                    created_at,
+                    0,
+                    str(workspace_id or "").strip(),
+                    str(teamspace_id or "").strip(),
+                    str(user_id or "").strip(),
+                    str(profile_name or "").strip(),
+                    str(publication_parent_page_id or "").strip(),
+                    str(governance_contract_version or "").strip(),
+                ),
             )
             conn.commit()
         logger.info(
             "Conversation created",
-            extra={"request_info": {"event": "conversation_created", "conversation_id": conv_id}},
+            extra={
+                "request_info": {
+                    "event": "conversation_created",
+                    "conversation_id": conv_id,
+                    "workspace_id": str(workspace_id or "").strip(),
+                    "user_id": str(user_id or "").strip(),
+                }
+            },
         )
         return conv_id
 
@@ -627,6 +673,101 @@ class ConversationManager:
                 (clean_title, conversation_id),
             )
             conn.commit()
+
+    @staticmethod
+    def _normalized_scope_id(value: str) -> str:
+        return str(value or "").strip().replace("-", "").casefold()
+
+    def get_conversation_scope(self, conversation_id: str) -> dict[str, str]:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT workspace_id, teamspace_id, user_id, profile_name,
+                       publication_parent_page_id, governance_contract_version,
+                       thread_id
+                FROM conversations WHERE id = ?
+                """,
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            raise ValueError(f"Conversation ID '{conversation_id}' does not exist.")
+        return {
+            "workspace_id": str(row["workspace_id"] or ""),
+            "teamspace_id": str(row["teamspace_id"] or ""),
+            "user_id": str(row["user_id"] or ""),
+            "profile_name": str(row["profile_name"] or ""),
+            "publication_parent_page_id": str(
+                row["publication_parent_page_id"] or ""
+            ),
+            "governance_contract_version": str(
+                row["governance_contract_version"] or ""
+            ),
+            "thread_id": str(row["thread_id"] or ""),
+        }
+
+    def bind_conversation_scope(
+        self,
+        conversation_id: str,
+        *,
+        workspace_id: str,
+        teamspace_id: str,
+        user_id: str,
+        profile_name: str = "",
+        publication_parent_page_id: str = "",
+        governance_contract_version: str = "",
+    ) -> dict[str, str]:
+        """Bind an unbound chat or verify its immutable workspace/account identity."""
+        workspace_id = str(workspace_id or "").strip()
+        user_id = str(user_id or "").strip()
+        if not workspace_id or not user_id:
+            raise ValueError("workspace_id and user_id are required for chat scope")
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT workspace_id, user_id, thread_id
+                FROM conversations WHERE id = ?
+                """,
+                (conversation_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Conversation ID '{conversation_id}' does not exist.")
+            existing_workspace = str(row["workspace_id"] or "").strip()
+            existing_user = str(row["user_id"] or "").strip()
+            thread_id = str(row["thread_id"] or "").strip()
+            if existing_workspace or existing_user:
+                if (
+                    self._normalized_scope_id(existing_workspace)
+                    != self._normalized_scope_id(workspace_id)
+                    or self._normalized_scope_id(existing_user)
+                    != self._normalized_scope_id(user_id)
+                ):
+                    raise ValueError(
+                        "Conversation is bound to a different Notion workspace/account pair"
+                    )
+            elif thread_id:
+                raise ValueError(
+                    "Legacy persistent conversation has no workspace/account binding; "
+                    "fork it into a new chat instead of guessing its identity"
+                )
+            conn.execute(
+                """
+                UPDATE conversations
+                SET workspace_id = ?, teamspace_id = ?, user_id = ?, profile_name = ?,
+                    publication_parent_page_id = ?, governance_contract_version = ?
+                WHERE id = ?
+                """,
+                (
+                    workspace_id,
+                    str(teamspace_id or "").strip(),
+                    user_id,
+                    str(profile_name or "").strip(),
+                    str(publication_parent_page_id or "").strip(),
+                    str(governance_contract_version or "").strip(),
+                    conversation_id,
+                ),
+            )
+            conn.commit()
+        return self.get_conversation_scope(conversation_id)
 
     def get_conversation_thread_id(self, conversation_id: str) -> Optional[str]:
         """text Notion thread_id"""

@@ -91,7 +91,9 @@ def test_prepare_mcp_file_attachments_success():
         finally:
             os.unlink(tmp_name)
 
-def test_generated_mcp_schema_separates_local_paths_from_transferred_files():
+def test_generated_mcp_schema_separates_local_paths_from_transferred_files(monkeypatch):
+    monkeypatch.setenv("MCP_SERVER_NAME", "notion2api")
+    monkeypatch.setenv("MCP_TOOL_PREFIX", "")
     server = create_server(
         base_url="http://127.0.0.1:8120",
         api_key="test-key",
