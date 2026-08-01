@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -9,6 +11,11 @@ from starlette.concurrency import run_in_threadpool
 from app.attachments.errors import AttachmentError
 from app.logger import logger
 from app.governance import governance_receipt_from_client
+from app.mutation_policy import (
+    MutationPolicy,
+    MutationPolicyError,
+    require_mutation_capability,
+)
 from app.notion_client import NotionUpstreamError
 from app.unsafe_url_continuation import (
     allow_pending_unsafe_urls_once,
@@ -201,6 +208,74 @@ def _error_detail(
         payload["detail"] = detail
     return {"error": payload}
 
+async def _resolve_plan_authorization(
+    request: Request,
+    client: Any,
+    capability: str,
+    governance: dict[str, Any],
+) -> dict[str, Any]:
+    decision_engine = getattr(
+        request.app.state, "mutation_decision_engine", None
+    )
+    if callable(decision_engine):
+        decision = decision_engine(
+            request=request,
+            client=client,
+            capability=capability,
+            governance=governance,
+        )
+        if inspect.isawaitable(decision):
+            decision = await decision
+        return dict(decision or {}) if isinstance(decision, dict) else {}
+
+    trusted_state_decision = getattr(request.state, "plan_authorization", None)
+    if isinstance(trusted_state_decision, dict):
+        return dict(trusted_state_decision)
+
+    configured_decision = getattr(request.app.state, "plan_authorization", None)
+    if isinstance(configured_decision, dict):
+        return dict(configured_decision)
+    return {}
+
+
+async def _require_notion_mutation(
+    request: Request,
+    client: Any,
+    capability: str,
+) -> dict[str, object]:
+    policy = getattr(request.app.state, "mutation_policy", None)
+    if policy is not None and not isinstance(policy, MutationPolicy):
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                message="The runtime mutation policy is invalid.",
+                code="invalid_mutation_policy",
+                error_type="server_error",
+            ),
+        )
+    governance = governance_receipt_from_client(client)
+    plan_authorization = await _resolve_plan_authorization(
+        request, client, capability, governance
+    )
+    try:
+        return require_mutation_capability(
+            capability,
+            governance_aligned=bool(governance.get("aligned")),
+            plan_authorization=plan_authorization,
+            policy=policy,
+        )
+    except MutationPolicyError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=_error_detail(
+                message=str(exc),
+                code="notion_mutation_not_authorized",
+                error_type="permission_error",
+                param="capability",
+            ),
+        ) from exc
+
+
 
 def _client_for_workspace(
     pool: Any,
@@ -237,6 +312,7 @@ async def upload_page_file(
             body.workspace,
             body.idempotency_key,
         )
+        await _require_notion_mutation(request, client, "page.upload")
         result = await run_in_threadpool(
             client.upload_file_to_page,
             page_id=body.page_id.strip(),
@@ -567,6 +643,7 @@ async def create_page(request: Request, body: CreatePageRequest) -> CreatePageRe
             body.workspace,
             body.idempotency_key,
         )
+        await _require_notion_mutation(request, client, "page.create")
         requested_parent = str(body.parent_page_id or "").strip()
         if requested_parent:
             parent_page_id = client._normalize_notion_id(
@@ -627,6 +704,7 @@ async def delete_block_children(
             body.workspace,
             body.idempotency_key,
         )
+        await _require_notion_mutation(request, client, "page.delete_children")
         deleted_count = await run_in_threadpool(
             client.delete_block_children,
             body.page_id.strip(),
@@ -670,6 +748,7 @@ async def append_blocks(
             body.workspace,
             body.idempotency_key,
         )
+        await _require_notion_mutation(request, client, "page.append")
         appended_count = await run_in_threadpool(
             client.append_integration_blocks,
             body.page_id.strip(),

@@ -38,6 +38,7 @@ from app.attachments.normalizer import (
 from app.attachments.security import AttachmentPolicy
 from app.attachments.errors import AttachmentError
 from app.output_integrity import assess_output_integrity
+from app.retry_policy import bounded_provider_attempts
 from app.output_hygiene import (
     detect_visible_output_contamination,
     finalize_visible_output,
@@ -473,9 +474,10 @@ def _outer_retry_limit(
         return 1
     selector = _request_workspace_selector(req_body)
     try:
-        return max(1, int(pool.get_workspace_account_count(selector)))
+        account_count = max(1, int(pool.get_workspace_account_count(selector)))
     except Exception:
-        return 1
+        account_count = 1
+    return bounded_provider_attempts(account_count)
 
 
 def _client_for_conversation(
@@ -1148,33 +1150,33 @@ def _response_model_metadata(
 
     actual = payload.get("actual_model") or payload.get("notion_model_name")
     step_model = payload.get("notion_step_model") or ""
+    authoritative_sources = {
+        "authoritative_upstream_metadata",
+        "provider_response_header",
+        "signed_provider_receipt",
+    }
+    source = str(payload.get("actual_model_source") or "").strip()
+    authoritative_verification = bool(
+        payload.get("actual_model_verified") is True
+        and source in authoritative_sources
+    )
     if actual:
         payload["actual_model"] = actual
-        # Matching notionModelName can be a request echo. It is an observation,
-        # not authoritative responder identity.
-        if resolved_route and actual == resolved_route:
-            payload["actual_model_verified"] = False
+        payload["actual_model_verified"] = authoritative_verification
+        if not authoritative_verification:
             payload.setdefault(
                 "actual_model_unverified_reason",
-                "notionModelName matches the requested route; it may be an echo.",
+                "The responder model was observed but lacks authoritative verification.",
             )
-            payload.setdefault("actual_model_source", "notion_model_name_observation")
-        else:
-            payload.setdefault("actual_model_verified", True)
-            payload.setdefault("actual_model_source", "notion_model_name_mismatch")
+            payload["actual_model_source"] = source or "notion_model_name_observation"
     elif step_model:
-        if resolved_route and step_model != resolved_route:
-            payload["actual_model"] = step_model
-            payload["actual_model_verified"] = True
-            payload["actual_model_source"] = "notion_step_model_mismatch"
-        else:
-            payload["actual_model_verified"] = False
-            payload.setdefault(
-                "actual_model_unverified_reason",
-                "Only notion_step_model was observed and it matches the request route.",
-            )
-            payload.setdefault("actual_model_source", "notion_step_model_observation")
-            payload.pop("actual_model", None)
+        payload["actual_model"] = step_model
+        payload["actual_model_verified"] = False
+        payload.setdefault(
+            "actual_model_unverified_reason",
+            "notion_step_model is an observation, not authoritative responder identity.",
+        )
+        payload["actual_model_source"] = source or "notion_step_model_observation"
 
     observed = str(payload.get("actual_model") or "").strip()
     verified = bool(payload.get("actual_model_verified") is True and observed)

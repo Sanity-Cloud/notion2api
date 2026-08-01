@@ -236,10 +236,15 @@ def _message_model_metadata(message: dict[str, Any]) -> dict[str, str]:
         "model_provider": model_provider,
     }
     if actual_model:
-        metadata["actual_model_verified"] = "true"
+        metadata["actual_model_verified"] = "false"
+        metadata["actual_model_unverified_reason"] = (
+            "Imported Notion model metadata is an observation and is not independently verified."
+        )
     elif notion_step_model:
         metadata["actual_model_verified"] = "false"
-        metadata["actual_model_unverified_reason"] = "Only step.model was observed; not used as actual_model."
+        metadata["actual_model_unverified_reason"] = (
+            "Only step.model was observed; it is not authoritative responder identity."
+        )
     return metadata
 
 def _display_message(message: dict[str, Any]) -> dict[str, Any] | None:

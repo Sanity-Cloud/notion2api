@@ -4702,13 +4702,14 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _workforce_error_snapshot(exc)
 
-    @server.tool(name=_tool_name("notion2api_hive_transition_worker"), description=_tool_description("Move a governed worker through shadow, probation, appointment, suspension, rejection, or offboarding. Probation and appointment require explicit human approval."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_transition_worker"), description=_tool_description("Move a governed worker through shadow, probation, appointment, suspension, rejection, or offboarding. Probation and appointment require a governance-plan authorization receipt; the legacy human_approval flag is accepted only for compatibility."), structured_output=True)
     async def notion2api_hive_transition_worker(
         worker_id: str,
         target_stage: str,
         actor: str,
         reason: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> WorkforceSnapshot:
@@ -4719,6 +4720,7 @@ def create_server(
                 actor=actor,
                 reason=reason,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
             )
@@ -4782,7 +4784,7 @@ def create_server(
             error=str(exc),
         )
 
-    @server.tool(name=_tool_name("notion2api_hive_materialize_invocation"), description=_tool_description("Persist an invocation plan and, when coverage and approval gates pass, create a durable Hive mission with appointed-worker bindings, bounded leases, conversation bindings, and READY dispatch receipts."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_materialize_invocation"), description=_tool_description("Persist an invocation plan and, when coverage and governance-plan authorization gates pass, create a durable Hive mission with appointed-worker bindings, bounded leases, conversation bindings, and READY dispatch receipts."), structured_output=True)
     async def notion2api_hive_materialize_invocation(
         objective: str,
         required_competencies: list[str] | None = None,
@@ -4797,6 +4799,7 @@ def create_server(
         parent_context_id: str = "",
         lifecycle_stage: str = "Build",
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         actor: str = "notion2api",
         plan_id: str | None = None,
         mission_id: str | None = None,
@@ -4817,6 +4820,7 @@ def create_server(
                 parent_context_id=parent_context_id,
                 lifecycle_stage=lifecycle_stage,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 actor=actor,
                 plan_id=plan_id,
                 mission_id=mission_id,
@@ -4926,7 +4930,7 @@ def create_server(
             reviews=[],
         )
 
-    @server.tool(name=_tool_name("notion2api_hive_upsert_execution_adapter"), description=_tool_description("Register or update one compiled safe execution adapter. Unknown implementations are rejected, adapters remain disabled unless explicitly human-approved, and compiled capability, domain, timeout, payload, review, and approval limits cannot be weakened."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_upsert_execution_adapter"), description=_tool_description("Register or update one compiled safe execution adapter. Unknown implementations are rejected, adapters remain disabled unless authorized by a governance-plan decision receipt, and compiled capability, domain, timeout, payload, review, and approval limits cannot be weakened."), structured_output=True)
     async def notion2api_hive_upsert_execution_adapter(
         adapter_id: str,
         implementation_id: str,
@@ -4941,6 +4945,7 @@ def create_server(
         enabled: bool = False,
         actor: str = "notion2api",
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> HiveAdapterSnapshot:
@@ -4959,6 +4964,7 @@ def create_server(
                 enabled=enabled,
                 actor=actor,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
             )
@@ -4980,7 +4986,7 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _adapter_error_snapshot(exc)
 
-    @server.tool(name=_tool_name("notion2api_hive_execute_dispatch"), description=_tool_description("Execute one READY materialized lane through an enabled compiled adapter after verifying the active lease, appointed worker, capability, writable-domain allowlists, authority ceiling, payload boundary, timeout, and any human-approval requirement. No shell, browser, filesystem, credential, network, or arbitrary code adapter is available."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_execute_dispatch"), description=_tool_description("Execute one READY materialized lane through an enabled compiled adapter after verifying the active lease, appointed worker, capability, writable-domain allowlists, authority ceiling, payload boundary, timeout, and any governance-plan authorization requirement. No shell, browser, filesystem, credential, network, or arbitrary code adapter is available."), structured_output=True)
     async def notion2api_hive_execute_dispatch(
         plan_id: str,
         work_unit_id: str,
@@ -4991,6 +4997,7 @@ def create_server(
         timeout_ms: int = 1000,
         actor: str = "notion2api",
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         execution_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> HiveExecutionSnapshot:
@@ -5005,6 +5012,7 @@ def create_server(
                 timeout_ms=timeout_ms,
                 actor=actor,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 execution_id=execution_id,
                 idempotency_key=idempotency_key,
             )
@@ -5045,13 +5053,14 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _execution_error_snapshot(exc, execution_id)
 
-    @server.tool(name=_tool_name("notion2api_hive_recover_execution"), description=_tool_description("Human-approved recovery for a stale CLAIMED or RUNNING guarded execution. Recovery reuses the persisted bounded request, increments the attempt ledger, remains idempotent, and finalizes a pending cancellation instead of rerunning it."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_recover_execution"), description=_tool_description("Governance-plan-authorized recovery for a stale CLAIMED or RUNNING guarded execution. Recovery reuses the persisted bounded request, increments the attempt ledger, remains idempotent, and finalizes a pending cancellation instead of rerunning it."), structured_output=True)
     async def notion2api_hive_recover_execution(
         execution_id: str,
         actor: str,
         reason: str,
         stale_after_ms: int = 30000,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> HiveExecutionSnapshot:
         try:
@@ -5061,6 +5070,7 @@ def create_server(
                 reason=reason,
                 stale_after_ms=stale_after_ms,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 idempotency_key=idempotency_key,
             )
         except (HiveRuntimeError, ValueError) as exc:
@@ -5074,6 +5084,7 @@ def create_server(
         actor: str,
         findings: dict[str, Any] | None = None,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> HiveExecutionSnapshot:
         try:
@@ -5084,6 +5095,7 @@ def create_server(
                 actor=actor,
                 findings=findings,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 idempotency_key=idempotency_key,
             )
         except (HiveRuntimeError, ValueError) as exc:
@@ -5099,7 +5111,7 @@ def create_server(
             effects=[],
         )
 
-    @server.tool(name=_tool_name("notion2api_hive_certify_external_adapter"), description=_tool_description("Certify the compiled reversible sandbox-artifact adapter with a threat model, credential boundary, rollback contract, independent reviewer, sandbox allowlist, and explicit human approval."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_certify_external_adapter"), description=_tool_description("Certify the compiled reversible sandbox-artifact adapter with a threat model, credential boundary, rollback contract, independent reviewer, sandbox allowlist, and a governance-plan authorization receipt."), structured_output=True)
     async def notion2api_hive_certify_external_adapter(
         adapter_id: str,
         implementation_id: str,
@@ -5112,6 +5124,7 @@ def create_server(
         max_effect_bytes: int = 65536,
         credential_boundary: str = "none",
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         certification_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> ExternalEffectSnapshot:
@@ -5128,6 +5141,7 @@ def create_server(
                 reviewer_worker_id=reviewer_worker_id,
                 actor=actor,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 certification_id=certification_id,
                 idempotency_key=idempotency_key,
             )
@@ -5149,13 +5163,14 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _external_effect_error_snapshot(exc)
 
-    @server.tool(name=_tool_name("notion2api_hive_transition_external_certification"), description=_tool_description("Human-approved certification control for suspending, re-certifying, or permanently revoking one external-effect adapter certification."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_transition_external_certification"), description=_tool_description("Governance-plan-authorized certification control for suspending, re-certifying, or permanently revoking one external-effect adapter certification."), structured_output=True)
     async def notion2api_hive_transition_external_certification(
         certification_id: str,
         target_status: str,
         actor: str,
         reason: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> ExternalEffectSnapshot:
@@ -5166,6 +5181,7 @@ def create_server(
                 actor=actor,
                 reason=reason,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
             )
@@ -5189,7 +5205,7 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _external_effect_error_snapshot(exc)
 
-    @server.tool(name=_tool_name("notion2api_hive_rollback_external_effect"), description=_tool_description("Restore the certified preimage for one applied sandbox effect after token, target-integrity, reviewer, and human-approval checks."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_rollback_external_effect"), description=_tool_description("Restore the certified preimage for one applied sandbox effect after token, target-integrity, reviewer, and governance-plan authorization checks."), structured_output=True)
     async def notion2api_hive_rollback_external_effect(
         effect_id: str,
         rollback_token: str,
@@ -5197,6 +5213,7 @@ def create_server(
         actor: str,
         reason: str,
         human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> ExternalEffectSnapshot:
         try:
@@ -5207,6 +5224,7 @@ def create_server(
                 actor=actor,
                 reason=reason,
                 human_approval=human_approval,
+                governance_authorization=governance_authorization,
                 idempotency_key=idempotency_key,
             )
         except (HiveRuntimeError, ValueError) as exc:

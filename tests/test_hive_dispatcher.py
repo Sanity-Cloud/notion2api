@@ -192,7 +192,7 @@ def test_unknown_adapter_and_unapproved_enable_are_rejected(tmp_path):
             actor="test-owner",
         )
     current = dispatcher.list_adapters(adapter_id="builtin.noop.v1").adapters[0]
-    with pytest.raises(HiveTransitionError, match="Human approval"):
+    with pytest.raises(HiveTransitionError, match="Governance-plan authorization"):
         dispatcher.upsert_adapter(
             adapter_id=current.adapter_id,
             implementation_id=current.implementation_id,
@@ -208,6 +208,37 @@ def test_unknown_adapter_and_unapproved_enable_are_rejected(tmp_path):
             actor="test-owner",
             expected_revision=current.revision,
         )
+
+    authorized = dispatcher.upsert_adapter(
+        adapter_id=current.adapter_id,
+        implementation_id=current.implementation_id,
+        display_name=current.display_name,
+        capabilities=current.capabilities,
+        writable_domains=current.writable_domains,
+        required_authority=current.required_authority,
+        max_timeout_ms=current.max_timeout_ms,
+        max_payload_bytes=current.max_payload_bytes,
+        requires_human_approval=False,
+        requires_independent_review=False,
+        enabled=True,
+        actor="governance-engine",
+        governance_authorization={
+            "decision_id": "enable-noop",
+            "plan_id": "adapter-plan",
+            "authorized": True,
+            "governance_aligned": True,
+            "authority_ceiling": "A2",
+            "inferred_risk": "low",
+            "confidence": 0.97,
+            "evidence_count": 4,
+            "reversible": True,
+            "source_boundary_ok": True,
+            "writable_domain_ok": True,
+            "dependency_state_ok": True,
+        },
+        expected_revision=current.revision,
+    )
+    assert authorized.adapters[0].status == AdapterStatus.ENABLED.value
 
 
 def test_compiled_requirements_cannot_be_weakened(tmp_path):
@@ -772,7 +803,7 @@ def test_stale_claimed_execution_recovers_idempotently(tmp_path, monkeypatch):
     )
 
 
-def test_fresh_execution_recovery_requires_staleness_and_human_approval(
+def test_fresh_execution_recovery_requires_staleness_and_governance_authorization(
     tmp_path, monkeypatch
 ):
     dispatcher, materialization, workforce, _runtime = _stores(tmp_path)
@@ -808,7 +839,7 @@ def test_fresh_execution_recovery_requires_staleness_and_human_approval(
         )
     monkeypatch.setattr(dispatcher, "_execute_existing", original)
     execution = dispatcher.get_execution(plan_id=plan.plan_id).executions[0]
-    with pytest.raises(HiveTransitionError, match="Human approval"):
+    with pytest.raises(HiveTransitionError, match="Governance-plan authorization"):
         dispatcher.recover_execution(
             execution_id=execution.execution_id,
             actor="human",
