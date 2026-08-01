@@ -255,7 +255,7 @@ def test_stream_parser_captures_transient_unsafe_url_confirmation():
 
 
 def test_allow_once_prefers_live_stream_registry_over_hydration():
-    client = SimpleNamespace(account_key="acct-1", user_id="user-1")
+    client = SimpleNamespace(account_key="acct-1", user_id="user-1", space_id="space-1")
     client.continue_confirmed_tool_steps = lambda **kwargs: {
         "approved": True,
         "stream_completed": True,

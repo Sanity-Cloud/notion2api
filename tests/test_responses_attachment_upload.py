@@ -67,10 +67,17 @@ class ResponsesAttachmentTests(unittest.TestCase):
                 }
             ],
         }
-        with patch.dict("os.environ", {"ENABLE_ATTACHMENTS": "true"}):
-            with patch("app.notion_client.NotionOpusAPI.stream_response") as mock_stream:
-                mock_stream.return_value = iter([{"type": "final_content", "text": "ok"}])
-                resp = self.client.post("/v1/responses", json=payload, headers=self.auth_headers)
+        with patch("app.api.attachment_guard.HOST", "127.0.0.1"):
+            with patch.dict(
+                "os.environ",
+                {
+                    "ENABLE_ATTACHMENTS": "true",
+                    "ALLOW_REMOTE_ATTACHMENT_URLS": "false",
+                },
+            ):
+                with patch("app.notion_client.NotionOpusAPI.stream_response") as mock_stream:
+                    mock_stream.return_value = iter([{"type": "final_content", "text": "ok"}])
+                    resp = self.client.post("/v1/responses", json=payload, headers=self.auth_headers)
 
         self.assertEqual(resp.status_code, 200)
         mock_stream.assert_called()
@@ -106,8 +113,15 @@ class ResponsesAttachmentTests(unittest.TestCase):
                 }
             ],
         }
-        with patch.dict("os.environ", {"ENABLE_ATTACHMENTS": "true"}):
-            resp = self.client.post("/v1/responses", json=payload, headers=self.auth_headers)
+        with patch("app.api.attachment_guard.HOST", "127.0.0.1"):
+            with patch.dict(
+                "os.environ",
+                {
+                    "ENABLE_ATTACHMENTS": "true",
+                    "ALLOW_REMOTE_ATTACHMENT_URLS": "false",
+                },
+            ):
+                resp = self.client.post("/v1/responses", json=payload, headers=self.auth_headers)
 
         self.assertEqual(resp.status_code, 400)
         code = resp.json().get("error", {}).get("code")

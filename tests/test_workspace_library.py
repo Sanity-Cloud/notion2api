@@ -53,8 +53,12 @@ def test_workspace_library_projects_lineage_without_inventing_governance_fields(
     assert records["event:event-1"].parent_record_id == "branch:parser"
     assert records["event:event-1"].record_type == "risk"
     assert records["decision:decision-1"].parent_record_id == "project:mission-1"
-    assert any("accountable_human" in gap for gap in projection.evidence_gaps)
-    assert records["project:mission-1"].accountable_human == ""
+    project = records["project:mission-1"]
+    assert not any("accountable_human" in gap for gap in projection.evidence_gaps)
+    assert project.accountable_human == ""
+    assert project.authority_owner == "AIgentBee shared leader"
+    assert project.authority_basis == "governance_plan_inference"
+    assert project.authority_receipt["per_action_human_approval_required"] is False
 
 
 def test_workspace_library_reports_unknown_branch_dependency():
