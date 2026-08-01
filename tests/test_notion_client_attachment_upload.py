@@ -306,7 +306,17 @@ class NotionClientAttachmentTests(unittest.TestCase):
             create_thread=False,
         )
         self.assertNotIn("threadParentPointer", payload)
-        self.assertNotIn("attachments", payload)
+        self.assertEqual(
+            payload["attachments"],
+            [
+                {
+                    "type": "attachment",
+                    "fileName": "a.csv",
+                    "contentType": "text/csv",
+                    "fileUrl": "https://files.test/a.csv",
+                }
+            ],
+        )
         transcript_steps = [item for item in payload["transcript"] if item.get("type") == "attachment"]
         self.assertTrue(transcript_steps)
         self.assertEqual(transcript_steps[0]["fileName"], "a.csv")

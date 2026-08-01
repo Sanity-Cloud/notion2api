@@ -909,6 +909,36 @@ class NotionOpusAPI:
             })
         return steps
 
+    @staticmethod
+    def _build_attachment_request_manifest(
+        uploaded_attachments: list[UploadedAttachment],
+    ) -> list[dict[str, str]]:
+        """Build the top-level attachment manifest required by runInferenceTranscript.
+
+        Notion requires the uploaded files to be represented both as transcript
+        steps and in this bounded request-level manifest. The manifest deliberately
+        excludes signed URLs, task metadata, file bytes, and credentials.
+        """
+        manifest: list[dict[str, str]] = []
+        for uploaded in uploaded_attachments:
+            file_url = str(uploaded.attachment_url or "").strip()
+            if not file_url:
+                raise NotionUpstreamError(
+                    "Attachment inference manifest is missing a staged file URL.",
+                    status_code=502,
+                    retriable=False,
+                    response_excerpt="attachment_manifest_missing_file_url",
+                )
+            manifest.append(
+                {
+                    "type": "attachment",
+                    "fileName": str(uploaded.name or "").strip(),
+                    "contentType": str(uploaded.content_type or "").strip(),
+                    "fileUrl": file_url,
+                }
+            )
+        return manifest
+
     def _build_computer_use_zip_instruction_step(self) -> dict[str, Any]:
         return {
             "id": str(uuid.uuid4()),
@@ -1671,8 +1701,12 @@ class NotionOpusAPI:
             },
             "transcript": notion_transcript,
         }
-        if uploaded_attachments and not payload["createThread"]:
-            payload.pop("threadParentPointer", None)
+        if uploaded_attachments:
+            if not payload["createThread"]:
+                payload.pop("threadParentPointer", None)
+            payload["attachments"] = self._build_attachment_request_manifest(
+                uploaded_attachments
+            )
         if request_profile["include_debug_overrides"]:
             payload["debugOverrides"] = {
                 "emitAgentSearchExtractedResults": True,
