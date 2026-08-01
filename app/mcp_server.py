@@ -21,6 +21,10 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.attachments.normalizer import validate_chat_messages, validate_prompt_text
+from app.file_discovery_routing import (
+    FileRoutingDecision,
+    route_file_operation,
+)
 from app.aigentbee_workbench import (
     LeaderRequestReceipt,
     MAX_HISTORY_LIMIT,
@@ -3685,6 +3689,8 @@ def create_server(
             "without exposing raw private reasoning. "
             + f"For ChatGPT uploads, stage one top-level file at a time with {_tool_name('notion2api_stage_file')}; "
             "never pass /mnt/data paths through attachments. "
+            + f"Before filesystem discovery, filename search, enumeration, or path resolution, call {_tool_name('notion2api_hive_route_file_operation')}. "
+            "Use Everything_MCP for discovery; use DesktopCommander only for known-file access, process inspection, or an explicitly authorized degraded fallback. "
             "Do not claim document-grounded completion unless attachment_transfer_status is verified and attachment_count is nonzero."
         ),
         host=host,
@@ -4742,6 +4748,35 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _workforce_error_snapshot(exc)
 
+    @server.tool(name=_tool_name("notion2api_hive_route_file_operation"), description=_tool_description("Route filesystem discovery, path resolution, known-file access, and bounded content search through the canonical AIgentBee policy. Discovery uses Everything_MCP; DesktopCommander search is denied unless an explicit governed degraded-mode gate is satisfied."), structured_output=True)
+    async def notion2api_hive_route_file_operation(
+        intent: str,
+        search_text: str = "",
+        requested_roots: list[str] | None = None,
+        requested_extensions: list[str] | None = None,
+        everything_available: bool = True,
+        degraded_mode_authorized: bool = False,
+        authority_ceiling: str = "A0",
+    ) -> FileRoutingDecision:
+        try:
+            return route_file_operation(
+                intent=intent,
+                search_text=search_text,
+                requested_roots=requested_roots,
+                requested_extensions=requested_extensions,
+                everything_available=everything_available,
+                degraded_mode_authorized=degraded_mode_authorized,
+                authority_ceiling=authority_ceiling,
+            )
+        except ValueError as exc:
+            return FileRoutingDecision(
+                ok=False,
+                intent=str(intent or "").strip().lower(),
+                allowed=False,
+                error=str(exc),
+                reasons=["The requested filesystem route violates the configured coverage profile."],
+            )
+
     @server.tool(name=_tool_name("notion2api_hive_plan_invocation"), description=_tool_description("Plan whether a request should use one bounded agent or a multi-lane Hive. This tool is read-only and does not spawn workers, grant credentials, or execute external effects."), structured_output=True)
     async def notion2api_hive_plan_invocation(
         objective: str,
@@ -4754,6 +4789,12 @@ def create_server(
         independent_review_required: bool = False,
         external_effects: bool = False,
         preferred_worker_ids: list[str] | None = None,
+        file_operation_intent: str = "discover",
+        file_search_text: str = "",
+        file_search_roots: list[str] | None = None,
+        file_types: list[str] | None = None,
+        everything_available: bool = True,
+        degraded_search_authorized: bool = False,
     ) -> HiveInvocationPlan:
         try:
             return get_hive_workforce_store().plan_invocation(
@@ -4767,6 +4808,12 @@ def create_server(
                 independent_review_required=independent_review_required,
                 external_effects=external_effects,
                 preferred_worker_ids=preferred_worker_ids,
+                file_operation_intent=file_operation_intent,
+                file_search_text=file_search_text,
+                file_search_roots=file_search_roots,
+                file_types=file_types,
+                everything_available=everything_available,
+                degraded_search_authorized=degraded_search_authorized,
             )
         except (HiveRuntimeError, ValueError) as exc:
             return _invocation_error_plan(exc, objective)
@@ -4796,6 +4843,12 @@ def create_server(
         independent_review_required: bool = False,
         external_effects: bool = False,
         preferred_worker_ids: list[str] | None = None,
+        file_operation_intent: str = "discover",
+        file_search_text: str = "",
+        file_search_roots: list[str] | None = None,
+        file_types: list[str] | None = None,
+        everything_available: bool = True,
+        degraded_search_authorized: bool = False,
         parent_context_id: str = "",
         lifecycle_stage: str = "Build",
         human_approval: bool = False,
@@ -4817,6 +4870,12 @@ def create_server(
                 independent_review_required=independent_review_required,
                 external_effects=external_effects,
                 preferred_worker_ids=preferred_worker_ids,
+                file_operation_intent=file_operation_intent,
+                file_search_text=file_search_text,
+                file_search_roots=file_search_roots,
+                file_types=file_types,
+                everything_available=everything_available,
+                degraded_search_authorized=degraded_search_authorized,
                 parent_context_id=parent_context_id,
                 lifecycle_stage=lifecycle_stage,
                 human_approval=human_approval,

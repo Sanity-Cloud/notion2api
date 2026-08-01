@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "provider": "Everything_MCP.search_files",
+  "default_root_ids": [
+    "code",
+    "mcp",
+    "documents",
+    "downloads",
+    "desktop",
+    "sanitycloud-local"
+  ],
+  "roots": [
+    {"id": "code", "path": "X:\\Code", "purpose": "Source repositories and worktrees"},
+    {"id": "mcp", "path": "X:\\MCP", "purpose": "MCP profiles, state, logs, and evidence"},
+    {"id": "documents", "path": "%USERPROFILE%\\Documents", "purpose": "User documents and project artifacts"},
+    {"id": "downloads", "path": "%USERPROFILE%\\Downloads", "purpose": "Recent downloads, exports, HARs, and imports"},
+    {"id": "desktop", "path": "%USERPROFILE%\\Desktop", "purpose": "Desktop working files"},
+    {"id": "sanitycloud-local", "path": "%LOCALAPPDATA%\\SanityCloud", "purpose": "SanityCloud local application state"}
+  ],
+  "default_file_groups": ["source", "config", "documents", "data", "archives"],
+  "file_groups": {
+    "source": ["py", "ps1", "psm1", "psd1", "js", "jsx", "ts", "tsx", "mjs", "cjs", "java", "cs", "go", "rs", "c", "h", "cpp", "hpp", "sh", "bat", "cmd"],
+    "config": ["json", "yaml", "yml", "toml", "ini", "cfg", "conf", "xml"],
+    "documents": ["md", "txt", "pdf", "docx", "pptx", "rtf"],
+    "data": ["csv", "xlsx", "xls", "jsonl", "sqlite", "sqlite3", "db", "har", "log"],
+    "archives": ["zip", "7z", "tar", "gz"],
+    "media": ["png", "jpg", "jpeg", "webp", "gif", "svg", "mp3", "wav", "mp4", "mov"]
+  },
+  "excluded_directory_names": [
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build"
+  ],
+  "sensitive_name_patterns": [
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "id_rsa*",
+    "credentials*.json",
+    "token*.json",
+    "secrets*.json"
+  ],
+  "max_results_per_root": 100,
+  "max_roots_per_request": 8,
+  "max_total_results": 500,
+  "fallback": {
+    "tool": "DesktopCommander.start_search",
+    "enabled_by_default": false,
+    "minimum_authority": "A3",
+    "requires_everything_unavailable": true,
+    "requires_explicit_authorization": true
+  }
+}

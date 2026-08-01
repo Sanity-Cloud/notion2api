@@ -485,6 +485,12 @@ class HiveMaterializationStore:
         independent_review_required: bool = False,
         external_effects: bool = False,
         preferred_worker_ids: list[str] | None = None,
+        file_operation_intent: str = "discover",
+        file_search_text: str = "",
+        file_search_roots: list[str] | None = None,
+        file_types: list[str] | None = None,
+        everything_available: bool = True,
+        degraded_search_authorized: bool = False,
         parent_context_id: str = "",
         lifecycle_stage: str = "Build",
         human_approval: bool = False,
@@ -527,6 +533,16 @@ class HiveMaterializationStore:
                     if str(value).strip()
                 }
             ),
+            "file_operation_intent": str(file_operation_intent or "discover").strip().lower(),
+            "file_search_text": str(file_search_text or "").strip(),
+            "file_search_roots": [
+                str(value).strip()
+                for value in (file_search_roots or [])
+                if str(value).strip()
+            ],
+            "file_types": self._normalized_list(file_types),
+            "everything_available": bool(everything_available),
+            "degraded_search_authorized": bool(degraded_search_authorized),
             "parent_context_id": str(parent_context_id or "").strip(),
             "lifecycle_stage": self._required(lifecycle_stage, "lifecycle_stage"),
             "mission_id": mission_key,
@@ -578,12 +594,20 @@ class HiveMaterializationStore:
             independent_review_required=request["independent_review_required"],
             external_effects=request["external_effects"],
             preferred_worker_ids=request["preferred_worker_ids"],
+            file_operation_intent=request["file_operation_intent"],
+            file_search_text=request["file_search_text"],
+            file_search_roots=request["file_search_roots"],
+            file_types=request["file_types"],
+            everything_available=request["everything_available"],
+            degraded_search_authorized=request["degraded_search_authorized"],
         )
         selected_ids = [item.worker_id for item in plan.selected_workers]
         blocked = bool(
             plan.missing_competencies
             or plan.missing_writable_domains
             or not selected_ids
+            or not plan.file_discovery_policy
+            or not plan.file_discovery_policy.allowed
             or (plan.mode == "hive" and len(selected_ids) < plan.suggested_lane_count)
         )
         authorization_receipt: dict[str, Any] = {}
@@ -904,11 +928,21 @@ class HiveMaterializationStore:
                         now,
                     ),
                 )
+                routing_evidence = {
+                    "routing_policy_version": "1.0",
+                    "file_discovery_policy": (
+                        plan.file_discovery_policy.model_dump(mode="json")
+                        if plan.file_discovery_policy
+                        else {}
+                    ),
+                    "shared_pooled_tool_list": False,
+                }
                 receipt_request = {
                     "plan_id": plan_id,
                     "work_unit_id": lane["work_unit_id"],
                     "worker_id": worker.worker_id,
                     "status": DispatchStatus.READY.value,
+                    "evidence": routing_evidence,
                 }
                 conn.execute(
                     """
@@ -917,7 +951,7 @@ class HiveMaterializationStore:
                         worker_id, conversation_id, status, actor,
                         evidence_json, request_sha256,
                         created_at, updated_at, revision
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, 1)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -928,6 +962,7 @@ class HiveMaterializationStore:
                         lane["conversation_id"],
                         DispatchStatus.READY.value,
                         actor,
+                        self._json(routing_evidence),
                         self._fingerprint(receipt_request),
                         now,
                         now,
@@ -962,6 +997,11 @@ class HiveMaterializationStore:
                     },
                     "communication_bus": "hive_events",
                     "shared_pooled_tool_list": False,
+                    "file_discovery_policy": (
+                        plan.file_discovery_policy.model_dump(mode="json")
+                        if plan.file_discovery_policy
+                        else {}
+                    ),
                 },
             )
             return self._snapshot(conn, plan_id)
