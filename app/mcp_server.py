@@ -764,6 +764,8 @@ class Notion2APIClient:
         hygiene: dict[str, Any] = {}
         quarantined = False
         terminal_finish_reason = ""
+        done_received = False
+        stream_error: dict[str, Any] | None = None
 
         headers = self._headers()
         headers["Accept"] = "text/event-stream"
@@ -783,7 +785,10 @@ class Notion2APIClient:
                     if not line.startswith("data:"):
                         continue
                     raw = line[5:].strip()
-                    if not raw or raw == "[DONE]":
+                    if not raw:
+                        continue
+                    if raw == "[DONE]":
+                        done_received = True
                         continue
                     try:
                         event = json.loads(raw)
@@ -797,6 +802,40 @@ class Notion2APIClient:
                         model_metadata.update(event["model_metadata"])
 
                     event_type = str(event.get("type") or "").strip().lower()
+                    error_payload = event.get("error")
+                    if event_type in {"error", "stream_error", "stream-error"} or error_payload is not None:
+                        if isinstance(error_payload, dict):
+                            error_detail = dict(error_payload)
+                        elif error_payload not in (None, ""):
+                            error_detail = {"message": str(error_payload)}
+                        else:
+                            error_detail = dict(event)
+                        raw_status = (
+                            event.get("status_code")
+                            or event.get("status")
+                            or error_detail.get("status_code")
+                            or error_detail.get("status")
+                        )
+                        try:
+                            status_code = int(raw_status)
+                        except (TypeError, ValueError):
+                            status_code = 0
+                        fingerprint = json.dumps(error_detail, ensure_ascii=False).lower()
+                        if not 100 <= status_code <= 599:
+                            status_code = 429 if any(
+                                marker in fingerprint
+                                for marker in ("429", "too many requests", "too_many_requests", "rate limit", "rate_limit")
+                            ) else 502
+                        stream_error = {
+                            "ok": False,
+                            "status_code": status_code,
+                            "status": "upstream_rate_limit" if status_code == 429 else "upstream_error",
+                            "model": response_model,
+                            "actual_model": str(model_metadata.get("actual_model") or ""),
+                            "model_metadata": model_metadata or None,
+                            "error": error_detail,
+                        }
+                        break
                     if event_type == "output_hygiene":
                         candidate = event.get("hygiene")
                         if isinstance(candidate, dict):
@@ -844,6 +883,24 @@ class Notion2APIClient:
                             last_update = now
 
         visible_content = "".join(content_parts)
+        if stream_error is not None:
+            on_progress(reasoning_buffer, "", event_count, True)
+            return stream_error
+        if not terminal_finish_reason and not done_received:
+            on_progress(reasoning_buffer, "", event_count, True)
+            return {
+                "ok": False,
+                "status_code": 502,
+                "status": "stream_incomplete",
+                "model": response_model,
+                "actual_model": str(model_metadata.get("actual_model") or ""),
+                "model_metadata": model_metadata or None,
+                "error": {
+                    "code": "STREAM_INCOMPLETE",
+                    "message": "Backend stream ended without a terminal finish event.",
+                    "partial_content_chars": len(visible_content),
+                },
+            }
         if quarantined:
             visible_content = ""
         on_progress(reasoning_buffer, visible_content, event_count, True)

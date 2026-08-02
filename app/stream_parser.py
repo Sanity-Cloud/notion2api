@@ -995,6 +995,67 @@ _FINISHED_AT_PATCH_PATH_RE = re.compile(r"^/s/(?:\d+|-)/finishedAt$", re.IGNOREC
 _COMPLETION_ENVELOPE_TYPES = frozenset(
     {"status", "stream-status", "stream_status", "completion", "complete"}
 )
+_STREAM_ERROR_ENVELOPE_TYPES = frozenset({"error", "stream-error", "stream_error"})
+_STREAM_ERROR_STATUS_KEYS = ("status_code", "statusCode", "http_status", "httpStatus", "status")
+_STREAM_ERROR_CODE_KEYS = ("code", "error_code", "errorCode")
+_STREAM_ERROR_MESSAGE_KEYS = ("message", "detail", "error_description", "errorDescription")
+
+
+def _stream_error_event(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize only explicit top-level stream error envelopes."""
+    data_type = str(data.get("type", "") or "").strip().lower()
+    if data_type not in _STREAM_ERROR_ENVELOPE_TYPES:
+        return None
+
+    containers: list[dict[str, Any]] = [data]
+    for key in ("value", "error"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+            nested_error = nested.get("error")
+            if isinstance(nested_error, dict):
+                containers.append(nested_error)
+
+    def first_value(keys: tuple[str, ...]) -> Any:
+        for container in containers:
+            for key in keys:
+                value = container.get(key)
+                if value not in (None, ""):
+                    return value
+        return None
+
+    status_code: int | None = None
+    raw_status = first_value(_STREAM_ERROR_STATUS_KEYS)
+    try:
+        parsed_status = int(raw_status)
+        if 100 <= parsed_status <= 599:
+            status_code = parsed_status
+    except (TypeError, ValueError):
+        pass
+
+    raw_code = first_value(_STREAM_ERROR_CODE_KEYS)
+    raw_message = first_value(_STREAM_ERROR_MESSAGE_KEYS)
+    if raw_message in (None, "") and isinstance(data.get("error"), str):
+        raw_message = data["error"]
+    code = str(raw_code or "").strip()
+    message = str(raw_message or "Notion upstream stream returned an error.").strip()
+    fingerprint = f"{code} {message}".lower().replace("-", "_")
+    if status_code is None and any(
+        marker in fingerprint
+        for marker in ("429", "too many requests", "too_many_requests", "rate limit", "rate_limit")
+    ):
+        status_code = 429
+    if status_code is None:
+        status_code = 502
+
+    return {
+        "type": "upstream_error",
+        "status_code": status_code,
+        "code": code or None,
+        "message": message,
+        "retriable": status_code == 429 or status_code >= 500,
+        "raw_type": data_type,
+    }
 
 
 def _normalize_finished_at(value: Any) -> Any | None:
@@ -1127,6 +1188,10 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
         except json.JSONDecodeError:
             continue
         data_type = str(data.get("type", "") or "").lower()
+        stream_error = _stream_error_event(data)
+        if stream_error is not None:
+            yield stream_error
+            continue
         if not completion_emitted:
             completion_event = _envelope_completion_event(data)
             if completion_event is not None:

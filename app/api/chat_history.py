@@ -402,6 +402,33 @@ def status() -> dict[str, Any]:
     }
 
 
+def _history_upstream_http_exception(
+    exc: NotionUpstreamError,
+    *,
+    action: str,
+) -> HTTPException:
+    """Preserve Notion rate limits while keeping other history failures unavailable."""
+    rate_limited = exc.status_code == 429
+    return HTTPException(
+        status_code=429 if rate_limited else 503,
+        detail={
+            "error": {
+                "message": (
+                    f"Notion rate-limited the chat-history {action}."
+                    if rate_limited
+                    else f"Unable to {action} chat history from Notion."
+                ),
+                "type": "upstream_rate_limit" if rate_limited else "upstream_error",
+                "param": None,
+                "code": "NOTION_429" if rate_limited else "upstream_error",
+                "detail": exc.response_excerpt,
+                "upstream_status_code": exc.status_code,
+                "retriable": exc.retriable,
+            }
+        },
+    )
+
+
 @router.post("/import/har")
 async def import_har(request: Request) -> dict[str, Any]:
     """Import a browser HAR JSON object containing Notion AI chat-history records."""
@@ -466,18 +493,7 @@ async def sync_from_notion(request: Request) -> dict[str, Any]:
             },
         ) from exc
     except NotionUpstreamError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": {
-                    "message": "Unable to fetch chat history from Notion.",
-                    "type": "upstream_error",
-                    "param": None,
-                    "code": "upstream_error",
-                    "detail": exc.response_excerpt,
-                }
-            },
-        ) from exc
+        raise _history_upstream_http_exception(exc, action="sync") from exc
 
     imported = store.upsert_bundle(bundle)
     summary = dict(bundle.get("sync_summary", {}))
@@ -678,18 +694,7 @@ async def hydrate_thread(thread_id: str, request: Request) -> dict[str, Any]:
             },
         ) from exc
     except NotionUpstreamError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": {
-                    "message": "Unable to hydrate chat thread from Notion.",
-                    "type": "upstream_error",
-                    "param": None,
-                    "code": "upstream_error",
-                    "detail": exc.response_excerpt,
-                }
-            },
-        ) from exc
+        raise _history_upstream_http_exception(exc, action="hydrate") from exc
 
     imported = store.upsert_bundle(bundle)
     hydrated = store.get_thread(thread_id)

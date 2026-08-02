@@ -144,6 +144,30 @@ class NotionUpstreamError(RuntimeError):
         self.response_excerpt = response_excerpt
 
 
+def _raise_stream_upstream_error(chunk: dict[str, Any]) -> None:
+    """Raise a typed upstream error from a normalized NDJSON error event."""
+    try:
+        status_code = int(chunk.get("status_code") or 502)
+    except (TypeError, ValueError):
+        status_code = 502
+    message = str(chunk.get("message") or "Notion upstream stream returned an error.").strip()
+    excerpt = json.dumps(
+        {
+            "code": chunk.get("code"),
+            "message": message,
+            "raw_type": chunk.get("raw_type"),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )[:500]
+    raise NotionUpstreamError(
+        message,
+        status_code=status_code,
+        retriable=bool(chunk.get("retriable", status_code == 429 or status_code >= 500)),
+        response_excerpt=excerpt,
+    )
+
+
 BOUND_THREAD_HISTORY_REPLAY = "BOUND_THREAD_HISTORY_REPLAY"
 _BOUND_THREAD_ALLOWED_BLOCK_TYPES = frozenset({"config", "context", "user"})
 _BOUND_THREAD_HISTORY_MARKERS = (
@@ -489,6 +513,8 @@ class NotionOpusAPI:
                 if not isinstance(chunk, dict):
                     continue
                 chunk_type = str(chunk.get("type") or "").strip()
+                if chunk_type == "upstream_error":
+                    _raise_stream_upstream_error(chunk)
                 if chunk_type == "stream_complete":
                     stream_completed = True
                     continue
@@ -958,45 +984,58 @@ class NotionOpusAPI:
         collected: dict[str, Any] = {}
         page_cursor: str | None = None
 
-        for page_index in range(max_pages):
-            request_id = str(uuid.uuid4())
+        for _page_index in range(max_pages):
             candidate_payloads = [
-                {"requestId": request_id},
-                {"requestId": request_id, "limit": limit},
-                {"requestId": request_id, "pageSize": limit},
+                {},
+                {"limit": limit},
+                {"pageSize": limit},
             ]
             if page_cursor:
                 candidate_payloads = [
-                    {"requestId": request_id, "cursor": page_cursor, "limit": limit},
-                    {"requestId": request_id, "startCursor": page_cursor, "limit": limit},
-                    {"requestId": request_id, "cursor": page_cursor, "pageSize": limit},
+                    {"cursor": page_cursor, "limit": limit},
+                    {"startCursor": page_cursor, "limit": limit},
+                    {"cursor": page_cursor, "pageSize": limit},
                 ] + candidate_payloads
 
             response_obj = None
             last_excerpt = ""
-            for payload in candidate_payloads:
+            last_status = 502
+            for payload_template in candidate_payloads:
+                payload = {"requestId": str(uuid.uuid4()), **payload_template}
                 try:
-                    response_obj = self._scraper.post(
+                    candidate_response = self._scraper.post(
                         endpoint,
                         headers=self._build_chat_history_headers(),
                         json=payload,
                         timeout=(15, 60),
                     )
-                except Exception as exc:
-                    last_excerpt = str(exc)
-                    continue
+                except requests.exceptions.RequestException as exc:
+                    raise NotionUpstreamError(
+                        "Request to Notion chat history failed.",
+                        status_code=502,
+                        retriable=True,
+                        response_excerpt=str(exc)[:300],
+                    ) from exc
 
-                if response_obj.status_code == 200:
+                if candidate_response.status_code == 200:
+                    response_obj = candidate_response
                     break
 
-                last_excerpt = (response_obj.text or "").strip().replace("\n", " ")[:300]
-                response_obj = None
+                last_status = candidate_response.status_code
+                last_excerpt = _redact_response_excerpt(candidate_response.text or "")
+                if last_status not in {400, 422}:
+                    raise NotionUpstreamError(
+                        f"Notion chat history returned HTTP {last_status}.",
+                        status_code=last_status,
+                        retriable=last_status == 429 or last_status >= 500,
+                        response_excerpt=last_excerpt,
+                    )
 
             if response_obj is None:
                 raise NotionUpstreamError(
-                    "Failed to fetch Notion chat history.",
-                    status_code=502,
-                    retriable=True,
+                    "Notion chat history rejected all supported request shapes.",
+                    status_code=last_status,
+                    retriable=last_status == 429 or last_status >= 500,
                     response_excerpt=last_excerpt,
                 )
 
@@ -1012,7 +1051,6 @@ class NotionOpusAPI:
 
             if isinstance(page_obj, dict):
                 collected.update(page_obj)
-
                 next_cursor = (
                     page_obj.get("nextCursor")
                     or page_obj.get("next_cursor")
@@ -1022,7 +1060,6 @@ class NotionOpusAPI:
                 if isinstance(next_cursor, str) and next_cursor.strip():
                     page_cursor = next_cursor.strip()
                     continue
-
             break
 
         return collected
@@ -1808,6 +1845,8 @@ class NotionOpusAPI:
             response = None
             try:
                 for chunk in parse_stream(active_response):
+                    if isinstance(chunk, dict) and chunk.get("type") == "upstream_error":
+                        _raise_stream_upstream_error(chunk)
                     if isinstance(chunk, dict) and chunk.get("type") == "stream_complete":
                         stream_completed = True
                         continue
