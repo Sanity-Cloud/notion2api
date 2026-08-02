@@ -1,8 +1,11 @@
 (() => {
+  if (window.__notionChatHistoryImportInitialized) return;
+  window.__notionChatHistoryImportInitialized = true;
+
   const HAR_ENDPOINT = '/v1/chat-history/import/har';
   const NOTION_SYNC_ENDPOINT = '/v1/chat-history/sync/notion';
   const AUTO_SYNC_DEFAULTS = {
-    enabled: true,
+    enabled: false,
     limit: 100,
     pages: 5,
     hydrate: false

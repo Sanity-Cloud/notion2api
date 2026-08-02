@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import csv
+import threading
 import hashlib
 import io
 import re
@@ -8,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
 
 from app.chat_history.har_importer import import_har_object
@@ -16,6 +19,41 @@ from app.chat_history.store import ChatHistoryStore, get_default_chat_history_db
 from app.notion_client import NotionUpstreamError
 
 router = APIRouter(prefix="/chat-history", tags=["chat-history"])
+
+_OPERATION_STATE_LOCK = threading.Lock()
+_ACTIVE_OPERATIONS: set[str] = set()
+
+
+class OperationInProgress(RuntimeError):
+    """Raised when a duplicate parent sync or hydrate operation is already running."""
+
+
+def _claim_operation(key: str) -> None:
+    with _OPERATION_STATE_LOCK:
+        if key in _ACTIVE_OPERATIONS:
+            raise OperationInProgress(key)
+        _ACTIVE_OPERATIONS.add(key)
+
+
+def _release_operation(key: str) -> None:
+    with _OPERATION_STATE_LOCK:
+        _ACTIVE_OPERATIONS.discard(key)
+
+
+async def _run_singleflight(key: str, func: Any, /, *args: Any, **kwargs: Any) -> Any:
+    """Run one blocking operation without blocking the API loop or duplicating work."""
+    _claim_operation(key)
+    worker = asyncio.create_task(run_in_threadpool(func, *args, **kwargs))
+    release_deferred = False
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        release_deferred = True
+        worker.add_done_callback(lambda _future: _release_operation(key))
+        raise
+    finally:
+        if not release_deferred:
+            _release_operation(key)
 
 
 def _store() -> ChatHistoryStore:
@@ -403,8 +441,28 @@ async def sync_from_notion(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Invalid import parameters") from exc
 
     client = _get_account_client(request, account_index)
+    operation_key = f"sync:{getattr(client, 'space_id', 'default')}:{account_index}"
     try:
-        bundle = sync_chat_history_from_notion(client, limit=limit, max_pages=max_pages, hydrate=hydrate)
+        bundle = await _run_singleflight(
+            operation_key,
+            sync_chat_history_from_notion,
+            client,
+            limit=limit,
+            max_pages=max_pages,
+            hydrate=hydrate,
+        )
+    except OperationInProgress as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": {
+                    "message": "A chat-history sync is already in progress for this account.",
+                    "type": "conflict",
+                    "param": None,
+                    "code": "sync_in_progress",
+                }
+            },
+        ) from exc
     except NotionUpstreamError as exc:
         raise HTTPException(
             status_code=503,
@@ -595,8 +653,27 @@ async def hydrate_thread(thread_id: str, request: Request) -> dict[str, Any]:
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
+    client = _get_account_client(request, account_index)
+    operation_key = f"hydrate:{getattr(client, 'space_id', 'default')}:{account_index}:{thread_id}"
     try:
-        bundle = hydrate_thread_from_notion(_get_account_client(request, account_index), thread)
+        bundle = await _run_singleflight(
+            operation_key,
+            hydrate_thread_from_notion,
+            client,
+            thread,
+        )
+    except OperationInProgress as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": {
+                    "message": "This chat thread is already being hydrated.",
+                    "type": "conflict",
+                    "param": None,
+                    "code": "hydrate_in_progress",
+                }
+            },
+        ) from exc
     except NotionUpstreamError as exc:
         raise HTTPException(
             status_code=503,
