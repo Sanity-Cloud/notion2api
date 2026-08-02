@@ -1,11 +1,43 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from app.chat_history.extractor import collect_hydration_message_ids
 from app.chat_history.har_importer import import_chat_object
 from app.notion_client import NotionOpusAPI, NotionUpstreamError
+
+ExistingMessageIdsLookup = Callable[[list[str]], set[str]]
+
+
+def _resolve_skip_message_ids(
+    candidate_ids: set[str] | list[str],
+    *,
+    skip_message_ids: set[str] | None = None,
+    existing_message_ids_lookup: ExistingMessageIdsLookup | None = None,
+) -> set[str]:
+    skip = {
+        str(message_id).strip()
+        for message_id in (skip_message_ids or set())
+        if str(message_id or "").strip()
+    }
+    if existing_message_ids_lookup is None:
+        return skip
+    ordered = sorted(
+        {
+            str(message_id).strip()
+            for message_id in candidate_ids
+            if str(message_id or "").strip()
+        }
+    )
+    if not ordered:
+        return skip
+    try:
+        skip |= set(existing_message_ids_lookup(ordered))
+    except TypeError:
+        skip |= set(existing_message_ids_lookup(list(ordered)))
+    return skip
 
 
 TRANSCRIPTS_ENDPOINT = "https://www.notion.so/api/v3/getInferenceTranscriptsForUser"
@@ -91,9 +123,22 @@ def hydrate_message_ids_from_notion(
     *,
     fallback_thread_id: str | None = None,
     hydrate_batch_size: int = 50,
+    skip_message_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Hydrate specific Notion thread-message IDs into a chat-history bundle."""
-    clean_ids = sorted({str(message_id).strip() for message_id in message_ids if str(message_id or "").strip()})
+    skip_ids = {
+        str(message_id).strip()
+        for message_id in (skip_message_ids or set())
+        if str(message_id or "").strip()
+    }
+    candidate_ids = sorted(
+        {
+            str(message_id).strip()
+            for message_id in message_ids
+            if str(message_id or "").strip()
+        }
+    )
+    clean_ids = [message_id for message_id in candidate_ids if message_id not in skip_ids]
     bundle: dict[str, Any] = {"threads": {}, "messages": {}, "endpoint_counts": defaultdict(int)}
     hydration_batches = 0
     hydrated_messages_seen = 0
@@ -126,7 +171,8 @@ def hydrate_message_ids_from_notion(
 
     bundle["endpoint_counts"] = dict(bundle["endpoint_counts"])
     bundle["stats"] = {
-        "hydration_candidate_ids": len(clean_ids),
+        "hydration_candidate_ids": len(candidate_ids),
+        "hydration_skipped_ids": len(candidate_ids) - len(clean_ids),
         "hydrated_message_ids": len(clean_ids),
         "hydration_batches": hydration_batches,
         "hydrated_messages_seen": hydrated_messages_seen,
@@ -159,10 +205,17 @@ def hydrate_thread_from_notion(
     thread: dict[str, Any],
     *,
     hydrate_batch_size: int = 50,
+    skip_message_ids: set[str] | None = None,
+    existing_message_ids_lookup: ExistingMessageIdsLookup | None = None,
 ) -> dict[str, Any]:
     """Hydrate only the messages referenced by one selected archived thread."""
     thread_id = str(thread.get("id") or "").strip() or None
     ids: set[str] = set()
+    # Prefer explicit ID lists before deep scanning nested thread metadata.
+    for key in ("message_ids", "messageIds", "thread_message_ids", "threadMessageIds"):
+        value = thread.get(key)
+        if isinstance(value, list):
+            ids.update(str(item).strip() for item in value if str(item or "").strip())
     ids.update(collect_hydration_message_ids(thread))
     raw = thread.get("raw") if isinstance(thread.get("raw"), dict) else None
     if raw:
@@ -172,18 +225,30 @@ def hydrate_thread_from_notion(
         thread_bundle = hydrate_thread_record_from_notion(client, thread_id)
         hydrated_thread = thread_bundle.get("threads", {}).get(thread_id)
         if hydrated_thread:
+            for key in ("message_ids", "messageIds", "thread_message_ids", "threadMessageIds"):
+                value = hydrated_thread.get(key)
+                if isinstance(value, list):
+                    ids.update(str(item).strip() for item in value if str(item or "").strip())
             ids.update(collect_hydration_message_ids(hydrated_thread))
             hydrated_raw = hydrated_thread.get("raw") if isinstance(hydrated_thread.get("raw"), dict) else None
             if hydrated_raw:
                 ids.update(collect_hydration_message_ids(hydrated_raw))
-    if not ids and thread_id:
-        ids.add(thread_id)
+    # Never treat the thread id itself as a message id; that wastes Notion RPCs and
+    # confuses parsers when the archive only has metadata.
+    if thread_id:
+        ids.discard(thread_id)
 
+    skip_ids = _resolve_skip_message_ids(
+        ids,
+        skip_message_ids=skip_message_ids,
+        existing_message_ids_lookup=existing_message_ids_lookup,
+    )
     bundle = hydrate_message_ids_from_notion(
         client,
         ids,
         fallback_thread_id=thread_id,
         hydrate_batch_size=hydrate_batch_size,
+        skip_message_ids=skip_ids,
     )
     if thread_bundle.get("threads"):
         _merge_bundle(bundle, {"threads": thread_bundle.get("threads", {}), "messages": {}})
@@ -194,10 +259,13 @@ def hydrate_thread_from_notion(
     fallback_text = str(thread.get("title") or thread.get("first_message_preview") or thread.get("last_message_preview") or "").strip()
     if thread_id and fallback_text:
         for message in bundle.get("messages", {}).values():
-            if message.get("id") == thread_id or not message.get("thread_id"):
+            if not message.get("thread_id"):
                 message["thread_id"] = thread_id
             if message.get("thread_id") == thread_id and not str(message.get("text") or "").strip():
                 message["text"] = fallback_text
+    if "stats" not in bundle:
+        bundle["stats"] = {}
+    bundle["stats"]["thread_message_candidates"] = len(ids)
     return bundle
 
 
@@ -208,6 +276,8 @@ def sync_chat_history_from_notion(
     max_pages: int = 20,
     hydrate: bool = False,
     hydrate_batch_size: int = 50,
+    skip_message_ids: set[str] | None = None,
+    existing_message_ids_lookup: ExistingMessageIdsLookup | None = None,
 ) -> dict[str, Any]:
     """Read-only direct sync from Notion transcript RPCs into the local archive bundle."""
     thread_parent_pointer = {
@@ -257,11 +327,19 @@ def sync_chat_history_from_notion(
     message_ids = sorted(seen_message_ids)
     hydration_batches = 0
     hydrated_messages_seen = 0
+    hydration_skipped_ids = 0
+    hydrated_message_ids = 0
     if hydrate:
+        skip_ids = _resolve_skip_message_ids(
+            message_ids,
+            skip_message_ids=skip_message_ids,
+            existing_message_ids_lookup=existing_message_ids_lookup,
+        )
         hydrate_bundle = hydrate_message_ids_from_notion(
             client,
             message_ids,
             hydrate_batch_size=hydrate_batch_size,
+            skip_message_ids=skip_ids,
         )
         _merge_bundle(bundle, hydrate_bundle)
         for key, value in hydrate_bundle.get("endpoint_counts", {}).items():
@@ -269,6 +347,8 @@ def sync_chat_history_from_notion(
         hydrate_stats = hydrate_bundle.get("stats", {})
         hydration_batches = int(hydrate_stats.get("hydration_batches") or 0)
         hydrated_messages_seen = int(hydrate_stats.get("hydrated_messages_seen") or 0)
+        hydration_skipped_ids = int(hydrate_stats.get("hydration_skipped_ids") or 0)
+        hydrated_message_ids = int(hydrate_stats.get("hydrated_message_ids") or 0)
 
     messages_seen = len(bundle["messages"])
     summary = {
@@ -280,6 +360,7 @@ def sync_chat_history_from_notion(
         "stopped_reason": stopped_reason,
         "hydrate": bool(hydrate),
         "hydration_candidate_ids": len(message_ids),
+        "hydration_skipped_ids": hydration_skipped_ids,
         "hydration_batches": hydration_batches,
         "hydrated_messages_seen": hydrated_messages_seen,
     }
@@ -290,8 +371,9 @@ def sync_chat_history_from_notion(
         "pages_scanned": pages_scanned,
         "threads": len(bundle["threads"]),
         "messages": messages_seen,
-        "hydrated_message_ids": len(message_ids) if hydrate else 0,
+        "hydrated_message_ids": hydrated_message_ids if hydrate else 0,
         "hydration_candidate_ids": len(message_ids),
+        "hydration_skipped_ids": hydration_skipped_ids,
         "hydration_batches": hydration_batches,
         "hydrated_messages_seen": hydrated_messages_seen,
         "threads_without_messages": summary["threads_without_messages"],
