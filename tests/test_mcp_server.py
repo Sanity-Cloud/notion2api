@@ -1610,3 +1610,141 @@ def test_responses_endpoint_clean_output_remains_available():
     assert result["response_text"] == "A clean responses-endpoint answer."
     assert result["quarantined"] is False
     assert result["raw"]["output_text"] == "A clean responses-endpoint answer."
+
+
+
+def test_chat_stream_decodes_unicode_and_applies_content_replacement(monkeypatch):
+    events = [
+        {
+            "model": "test-model",
+            "choices": [{"delta": {"content": "Draft caf? ??"}}],
+        },
+        {
+            "type": "content_replace",
+            "content": "Corrected caf? ?? ? ??",
+            "choices": [{"delta": {}, "finish_reason": None}],
+        },
+        {
+            "model": "test-model",
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+        },
+    ]
+    body = "\n".join(
+        [f"data: {json.dumps(event, ensure_ascii=False)}" for event in events]
+        + ["data: [DONE]", ""]
+    ).encode("utf-8")
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream; charset=utf-8"},
+            content=body,
+        )
+    )
+    real_client = httpx.AsyncClient
+
+    class TestAsyncClient(real_client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", TestAsyncClient)
+    updates = []
+    result = asyncio.run(
+        mcp_server.Notion2APIClient("http://test").post_chat_stream(
+            "/v1/chat/completions",
+            {"model": "test-model"},
+            lambda *args: updates.append(args),
+        )
+    )
+
+    expected = "Corrected caf? ?? ? ??"
+    assert result["ok"] is True
+    assert result["choices"][0]["message"]["content"] == expected
+    assert updates[-1][1] == expected
+
+
+def test_chat_stream_fails_closed_on_backend_quarantine(monkeypatch):
+    integrity = {
+        "schema_version": 1,
+        "status": "quarantined",
+        "contaminated": True,
+        "quarantine_required": True,
+        "response_chars": 27,
+        "response_sha256": "example",
+        "reasons": ["visible_output_contamination"],
+    }
+    events = [
+        {
+            "type": "output_hygiene",
+            "hygiene": {"output_integrity": integrity},
+        },
+        {
+            "model": "test-model",
+            "choices": [{"delta": {}, "finish_reason": "content_filter"}],
+        },
+    ]
+    body = "\n".join(
+        [f"data: {json.dumps(event)}" for event in events]
+        + ["data: [DONE]", ""]
+    ).encode("utf-8")
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body,
+        )
+    )
+    real_client = httpx.AsyncClient
+
+    class TestAsyncClient(real_client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", TestAsyncClient)
+    updates = []
+    result = asyncio.run(
+        mcp_server.Notion2APIClient("http://test").post_chat_stream(
+            "/v1/chat/completions",
+            {"model": "test-model"},
+            lambda *args: updates.append(args),
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["status_code"] == 422
+    assert result["status"] == "indeterminate_output"
+    assert result["quarantined"] is True
+    assert result["choices"][0]["finish_reason"] == "content_filter"
+    assert result["choices"][0]["message"]["content"] == ""
+    assert result["output_integrity"] == integrity
+    assert updates[-1][1] == ""
+
+
+def test_terminal_normalization_preserves_upstream_quarantine_receipt():
+    integrity = {
+        "schema_version": 1,
+        "status": "quarantined",
+        "contaminated": True,
+        "quarantine_required": True,
+        "response_chars": 19,
+        "response_sha256": "upstream",
+        "reasons": ["upstream_content_filter"],
+    }
+    normalized, evidence = mcp_server._normalize_terminal_output(
+        {
+            "ok": False,
+            "status_code": 422,
+            "status": "indeterminate_output",
+            "response_text": "",
+            "output_integrity": integrity,
+            "quarantined": True,
+        },
+        source="test",
+    )
+
+    assert normalized["quarantined"] is True
+    assert normalized["output_integrity"] == integrity
+    assert normalized["response_text"] == ""
+    assert normalized["authoritative"] is False
+    assert evidence is not None

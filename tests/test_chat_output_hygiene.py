@@ -7,6 +7,7 @@ from app.api.chat import (
     _create_lite_stream_generator,
     _create_standard_stream_generator,
     _finalize_visible_reply,
+    _select_best_final_reply,
 )
 
 
@@ -187,3 +188,24 @@ def test_stream_generators_preserve_finish_reason(factory):
 
     assert payloads[-1] == "[DONE]"
     assert payloads[-2]["choices"][0]["finish_reason"] == "stop"
+
+
+
+def test_final_reply_preserves_streamed_spacing_when_tokens_are_equivalent():
+    streamed = (
+        "MCP tool inventories have been refreshed.\n\n"
+        "Two MCP servers failed to reload their tool definitions."
+    )
+    final = (
+        "MCP tool inventories have been refreshed.\n\n"
+        "Two MCP servers failed to reload the ir tool definitions."
+    )
+
+    selected, decision = _select_best_final_reply(
+        streamed,
+        final,
+        "agent-inference",
+    )
+
+    assert selected == streamed
+    assert decision == "streamed_whitespace_equivalent"

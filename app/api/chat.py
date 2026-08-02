@@ -1314,6 +1314,12 @@ def _select_best_final_reply(
             return streamed, "streamed_beats_short_final"
         return final, "final_prefix_of_streamed"
 
+    # When the token sequence is identical and only whitespace differs, preserve
+    # the exact streamed body. That is what the downstream client received, and
+    # persisting a differently spaced final event creates a split-brain record.
+    if "".join(streamed_stripped.split()) == "".join(final_stripped.split()):
+        return streamed, "streamed_whitespace_equivalent"
+
     # Diverged content: usually prefer richer non-title final content.
     if source == "title" and len(final_stripped) < max(
         48, int(len(streamed_stripped) * 0.6)
