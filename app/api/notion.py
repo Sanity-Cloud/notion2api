@@ -723,7 +723,7 @@ async def account_info(
     parent_page_id = client.resolve_repo_ai_parent_page_id()
     parent_accessible = False
     if parent_page_id:
-        access = client.check_page_access(parent_page_id)
+        access = await run_in_threadpool(client.check_page_access, parent_page_id)
         parent_accessible = bool(access.get("accessible"))
     return AccountInfoResponse(
         ok=True,
@@ -888,7 +888,7 @@ async def create_page(request: Request, body: CreatePageRequest) -> CreatePageRe
                 requested_parent,
                 field_name="parent_page_id",
             )
-            access = client.check_page_access(parent_page_id)
+            access = await run_in_threadpool(client.check_page_access, parent_page_id)
             if not access.get("accessible"):
                 raise ValueError(
                     "Parent page is not readable by the configured Notion account. "
