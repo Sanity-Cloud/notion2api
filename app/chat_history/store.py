@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE VIRTUAL TABLE IF NOT EXISTS chat_messages_fts USING fts5(id UNINDEXED, thread_id UNINDEXED, role UNINDEXED, text, tokenize='unicode61');
 """
 
+INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created
+  ON chat_messages(thread_id, created_time, id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_role
+  ON chat_messages(thread_id, role);
+"""
+
 MODEL_METADATA_COLUMNS: dict[str, str] = {
     "requested_model": "TEXT",
     "notion_requested_model": "TEXT",
@@ -205,6 +212,7 @@ def _message_model_metadata(message: dict[str, Any]) -> dict[str, str]:
     step = raw.get("step") if isinstance(raw.get("step"), dict) else raw
     data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
     value_parts = step.get("value") if isinstance(step.get("value"), list) else []
+    top_metadata = message.get("model_metadata") if isinstance(message.get("model_metadata"), dict) else {}
 
     def first_text(*values: Any) -> str:
         for value in values:
@@ -214,11 +222,35 @@ def _message_model_metadata(message: dict[str, Any]) -> dict[str, str]:
                 return str(value)
         return ""
 
-    notion_model_name = first_text(step.get("notionModelName"), raw.get("notionModelName"))
-    notion_step_model = first_text(step.get("model"), raw.get("model"))
-    model_provider = first_text(step.get("modelProvider"), raw.get("modelProvider"))
-    requested_model = first_text(raw.get("requested_model"), data.get("requested_model"))
-    notion_requested_model = first_text(raw.get("notion_requested_model"), data.get("notion_requested_model"))
+    notion_model_name = first_text(
+        message.get("notion_model_name"),
+        top_metadata.get("notion_model_name"),
+        step.get("notionModelName"),
+        raw.get("notionModelName"),
+    )
+    notion_step_model = first_text(
+        top_metadata.get("notion_step_model"),
+        step.get("model"),
+        raw.get("model"),
+    )
+    model_provider = first_text(
+        message.get("model_provider"),
+        top_metadata.get("model_provider"),
+        step.get("modelProvider"),
+        raw.get("modelProvider"),
+    )
+    requested_model = first_text(
+        message.get("requested_model"),
+        top_metadata.get("requested_model"),
+        raw.get("requested_model"),
+        data.get("requested_model"),
+    )
+    notion_requested_model = first_text(
+        message.get("notion_requested_model"),
+        top_metadata.get("notion_requested_model"),
+        raw.get("notion_requested_model"),
+        data.get("notion_requested_model"),
+    )
 
     for part in value_parts:
         if not isinstance(part, dict):
@@ -226,7 +258,13 @@ def _message_model_metadata(message: dict[str, Any]) -> dict[str, str]:
         notion_model_name = notion_model_name or first_text(part.get("notionModelName"))
         model_provider = model_provider or first_text(part.get("modelProvider"))
 
-    actual_model = first_text(raw.get("actual_model"), data.get("actual_model"), notion_model_name)
+    actual_model = first_text(
+        message.get("actual_model"),
+        top_metadata.get("actual_model"),
+        raw.get("actual_model"),
+        data.get("actual_model"),
+        notion_model_name,
+    )
     metadata = {
         "requested_model": requested_model,
         "notion_requested_model": notion_requested_model,
@@ -358,10 +396,23 @@ class ChatHistoryStore:
             conn.executescript(DDL)
             _ensure_chat_message_columns(conn)
             conn.commit()
+        self._ensure_indexes()
+
+    def _ensure_indexes(self) -> None:
+        """Best-effort indexes; another process may hold the live archive DB."""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            try:
+                conn.executescript(INDEX_DDL)
+                conn.commit()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            return
 
     @contextlib.contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         try:
             with conn:
@@ -441,6 +492,174 @@ class ChatHistoryStore:
                     "SELECT thread_id,role,text,created_time,requested_model,notion_requested_model,actual_model,model_provider,raw_json FROM chat_messages WHERE id=?",
                     (message_id,),
                 ).fetchone()
+                changed = existing is None or tuple(existing) != proposed
+                if changed:
+                    conn.execute(
+                        """INSERT INTO chat_messages(id,thread_id,role,text,created_time,requested_model,notion_requested_model,actual_model,model_provider,raw_json)
+                        VALUES(?,?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(id) DO UPDATE SET thread_id=excluded.thread_id,role=excluded.role,text=excluded.text,created_time=excluded.created_time,requested_model=excluded.requested_model,notion_requested_model=excluded.notion_requested_model,actual_model=excluded.actual_model,model_provider=excluded.model_provider,raw_json=excluded.raw_json""",
+                        (message_id, *proposed),
+                    )
+                    conn.execute("DELETE FROM chat_messages_fts WHERE id=?", (message_id,))
+                    conn.execute(
+                        "INSERT INTO chat_messages_fts(id,thread_id,role,text) VALUES(?,?,?,?)",
+                        (message_id, thread_id, role, text),
+                    )
+                if existing is None:
+                    result["messages_inserted"] += 1
+                elif changed:
+                    result["messages_updated"] += 1
+            conn.commit()
+        return result
+
+    def record_live_turn(self, bundle: dict[str, Any]) -> dict[str, int]:
+        """Upsert a live chat turn without clobbering hydrated Notion raw/message ids."""
+        threads = bundle.get("threads", {}) if isinstance(bundle, dict) else {}
+        messages = bundle.get("messages", {}) if isinstance(bundle, dict) else {}
+        result = {
+            "threads": len(threads) if isinstance(threads, dict) else 0,
+            "messages": len(messages) if isinstance(messages, dict) else 0,
+            "threads_inserted": 0,
+            "threads_updated": 0,
+            "messages_inserted": 0,
+            "messages_updated": 0,
+            "threads_skipped": 0,
+            "messages_skipped": 0,
+        }
+        if not isinstance(threads, dict) or not isinstance(messages, dict):
+            return result
+
+        with self._conn() as conn:
+            for thread in threads.values():
+                if not isinstance(thread, dict):
+                    result["threads_skipped"] += 1
+                    continue
+                thread_id = _id_text(thread.get("id"))
+                if not thread_id:
+                    result["threads_skipped"] += 1
+                    continue
+                existing = conn.execute(
+                    "SELECT title,created_time,last_edited_time,alive,message_ids_json,raw_json FROM chat_threads WHERE id=?",
+                    (thread_id,),
+                ).fetchone()
+                existing_ids = json.loads((existing["message_ids_json"] if existing else None) or "[]")
+                if not isinstance(existing_ids, list):
+                    existing_ids = []
+                incoming_ids = thread.get("message_ids") if isinstance(thread.get("message_ids"), list) else []
+                merged_ids = _clean_ids([*existing_ids, *incoming_ids])
+                existing_raw = _json_object(existing["raw_json"] if existing else None)
+                incoming_raw = thread.get("raw") if isinstance(thread.get("raw"), dict) else {}
+                merged_raw = dict(existing_raw)
+                if incoming_raw:
+                    live = incoming_raw.get("live") if isinstance(incoming_raw.get("live"), dict) else None
+                    if live:
+                        sources = merged_raw.get("live_sources")
+                        if not isinstance(sources, list):
+                            sources = []
+                        sources.append(live)
+                        merged_raw["live_sources"] = sources[-20:]
+                        merged_raw["live"] = live
+                    if not merged_raw.get("title") and incoming_raw.get("title"):
+                        merged_raw["title"] = incoming_raw.get("title")
+                    if not merged_raw.get("type"):
+                        merged_raw["type"] = incoming_raw.get("type") or "live_chat"
+                title = _text(thread.get("title")) or _text(existing["title"] if existing else "")
+                created_time = _text(existing["created_time"] if existing else "") or _text(thread.get("created_time"))
+                last_edited = _text(thread.get("last_edited_time") or thread.get("updated_at")) or _text(
+                    existing["last_edited_time"] if existing else ""
+                )
+                alive = existing["alive"] if existing and existing["alive"] is not None else 1
+                if thread.get("alive") is not None:
+                    alive = int(bool(thread.get("alive")))
+                proposed = (
+                    title,
+                    created_time,
+                    last_edited,
+                    alive,
+                    _message_ids_json(merged_ids),
+                    _json_dumps(merged_raw, {}),
+                )
+                conn.execute(
+                    """INSERT INTO chat_threads(id,title,created_time,last_edited_time,alive,message_ids_json,raw_json)
+                    VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      title=CASE WHEN TRIM(COALESCE(excluded.title,''))='' THEN chat_threads.title ELSE excluded.title END,
+                      last_edited_time=excluded.last_edited_time,
+                      alive=excluded.alive,
+                      message_ids_json=excluded.message_ids_json,
+                      raw_json=excluded.raw_json""",
+                    (thread_id, *proposed),
+                )
+                if existing is None:
+                    result["threads_inserted"] += 1
+                else:
+                    result["threads_updated"] += 1
+
+            for message in messages.values():
+                if not isinstance(message, dict):
+                    result["messages_skipped"] += 1
+                    continue
+                message_id = _id_text(message.get("id"))
+                if not message_id:
+                    result["messages_skipped"] += 1
+                    continue
+                thread_id = _id_text(message.get("thread_id"))
+                role = _text(message.get("role"))
+                text = _text(message.get("text"))
+                created_time = _text(message.get("created_time"))
+                metadata = _message_model_metadata(message)
+                existing = conn.execute(
+                    "SELECT thread_id,role,text,created_time,requested_model,notion_requested_model,actual_model,model_provider,raw_json FROM chat_messages WHERE id=?",
+                    (message_id,),
+                ).fetchone()
+                if existing is not None and str(existing["text"] or "").strip():
+                    # Keep hydrated Notion bodies; only fill missing model columns.
+                    requested = _text(existing["requested_model"]) or _text(metadata.get("requested_model"))
+                    notion_requested = _text(existing["notion_requested_model"]) or _text(
+                        metadata.get("notion_requested_model")
+                    )
+                    actual = _text(existing["actual_model"]) or _text(metadata.get("actual_model"))
+                    provider = _text(existing["model_provider"]) or _text(metadata.get("model_provider"))
+                    existing_raw = _json_object(existing["raw_json"])
+                    incoming_raw = message.get("raw") if isinstance(message.get("raw"), dict) else {}
+                    if incoming_raw.get("live") and "live" not in existing_raw:
+                        existing_raw["live"] = incoming_raw.get("live")
+                    proposed = (
+                        _text(existing["thread_id"]) or thread_id,
+                        _text(existing["role"]) or role,
+                        _text(existing["text"]),
+                        _text(existing["created_time"]) or created_time,
+                        requested,
+                        notion_requested,
+                        actual,
+                        provider,
+                        _json_dumps(existing_raw, {}),
+                    )
+                    changed = tuple(existing) != proposed
+                    if changed:
+                        conn.execute(
+                            """UPDATE chat_messages
+                            SET thread_id=?, role=?, text=?, created_time=?,
+                                requested_model=?, notion_requested_model=?, actual_model=?, model_provider=?, raw_json=?
+                            WHERE id=?""",
+                            (*proposed, message_id),
+                        )
+                        result["messages_updated"] += 1
+                    else:
+                        result["messages_skipped"] += 1
+                    continue
+
+                proposed = (
+                    thread_id,
+                    role,
+                    text,
+                    created_time,
+                    _text(metadata.get("requested_model")),
+                    _text(metadata.get("notion_requested_model")),
+                    _text(metadata.get("actual_model")),
+                    _text(metadata.get("model_provider")),
+                    _json_dumps(message.get("raw"), {}),
+                )
                 conn.execute(
                     """INSERT INTO chat_messages(id,thread_id,role,text,created_time,requested_model,notion_requested_model,actual_model,model_provider,raw_json)
                     VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -448,13 +667,37 @@ class ChatHistoryStore:
                     (message_id, *proposed),
                 )
                 conn.execute("DELETE FROM chat_messages_fts WHERE id=?", (message_id,))
-                conn.execute("INSERT INTO chat_messages_fts(id,thread_id,role,text) VALUES(?,?,?,?)", (message_id, thread_id, role, text))
+                conn.execute(
+                    "INSERT INTO chat_messages_fts(id,thread_id,role,text) VALUES(?,?,?,?)",
+                    (message_id, thread_id, role, text),
+                )
                 if existing is None:
                     result["messages_inserted"] += 1
-                elif tuple(existing) != proposed:
+                else:
                     result["messages_updated"] += 1
             conn.commit()
         return result
+
+    def existing_message_ids(self, message_ids: list[Any]) -> set[str]:
+        """Return message IDs that already have durable text in the local archive."""
+        ids = _clean_ids(message_ids)
+        if not ids:
+            return set()
+        existing: set[str] = set()
+        with self._conn() as conn:
+            for start in range(0, len(ids), 400):
+                chunk = ids[start : start + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT id FROM chat_messages
+                    WHERE id IN ({placeholders})
+                      AND TRIM(COALESCE(text, '')) != ''
+                    """,
+                    chunk,
+                ).fetchall()
+                existing.update(str(row["id"]) for row in rows)
+        return existing
 
     def existing_thread_ids(self, thread_ids: list[Any]) -> set[str]:
         ids = _clean_ids(thread_ids)
@@ -520,7 +763,9 @@ class ChatHistoryStore:
         where = "WHERE " + " AND ".join(filters)
         order_expr = _thread_timestamp_expr("t")
         with self._conn() as conn:
-            rows = conn.execute(
+            # Page thread metadata first, then aggregate messages only for that page.
+            # Joining/grouping the full messages table before LIMIT was timing out on large DBs.
+            page_rows = conn.execute(
                 f"""
                 SELECT
                   t.id,
@@ -528,14 +773,56 @@ class ChatHistoryStore:
                   t.created_time,
                   t.last_edited_time,
                   {order_expr} AS updated_at,
-                  t.alive,
+                  t.alive
+                FROM chat_threads t
+                {where}
+                ORDER BY {order_expr} DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+            if not page_rows:
+                return []
+
+            ids = [str(row["id"]) for row in page_rows]
+            placeholders = ",".join("?" for _ in ids)
+            stats_by_id: dict[str, dict[str, Any]] = {
+                thread_id: {
+                    "raw_message_count": 0,
+                    "visible_message_count": 0,
+                    "user_message_count": 0,
+                    "assistant_message_count": 0,
+                    "error_message_count": 0,
+                    "first_message_time": None,
+                    "last_message_time": None,
+                    "first_message_text": "",
+                    "last_message_text": "",
+                }
+                for thread_id in ids
+            }
+            for row in conn.execute(
+                f"""
+                SELECT
+                  m.thread_id AS id,
                   COUNT(m.id) AS raw_message_count,
                   SUM(CASE WHEN m.role IN ('user','assistant') THEN 1 ELSE 0 END) AS visible_message_count,
                   SUM(CASE WHEN m.role='user' THEN 1 ELSE 0 END) AS user_message_count,
                   SUM(CASE WHEN m.role='assistant' THEN 1 ELSE 0 END) AS assistant_message_count,
                   SUM(CASE WHEN m.role='error' THEN 1 ELSE 0 END) AS error_message_count,
                   MIN(m.created_time) AS first_message_time,
-                  MAX(m.created_time) AS last_message_time,
+                  MAX(m.created_time) AS last_message_time
+                FROM chat_messages m
+                WHERE m.thread_id IN ({placeholders})
+                GROUP BY m.thread_id
+                """,
+                ids,
+            ).fetchall():
+                stats_by_id[str(row["id"])].update(dict(row))
+
+            for row in conn.execute(
+                f"""
+                SELECT
+                  t.id,
                   (
                     SELECT m1.text FROM chat_messages m1
                     WHERE m1.thread_id=t.id
@@ -547,28 +834,31 @@ class ChatHistoryStore:
                     ORDER BY m2.created_time DESC, m2.id DESC LIMIT 1
                   ) AS last_message_text
                 FROM chat_threads t
-                LEFT JOIN chat_messages m ON m.thread_id=t.id
-                {where}
-                GROUP BY t.id
-                ORDER BY {order_expr} DESC
-                LIMIT ? OFFSET ?
+                WHERE t.id IN ({placeholders})
                 """,
-                (limit, offset),
-            ).fetchall()
+                ids,
+            ).fetchall():
+                entry = stats_by_id[str(row["id"])]
+                entry["first_message_text"] = row["first_message_text"] or ""
+                entry["last_message_text"] = row["last_message_text"] or ""
+
             out: list[dict[str, Any]] = []
-            for row in rows:
+            for row in page_rows:
                 item = dict(row)
-                item["raw_message_count"] = int(item.get("raw_message_count") or 0)
-                item["visible_message_count"] = int(item.get("visible_message_count") or 0)
+                stats = stats_by_id[str(item["id"])]
+                item["raw_message_count"] = int(stats.get("raw_message_count") or 0)
+                item["visible_message_count"] = int(stats.get("visible_message_count") or 0)
                 item["message_count"] = item["visible_message_count"]
-                item["user_message_count"] = int(item.get("user_message_count") or 0)
-                item["assistant_message_count"] = int(item.get("assistant_message_count") or 0)
-                item["error_message_count"] = int(item.get("error_message_count") or 0)
+                item["user_message_count"] = int(stats.get("user_message_count") or 0)
+                item["assistant_message_count"] = int(stats.get("assistant_message_count") or 0)
+                item["error_message_count"] = int(stats.get("error_message_count") or 0)
+                item["first_message_time"] = stats.get("first_message_time")
+                item["last_message_time"] = stats.get("last_message_time")
                 item["export_success_eligible"] = item["raw_message_count"] == 2 and item["user_message_count"] == 1 and item["assistant_message_count"] == 1
                 item["export_error_eligible"] = item["raw_message_count"] == 2 and item["user_message_count"] == 1 and item["error_message_count"] == 1
                 item["hydrated"] = item["raw_message_count"] > 0
-                item["first_message_preview"] = _preview(item.pop("first_message_text", ""))
-                item["last_message_preview"] = _preview(item.pop("last_message_text", ""))
+                item["first_message_preview"] = _preview(stats.get("first_message_text", ""))
+                item["last_message_preview"] = _preview(stats.get("last_message_text", ""))
                 out.append(item)
             self._attach_model_stats_to_threads(conn, out)
             return out
@@ -783,6 +1073,21 @@ class ChatHistoryStore:
             "known_response_count": int(known_response_count),
             "unknown_response_count": int(unknown_response_count),
             "models": models,
+        }
+
+    def get_thread_hydration_source(self, thread_id: str) -> dict[str, Any] | None:
+        """Lightweight thread metadata for Notion hydrate (no message bodies / raw blobs)."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id, title, message_ids_json FROM chat_threads WHERE id=?",
+                (thread_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": str(row["id"]),
+            "title": str(row["title"] or ""),
+            "message_ids": json.loads(row["message_ids_json"] or "[]"),
         }
 
     def get_thread(self, thread_id: str) -> dict[str, Any] | None:

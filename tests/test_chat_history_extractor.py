@@ -171,6 +171,36 @@ class ChatHistoryExtractorTests(unittest.TestCase):
             )
         )
 
+    def test_merge_skips_deep_walk_when_record_map_hits(self) -> None:
+        bundle = {"threads": {}, "messages": {}, "endpoint_counts": {}}
+        merge_records_into_bundle(
+            bundle,
+            {
+                "recordMap": {
+                    "thread_message": {
+                        "msg-1": {
+                            "value": {
+                                "id": "msg-1",
+                                "thread_id": "thread-1",
+                                "role": "user",
+                                "text": "from record map",
+                            }
+                        }
+                    }
+                },
+                "decoy": {
+                    "id": "msg-decoy",
+                    "thread_id": "thread-1",
+                    "role": "assistant",
+                    "text": "should not be walked",
+                    "encryptedContent": "x" * 5000,
+                },
+            },
+        )
+
+        self.assertIn("msg-1", bundle["messages"])
+        self.assertNotIn("msg-decoy", bundle["messages"])
+
 
 if __name__ == "__main__":
     unittest.main()

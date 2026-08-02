@@ -413,23 +413,39 @@ def _has_message_shape(value: dict[str, Any]) -> bool:
 
 
 def merge_records_into_bundle(bundle: dict[str, Any], obj: Any) -> None:
+    """Extract threads/messages from Notion payloads.
+
+    Prefer structured `recordMap` / transcript collections. Skip the deep tree walk
+    when those hit, because Notion hydrate payloads embed huge encrypted blobs that
+    make full walks dominate CPU for no additional records.
+    """
+    structured_hits = 0
     for record_map in record_maps(obj):
         for thread_id, record in (record_map.get("thread") or {}).items():
             thread = normalize_thread(str(thread_id), record_value(record))
             if thread:
                 bundle["threads"][thread["id"]] = thread
+                structured_hits += 1
         for message_id, record in (record_map.get("thread_message") or {}).items():
             message = normalize_message(str(message_id), record_value(record))
             if message:
                 bundle["messages"][message["id"]] = message
+                structured_hits += 1
 
     if isinstance(obj, dict):
         for fallback_id, candidate in _iter_collection(obj, ("transcripts", "threads")):
+            before = len(bundle["threads"]) + len(bundle["messages"])
             _merge_thread_candidate(bundle, fallback_id, candidate)
+            if len(bundle["threads"]) + len(bundle["messages"]) > before:
+                structured_hits += 1
         for fallback_id, candidate in _iter_collection(obj, ("messages", "thread_messages", "threadMessages")):
             message = normalize_message(fallback_id, candidate)
             if message:
                 bundle["messages"][message["id"]] = message
+                structured_hits += 1
+
+    if structured_hits > 0:
+        return
 
     def walk(value: Any, fallback_thread_id: str | None = None) -> None:
         if isinstance(value, dict):

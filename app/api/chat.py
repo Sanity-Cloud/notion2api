@@ -52,8 +52,49 @@ from app.schemas import (
 )
 from app.thread_title import resolve_requested_thread_title
 from app.api.chat_resume_thread_binding import _resolve_persistent_thread_id
+from app.chat_history.live_recorder import record_live_chat_turn
 
 router = APIRouter()
+
+
+def _record_live_chat_history_turn(
+    *,
+    thread_id: str | None,
+    conversation_id: str,
+    user_prompt: str,
+    assistant_reply: str,
+    requested_model: str = "",
+    model_metadata: dict[str, Any] | None = None,
+    request_metadata: dict[str, Any] | None = None,
+) -> None:
+    """Mirror completed Notion-backed turns into the shared chat-history archive."""
+    notion_thread_id = str(thread_id or "").strip()
+    if not notion_thread_id:
+        return
+    if not str(user_prompt or "").strip() and not str(assistant_reply or "").strip():
+        return
+    try:
+        record_live_chat_turn(
+            thread_id=notion_thread_id,
+            conversation_id=conversation_id,
+            user_prompt=user_prompt,
+            assistant_reply=assistant_reply,
+            requested_model=requested_model,
+            model_metadata=model_metadata,
+            request_metadata=request_metadata,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to record live chat turn into chat history archive",
+            exc_info=True,
+            extra={
+                "request_info": {
+                    "event": "chat_history_live_turn_failed",
+                    "conversation_id": conversation_id,
+                    "thread_id": notion_thread_id,
+                }
+            },
+        )
 
 
 def _apply_notion_request_options(
@@ -2105,6 +2146,27 @@ def _handle_lite_request(
                 response_obj, req_body.model, model_metadata, req_body.metadata
             )
             _attach_response_hygiene(response_obj, hygiene_meta)
+            lite_thread_id = str(
+                (model_metadata or {}).get("notion_thread_id")
+                or getattr(client, "current_thread_id", "")
+                or ""
+            ).strip()
+            lite_user_prompt = ""
+            for message in reversed(list(req_body.messages or [])):
+                if str(getattr(message, "role", "") or "").strip().lower() == "user":
+                    lite_user_prompt = str(getattr(message, "content", "") or "")
+                    break
+            _record_live_chat_history_turn(
+                thread_id=lite_thread_id,
+                conversation_id=str(getattr(req_body, "conversation_id", "") or ""),
+                user_prompt=lite_user_prompt,
+                assistant_reply=full_text,
+                requested_model=str(req_body.model or ""),
+                model_metadata=model_metadata,
+                request_metadata=req_body.metadata
+                if isinstance(req_body.metadata, dict)
+                else None,
+            )
             if _strict_model_requested(req_body) and _is_model_mismatch(response_obj):
                 return _model_mismatch_response(response_obj)
             return response_obj
@@ -3289,6 +3351,18 @@ async def create_chat_completion(
                         model_metadata = dict(model_metadata or {})
                         model_metadata["notion_thread_id"] = active_thread_id
                         model_metadata["remote_chat_id"] = active_thread_id
+                    if (final_reply.strip() or persisted_thinking.strip()) and not quarantined:
+                        _record_live_chat_history_turn(
+                            thread_id=active_thread_id,
+                            conversation_id=conversation_id,
+                            user_prompt=user_prompt,
+                            assistant_reply=final_reply,
+                            requested_model=str(req_body.model or ""),
+                            model_metadata=model_metadata,
+                            request_metadata=req_body.metadata
+                            if isinstance(req_body.metadata, dict)
+                            else None,
+                        )
 
                     metadata_event = _build_model_metadata_event(
                         req_body.model, model_metadata, req_body.metadata
@@ -3397,6 +3471,17 @@ async def create_chat_completion(
                 model_metadata = dict(model_metadata or {})
                 model_metadata["notion_thread_id"] = notion_thread_id
                 response.headers["X-Notion-Thread-Id"] = notion_thread_id
+            _record_live_chat_history_turn(
+                thread_id=notion_thread_id,
+                conversation_id=conversation_id,
+                user_prompt=user_prompt,
+                assistant_reply=full_text,
+                requested_model=str(req_body.model or ""),
+                model_metadata=model_metadata,
+                request_metadata=req_body.metadata
+                if isinstance(req_body.metadata, dict)
+                else None,
+            )
 
             response_text = (
                 full_text if full_text.strip() else "[assistant_no_visible_content]"

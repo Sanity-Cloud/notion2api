@@ -441,6 +441,7 @@ async def sync_from_notion(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Invalid import parameters") from exc
 
     client = _get_account_client(request, account_index)
+    store = _store()
     operation_key = f"sync:{getattr(client, 'space_id', 'default')}:{account_index}"
     try:
         bundle = await _run_singleflight(
@@ -450,6 +451,7 @@ async def sync_from_notion(request: Request) -> dict[str, Any]:
             limit=limit,
             max_pages=max_pages,
             hydrate=hydrate,
+            existing_message_ids_lookup=store.existing_message_ids if hydrate else None,
         )
     except OperationInProgress as exc:
         raise HTTPException(
@@ -477,7 +479,7 @@ async def sync_from_notion(request: Request) -> dict[str, Any]:
             },
         ) from exc
 
-    imported = _store().upsert_bundle(bundle)
+    imported = store.upsert_bundle(bundle)
     summary = dict(bundle.get("sync_summary", {}))
     summary.update(
         {
@@ -649,7 +651,7 @@ async def hydrate_thread(thread_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Invalid hydrate parameters") from exc
 
     store = _store()
-    thread = store.get_thread(thread_id)
+    thread = store.get_thread_hydration_source(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -661,6 +663,7 @@ async def hydrate_thread(thread_id: str, request: Request) -> dict[str, Any]:
             hydrate_thread_from_notion,
             client,
             thread,
+            existing_message_ids_lookup=store.existing_message_ids,
         )
     except OperationInProgress as exc:
         raise HTTPException(
