@@ -761,6 +761,9 @@ class Notion2APIClient:
         response_model = str(payload.get("model") or "")
         event_count = 0
         last_update = 0.0
+        hygiene: dict[str, Any] = {}
+        quarantined = False
+        terminal_finish_reason = ""
 
         headers = self._headers()
         headers["Accept"] = "text/event-stream"
@@ -788,13 +791,43 @@ class Notion2APIClient:
                         continue
                     if not isinstance(event, dict):
                         continue
+
                     response_model = str(event.get("model") or response_model)
                     if isinstance(event.get("model_metadata"), dict):
                         model_metadata.update(event["model_metadata"])
+
+                    event_type = str(event.get("type") or "").strip().lower()
+                    if event_type == "output_hygiene":
+                        candidate = event.get("hygiene")
+                        if isinstance(candidate, dict):
+                            hygiene = dict(candidate)
+                            integrity = hygiene.get("output_integrity")
+                            if isinstance(integrity, dict) and integrity.get("quarantine_required"):
+                                quarantined = True
+                        continue
+                    if event_type == "content_replace":
+                        replacement = event.get("content")
+                        if isinstance(replacement, str):
+                            content_parts[:] = [replacement]
+                            event_count += 1
+                        continue
+                    if event_type == "thinking_replace":
+                        replacement = event.get("text") or event.get("thinking")
+                        if isinstance(replacement, str):
+                            reasoning_buffer = replacement[-MAX_PROGRESS_REASONING_CHARS:]
+                            event_count += 1
+                        continue
+
                     choices = event.get("choices")
                     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
                         continue
-                    delta = choices[0].get("delta")
+                    choice = choices[0]
+                    finish_reason = str(choice.get("finish_reason") or "").strip().lower()
+                    if finish_reason:
+                        terminal_finish_reason = finish_reason
+                    if finish_reason == "content_filter":
+                        quarantined = True
+                    delta = choice.get("delta")
                     if not isinstance(delta, dict):
                         continue
                     content = delta.get("content")
@@ -802,33 +835,62 @@ class Notion2APIClient:
                     if isinstance(content, str) and content:
                         content_parts.append(content)
                     if isinstance(reasoning, str) and reasoning:
-                        reasoning_buffer = (reasoning_buffer + reasoning)[
-                            -MAX_PROGRESS_REASONING_CHARS:
-                        ]
+                        reasoning_buffer = (reasoning_buffer + reasoning)[-MAX_PROGRESS_REASONING_CHARS:]
                     if content or reasoning:
                         event_count += 1
                         now = time.monotonic()
                         if now - last_update >= 0.75:
-                            on_progress(
-                                reasoning_buffer,
-                                "".join(content_parts),
-                                event_count,
-                                False,
-                            )
+                            on_progress(reasoning_buffer, "".join(content_parts), event_count, False)
                             last_update = now
 
-        on_progress(reasoning_buffer, "".join(content_parts), event_count, True)
-        # Persist only the final visible answer. Raw reasoning is used transiently
-        # to derive the bounded progress snapshot and is never stored in MCP jobs.
-        message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
-        return {
+        visible_content = "".join(content_parts)
+        if quarantined:
+            visible_content = ""
+        on_progress(reasoning_buffer, visible_content, event_count, True)
+
+        upstream_integrity = hygiene.get("output_integrity") if isinstance(hygiene, dict) else None
+        if quarantined:
+            if not isinstance(upstream_integrity, dict):
+                upstream_integrity = assess_output_integrity(
+                    "",
+                    additional_reasons=("upstream_content_filter",),
+                )
+            return {
+                "ok": False,
+                "status_code": 422,
+                "status": "indeterminate_output",
+                "model": response_model,
+                "actual_model": str(model_metadata.get("actual_model") or ""),
+                "model_metadata": model_metadata or None,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": terminal_finish_reason or "content_filter",
+                }],
+                "output_integrity": upstream_integrity,
+                "hygiene": hygiene or {"output_integrity": upstream_integrity},
+                "quarantined": True,
+                "error": {
+                    "code": "OUTPUT_CONTAMINATED",
+                    "message": "Assistant output was quarantined by the backend stream integrity guard.",
+                },
+            }
+
+        message: dict[str, Any] = {"role": "assistant", "content": visible_content}
+        result = {
             "ok": True,
             "status_code": 200,
             "model": response_model,
             "actual_model": str(model_metadata.get("actual_model") or ""),
             "model_metadata": model_metadata or None,
-            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+            "choices": [{"index": 0, "message": message, "finish_reason": terminal_finish_reason or "stop"}],
         }
+        if isinstance(upstream_integrity, dict):
+            result["output_integrity"] = upstream_integrity
+        if hygiene:
+            result["hygiene"] = hygiene
+        return result
+
 
 
 def _json_or_error(response: httpx.Response) -> dict[str, Any]:
@@ -1671,14 +1733,28 @@ def _normalize_terminal_output(
 
     original = copy.deepcopy(response)
     text = _job_response_text(original)
+    upstream_receipt = original.get("output_integrity")
+    if not isinstance(upstream_receipt, dict):
+        hygiene = original.get("hygiene")
+        if isinstance(hygiene, dict) and isinstance(hygiene.get("output_integrity"), dict):
+            upstream_receipt = hygiene["output_integrity"]
+    upstream_quarantined = bool(
+        original.get("quarantined")
+        or (isinstance(upstream_receipt, dict) and upstream_receipt.get("quarantine_required"))
+    )
     legacy_contamination = detect_visible_output_contamination(text)
     additional_reasons = (
         ("visible_output_contamination",) if legacy_contamination else ()
     )
-    receipt = assess_output_integrity(
-        text,
-        additional_reasons=additional_reasons,
-    )
+    if upstream_quarantined and isinstance(upstream_receipt, dict):
+        receipt = dict(upstream_receipt)
+    else:
+        if upstream_quarantined:
+            additional_reasons = tuple(additional_reasons) + ("upstream_quarantine",)
+        receipt = assess_output_integrity(
+            text,
+            additional_reasons=additional_reasons,
+        )
     normalized = dict(response)
     normalized["output_integrity"] = receipt
     normalized["quarantined"] = bool(receipt["quarantine_required"])
@@ -1922,6 +1998,14 @@ def _chat_output_from_backend(
     ok = bool(data.get("ok", False))
     status = "completed" if ok else "error"
     remote_chat_id = _extract_remote_chat_id(data)
+    upstream_hygiene = data.get("hygiene") if isinstance(data.get("hygiene"), dict) else {}
+    upstream_integrity = data.get("output_integrity")
+    if not isinstance(upstream_integrity, dict):
+        upstream_integrity = upstream_hygiene.get("output_integrity")
+    upstream_quarantined = bool(
+        data.get("quarantined")
+        or (isinstance(upstream_integrity, dict) and upstream_integrity.get("quarantine_required"))
+    )
     response = {
         "ok": ok,
         "status_code": data.get("status_code"),
@@ -1958,6 +2042,9 @@ def _chat_output_from_backend(
         ),
         "error": _error_summary(data),
         "response_text": _extract_chat_content(data),
+        "output_integrity": upstream_integrity if isinstance(upstream_integrity, dict) else None,
+        "hygiene": upstream_hygiene or None,
+        "quarantined": upstream_quarantined,
         "remote_chat_id": remote_chat_id,
         "notion_thread_id": remote_chat_id,
         "raw": data,
