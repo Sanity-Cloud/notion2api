@@ -67,6 +67,25 @@ List and search actions use bounded `limit` and `offset` pagination. Thread read
 
 `sync_from_notion` and `hydrate_thread` are non-destructive, idempotent archive operations. They require an explicit zero-based `account_index` and return partial-result receipts when the backend reports failed sub-operations.
 
+
+## Client-visible contract snapshots
+
+The reviewed MCP schemas are stored separately for the two runtime profiles:
+
+- `contracts/mcp/notion2api.json` ? plain Notion2API profile, currently 48 tools.
+- `contracts/mcp/aigentbee.json` ? AIgentBee-prefixed profile, currently 51 tools, including the three conditional swarm-workbench tools.
+
+The snapshots freeze tool names, descriptions, input and output schemas, required fields, defaults, enum values, annotations, profile-specific metadata, and server instructions. Regenerate them only after reviewing an intentional client-visible change:
+
+```powershell
+python scripts/generate_mcp_contract_snapshots.py
+python -m pytest -q tests/test_mcp_contract_snapshots.py
+```
+
+A process restart is required before a running MCP server advertises changed schemas. Existing ChatGPT or other connector sessions may also retain a stale tool cache and require reconnection or refresh; snapshot validation does not prove that a live client has refreshed.
+
+Current annotation coverage is incomplete for legacy tools. The snapshots preserve that fact as reviewed baseline evidence rather than assigning unverified read-only, destructive, or idempotency semantics. New or changed tools should declare explicit annotations, and a separate governance audit should classify legacy operations before clients rely on annotation-driven authorization.
+
 ## Models, sessions, and continuation
 
 The default requested model is the consumer-facing `terra` alias, which resolves to the current Terra backend route. `sol`, `terra`, and `luna` are accepted alongside the longer public model names and canonical Notion route IDs.
