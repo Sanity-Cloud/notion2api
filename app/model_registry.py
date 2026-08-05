@@ -597,26 +597,37 @@ def _shared_restricted_models(space_id: str, *, allow_stale: bool = False) -> se
 def get_restricted_models_for_space(client) -> set[str]:
     now = time.time()
     space_id = str(client.space_id or "").strip()
+    account_id = str(
+        getattr(client, "user_id", "")
+        or getattr(client, "account_key", "")
+        or getattr(client, "user_email", "")
+        or "unknown-account"
+    ).strip()
+    cache_key = f"{space_id}:{account_id}"
     ttl_seconds = _restriction_cache_ttl_seconds()
-    local = _RESTRICTED_MODELS_CACHE.get(space_id)
+    local = _RESTRICTED_MODELS_CACHE.get(cache_key)
     if local and now - local[0] < ttl_seconds:
         return set(local[1])
 
-    with _restriction_lock(space_id):
+    with _restriction_lock(cache_key):
         now = time.time()
-        local = _RESTRICTED_MODELS_CACHE.get(space_id)
+        local = _RESTRICTED_MODELS_CACHE.get(cache_key)
         if local and now - local[0] < ttl_seconds:
             return set(local[1])
-        shared = _shared_restricted_models(space_id)
+        shared = _shared_restricted_models(cache_key)
         if shared is not None:
-            _RESTRICTED_MODELS_CACHE[space_id] = (now, shared)
+            _RESTRICTED_MODELS_CACHE[cache_key] = (now, shared)
             return set(shared)
 
-        stale = set(local[1]) if local else (_shared_restricted_models(space_id, allow_stale=True) or set())
+        stale = (
+            set(local[1])
+            if local
+            else (_shared_restricted_models(cache_key, allow_stale=True) or set())
+        )
         deadline = time.monotonic() + _restriction_refresh_wait_seconds()
         while True:
             lease_token = _SHARED_RESTRICTION_CACHE.claim_refresh(
-                space_id,
+                cache_key,
                 owner_id=_RESTRICTION_CACHE_OWNER,
                 lease_seconds=max(5.0, _restriction_refresh_wait_seconds()),
             )
@@ -625,30 +636,38 @@ def get_restricted_models_for_space(client) -> set[str]:
                     restricted = _restricted_models_from_picker_config(
                         client.get_ai_model_picker_config()
                     )
-                    _SHARED_RESTRICTION_CACHE.store(
-                        space_id,
+                    stored = _SHARED_RESTRICTION_CACHE.store(
+                        cache_key,
                         {"restricted_models": sorted(restricted)},
                         lease_token=lease_token,
                         ttl_seconds=ttl_seconds,
                     )
-                    _RESTRICTED_MODELS_CACHE[space_id] = (time.time(), restricted)
+                    if not stored:
+                        shared = _shared_restricted_models(cache_key)
+                        return set(shared if shared is not None else stale)
+                    _RESTRICTED_MODELS_CACHE[cache_key] = (
+                        time.time(),
+                        restricted,
+                    )
                     return set(restricted)
                 except Exception as exc:
                     _SHARED_RESTRICTION_CACHE.release_refresh(
-                        space_id, lease_token=lease_token
+                        cache_key, lease_token=lease_token
                     )
                     logger.warning(
-                        f"Failed to fetch restricted models for space {space_id}: {exc}"
+                        "Failed to fetch restricted models for "
+                        f"space/account {cache_key}: {exc}"
                     )
                     return stale
 
-            shared = _shared_restricted_models(space_id)
+            shared = _shared_restricted_models(cache_key)
             if shared is not None:
-                _RESTRICTED_MODELS_CACHE[space_id] = (time.time(), shared)
+                _RESTRICTED_MODELS_CACHE[cache_key] = (time.time(), shared)
                 return set(shared)
             if time.monotonic() >= deadline:
                 logger.warning(
-                    f"Timed out waiting for restricted model refresh for space {space_id}"
+                    "Timed out waiting for restricted model refresh for "
+                    f"space/account {cache_key}"
                 )
                 return stale
             time.sleep(0.05)
