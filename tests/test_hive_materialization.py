@@ -288,6 +288,11 @@ def test_three_lane_hive_has_bindings_leases_and_review_dependencies(tmp_path):
     assert {item.status for item in result.dispatch_receipts} == {
         DispatchStatus.READY.value
     }
+    assert {tuple(item.writable_domains) for item in result.leases} == {
+        ("app",),
+        ("tests",),
+        (),
+    }
     assert all(
         item.conversation_id.startswith("aigentbee:worker:")
         for item in result.dispatch_receipts
@@ -309,6 +314,48 @@ def test_three_lane_hive_has_bindings_leases_and_review_dependencies(tmp_path):
     assert set(reviewer.dependencies) == non_review
     by_mission = store.get_materialization(mission_id="phase2-mission")
     assert by_mission.plan_id == "phase2-plan"
+
+
+@pytest.mark.parametrize(
+    ("case_id", "requested_domains", "expected_status", "expected_domains"),
+    [
+        ("empty", [], MaterializationStatus.MATERIALIZED.value, []),
+        ("authorized_subset", ["app"], MaterializationStatus.MATERIALIZED.value, ["app"]),
+        ("disjoint", ["missing"], MaterializationStatus.BLOCKED.value, None),
+    ],
+)
+def test_materialization_lease_domains_intersect_requested_and_worker_domains(
+    tmp_path, case_id, requested_domains, expected_status, expected_domains
+):
+    store, workforce, runtime = _stores(tmp_path)
+    worker = _appoint(
+        workforce,
+        worker_id=f"domain-{case_id}",
+        competencies=["python"],
+        writable_domains=["app", "review"],
+        authority="A2",
+    )
+    result = store.materialize_invocation(
+        objective="Verify bounded writable-domain materialization.",
+        required_competencies=["python"],
+        writable_domains=requested_domains,
+        preferred_worker_ids=[worker.worker_id],
+        human_approval=True,
+        actor="test-owner",
+        plan_id=f"domain-plan-{case_id}",
+        mission_id=f"domain-mission-{case_id}",
+        idempotency_key=f"domain-materialize-{case_id}",
+    )
+
+    assert result.status == expected_status
+    if expected_domains is None:
+        assert result.leases == []
+        assert runtime.get_mission(f"domain-mission-{case_id}").found is False
+    else:
+        assert [lease.writable_domains for lease in result.leases] == [expected_domains]
+        mission = runtime.get_mission(f"domain-mission-{case_id}")
+        assert mission.found is True
+        assert mission.work_units[0].writable_domain == ";".join(expected_domains)
 
 
 def test_dispatch_completion_releases_leases_and_enters_fan_in(tmp_path):
