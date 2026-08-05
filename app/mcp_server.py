@@ -1094,6 +1094,14 @@ def _chat_history_partial_result(data: dict[str, Any]) -> bool:
         return False
     if bool(data.get("partial")) or int(data.get("status_code") or 0) == 207:
         return True
+    if (
+        str(data.get("stopped_reason") or "").strip().lower() == "max_pages"
+        and bool(data.get("next_cursor"))
+    ):
+        return True
+    thread = data.get("thread")
+    if isinstance(thread, dict) and thread.get("hydrated") is False:
+        return True
     for key in ("failed", "failures", "errors", "remote_failed"):
         value = data.get(key)
         if isinstance(value, (list, dict)) and value:

@@ -259,3 +259,36 @@ def test_chat_history_store_search_pagination_is_deterministic(tmp_path):
     assert len(second) == 1
     assert first[0]["id"] != second[0]["id"]
     assert {first[0]["id"], second[0]["id"]} == {"message-a", "message-b"}
+
+
+def test_chat_history_partial_receipt_detects_max_page_truncation():
+    assert mcp_server._chat_history_partial_result(
+        {
+            "ok": True,
+            "status_code": 200,
+            "sync_summary": {
+                "stopped_reason": "max_pages",
+                "next_cursor": "cursor-next",
+            },
+        }
+    ) is True
+    assert mcp_server._chat_history_partial_result(
+        {
+            "ok": True,
+            "status_code": 200,
+            "sync_summary": {
+                "stopped_reason": "no_next_cursor",
+                "next_cursor": None,
+            },
+        }
+    ) is False
+
+
+def test_chat_history_partial_receipt_detects_unhydrated_thread():
+    assert mcp_server._chat_history_partial_result(
+        {
+            "ok": True,
+            "status_code": 200,
+            "thread": {"id": "thread-1", "hydrated": False},
+        }
+    ) is True
