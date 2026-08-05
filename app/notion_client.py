@@ -309,7 +309,11 @@ class NotionOpusAPI:
         self.thread_title_url = "https://app.notion.com/api/v3/saveTransactionsFanout"
         self.account_key = self.user_email or self.user_id or "unknown-account"
         self.request_idempotency_key = ""
+        self.request_trace_id = ""
+        self.request_context_id = ""
+        self.request_model_id = ""
         self.last_admission_receipt: dict[str, Any] = {}
+        self.last_request_telemetry: dict[str, Any] = {}
 
         # Every fresh client shares one process-wide admission controller through
         # an HTTP-session proxy. The underlying session remains request-isolated.

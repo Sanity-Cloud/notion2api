@@ -158,7 +158,28 @@ def _bind_governance_request_metadata(
     caller_type = str(caller.get("type") or caller.get("caller_type") or "").strip()
     if not explicit_idempotency and session_name:
         explicit_idempotency = f"leader-session:{caller_type or 'unknown'}:{session_name}"
+    trace_id = str(
+        metadata.get("trace_id")
+        or metadata.get("mcp_request_id")
+        or metadata.get("request_fingerprint")
+        or caller.get("request_fingerprint")
+        or ""
+    ).strip()
+    request_context_id = str(
+        metadata.get("request_context_id")
+        or metadata.get("repo_ai_run_id")
+        or metadata.get("run_id")
+        or metadata.get("mcp_session_name")
+        or metadata.get("session_name")
+        or getattr(req_body, "conversation_id", "")
+        or ""
+    ).strip()
     client.request_idempotency_key = explicit_idempotency
+    client.request_trace_id = trace_id
+    client.request_context_id = request_context_id
+    client.request_model_id = normalize_model_id(req_body.model) or str(req_body.model or "")
+    metadata["request_context_id"] = request_context_id
+    metadata["trace_id"] = trace_id
     req_body.metadata = metadata
     return receipt
 
@@ -1331,6 +1352,52 @@ def _build_model_metadata_event(
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def _public_admission_receipt(client: Any) -> dict[str, Any]:
+    receipt = getattr(client, "last_admission_receipt", None)
+    if not isinstance(receipt, dict) or not receipt:
+        return {}
+    public_keys = (
+        "disposition",
+        "queue_depth",
+        "account_queue_depth",
+        "waited_seconds",
+        "throttled_seconds",
+        "admitted_at",
+        "operation",
+        "retry_count",
+        "retry_after_seconds",
+        "attempt_id",
+        "workload_class",
+        "admission_weight",
+        "trace_id",
+        "request_context_id",
+        "model_id",
+        "request_bytes",
+        "estimated_input_tokens",
+    )
+    projected = {key: receipt[key] for key in public_keys if key in receipt}
+    completion = receipt.get("completion")
+    if isinstance(completion, dict) and completion:
+        completion_keys = (
+            "completed_at",
+            "duration_seconds",
+            "outcome",
+            "status_code",
+            "response_bytes",
+            "estimated_output_tokens",
+            "actual_input_tokens",
+            "actual_output_tokens",
+            "actual_total_tokens",
+            "retry_count",
+            "retry_after_seconds",
+            "error_class",
+        )
+        projected["completion"] = {
+            key: completion[key] for key in completion_keys if key in completion
+        }
+    return projected
+
+
 def _attach_notion_thread_metadata(
     *,
     response: Response | None,
@@ -1343,6 +1410,9 @@ def _attach_notion_thread_metadata(
         metadata["notion_thread_id"] = notion_thread_id
         if response is not None:
             response.headers["X-Notion-Thread-Id"] = notion_thread_id
+    admission = _public_admission_receipt(client)
+    if admission:
+        metadata["notion_admission"] = admission
     return metadata
 
 

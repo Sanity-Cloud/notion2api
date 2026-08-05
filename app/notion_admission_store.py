@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import tempfile
@@ -99,6 +100,12 @@ class SharedAdmissionStore:
                 CREATE TABLE IF NOT EXISTS admission_token_buckets (
                     account_key TEXT PRIMARY KEY,
                     tokens REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS admission_weight_buckets (
+                    account_key TEXT PRIMARY KEY,
+                    token_units INTEGER NOT NULL,
                     updated_at REAL NOT NULL
                 );
 
@@ -256,6 +263,7 @@ class SharedAdmissionStore:
         max_account_inflight: int,
         lease_seconds: float,
         waited_seconds: float,
+        admission_weight: float = 1.0,
     ) -> SharedAcquireResult:
         now = time.time()
         with self._connect() as conn:
@@ -377,22 +385,71 @@ class SharedAdmissionStore:
                     reason="thread_inflight",
                 )
 
+            weight_scale = 1000
             capacity = max(1.0, float(capacity))
             refill_per_second = max(0.001, float(refill_per_second))
+            if isinstance(admission_weight, bool):
+                conn.commit()
+                return SharedAcquireResult(
+                    status="invalid",
+                    reason="invalid_weight",
+                )
+            try:
+                admission_weight = float(admission_weight)
+            except (TypeError, ValueError):
+                admission_weight = float("nan")
+            if not math.isfinite(admission_weight) or admission_weight <= 0:
+                conn.commit()
+                return SharedAcquireResult(
+                    status="invalid",
+                    reason="invalid_weight",
+                )
+            capacity_units = max(weight_scale, int(round(capacity * weight_scale)))
+            refill_units_per_second = max(
+                1, int(round(refill_per_second * weight_scale))
+            )
+            weight_units = int(round(admission_weight * weight_scale))
+            if weight_units <= 0 or weight_units > capacity_units:
+                conn.commit()
+                return SharedAcquireResult(
+                    status="invalid",
+                    reason="weight_exceeds_capacity",
+                )
             bucket = conn.execute(
-                "SELECT tokens, updated_at FROM admission_token_buckets WHERE account_key = ?",
+                """
+                SELECT token_units, updated_at
+                FROM admission_weight_buckets WHERE account_key = ?
+                """,
                 (account_key,),
             ).fetchone()
+            bucket_updated_at = now
             if bucket:
-                tokens = min(
-                    capacity,
-                    float(bucket["tokens"])
-                    + max(0.0, now - float(bucket["updated_at"])) * refill_per_second,
+                bucket_updated_at = float(bucket["updated_at"])
+                elapsed = max(0.0, now - bucket_updated_at)
+                added_units = int(elapsed * refill_units_per_second)
+                token_units = min(
+                    capacity_units,
+                    int(bucket["token_units"]) + added_units,
                 )
+                if token_units >= capacity_units:
+                    bucket_updated_at = now
+                elif added_units > 0:
+                    bucket_updated_at += added_units / refill_units_per_second
             else:
-                tokens = capacity
-            if tokens < 1.0:
-                delay = (1.0 - tokens) / refill_per_second
+                token_units = capacity_units
+            if token_units < weight_units:
+                delay = (weight_units - token_units) / refill_units_per_second
+                conn.execute(
+                    """
+                    INSERT INTO admission_weight_buckets(
+                        account_key, token_units, updated_at
+                    ) VALUES (?, ?, ?)
+                    ON CONFLICT(account_key) DO UPDATE SET
+                        token_units = excluded.token_units,
+                        updated_at = excluded.updated_at
+                    """,
+                    (account_key, token_units, bucket_updated_at),
+                )
                 conn.execute(
                     """
                     INSERT INTO admission_token_buckets(account_key, tokens, updated_at)
@@ -401,7 +458,7 @@ class SharedAdmissionStore:
                         tokens = excluded.tokens,
                         updated_at = excluded.updated_at
                     """,
-                    (account_key, tokens, now),
+                    (account_key, token_units / weight_scale, bucket_updated_at),
                 )
                 conn.commit()
                 return SharedAcquireResult(
@@ -413,6 +470,18 @@ class SharedAdmissionStore:
                 )
 
             lease_id = uuid.uuid4().hex
+            remaining_units = token_units - weight_units
+            conn.execute(
+                """
+                INSERT INTO admission_weight_buckets(
+                    account_key, token_units, updated_at
+                ) VALUES (?, ?, ?)
+                ON CONFLICT(account_key) DO UPDATE SET
+                    token_units = excluded.token_units,
+                    updated_at = excluded.updated_at
+                """,
+                (account_key, remaining_units, bucket_updated_at),
+            )
             conn.execute(
                 """
                 INSERT INTO admission_token_buckets(account_key, tokens, updated_at)
@@ -421,7 +490,7 @@ class SharedAdmissionStore:
                     tokens = excluded.tokens,
                     updated_at = excluded.updated_at
                 """,
-                (account_key, max(0.0, tokens - 1.0), now),
+                (account_key, remaining_units / weight_scale, bucket_updated_at),
             )
             conn.execute(
                 """
