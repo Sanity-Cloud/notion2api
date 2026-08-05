@@ -7,10 +7,6 @@ import uuid
 from urllib.parse import urlparse
 from typing import Any, Generator, Optional
 
-try:
-    import cloudscraper
-except Exception:
-    cloudscraper = None
 import requests
 import urllib3
 
@@ -25,7 +21,12 @@ from app.stream_parser_safe import parse_stream
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # text Notion textNotion text
-NOTION_CLIENT_VERSION = os.getenv("NOTION_CLIENT_VERSION", "23.13.20260623.1532")
+NOTION_CLIENT_VERSION = os.getenv("NOTION_CLIENT_VERSION", "23.13.20260805.0803")
+
+
+def _create_notion_http_session() -> requests.Session:
+    """Create the deterministic Requests transport accepted by Notion upstream."""
+    return requests.Session()
 
 
 def _env_timeout_seconds(name: str, default: float) -> float | None:
@@ -86,9 +87,9 @@ def _is_zip_upload(name: str, content_type: str) -> bool:
 
 
 def _notion_attachment_upload_name(name: str, content_type: str) -> str:
-    """Match Notion web: ZIP descriptors use ``{uuid}zip``, not ``source.zip``."""
+    """Match current Notion desktop: ZIP descriptors use a UUID ``.zip`` name."""
     if _is_zip_upload(name, content_type):
-        return f"{uuid.uuid4()}zip"
+        return f"{uuid.uuid4()}.zip"
     return name
 
 
@@ -304,7 +305,7 @@ class NotionOpusAPI:
         self.cookies["token_v2"] = self.token_v2
 
         self.url = "https://www.notion.so/api/v3/runInferenceTranscript"
-        self.delete_url = "https://www.notion.so/api/v3/saveTransactions"
+        self.delete_url = "https://app.notion.com/api/v3/saveTransactions"
         self.thread_title_url = "https://app.notion.com/api/v3/saveTransactionsFanout"
         self.account_key = self.user_email or self.user_id or "unknown-account"
         self.request_idempotency_key = ""
@@ -312,16 +313,13 @@ class NotionOpusAPI:
 
         # Every fresh client shares one process-wide admission controller through
         # an HTTP-session proxy. The underlying session remains request-isolated.
-        if cloudscraper is not None:
-            raw_scraper = cloudscraper.create_scraper()
-        else:
-            raw_scraper = requests.Session()
+        raw_scraper = _create_notion_http_session()
         self._scraper = admitted_session(raw_scraper, self)
         self._scraper_lock = threading.Lock()
 
     def get_ai_model_picker_config(self) -> dict[str, Any]:
         """Fetch space AI model picker config from Notion v3 API."""
-        endpoint = "https://www.notion.so/api/v3/getAvailableModels"
+        endpoint = "https://app.notion.com/api/v3/getAvailableModels"
         payload = {"spaceId": self.space_id}
         resp = self._scraper.post(endpoint, headers=self._build_chat_history_headers(), json=payload, timeout=30)
         resp.raise_for_status()
@@ -384,24 +382,79 @@ class NotionOpusAPI:
         self,
         notion_transcript: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        # Captured from the successful manual same-thread ZIP resubmission on
+        # client 23.13.20260805.0803. The desktop deliberately leaves `model`
+        # unset and sets modelFromUser=false so Notion can choose the current
+        # tool-capable workflow model (observed: opal-quince).
+        desktop_capabilities: dict[str, Any] = {
+            "databaseAgentConfigMode": False,
+            "enableAgentAskSurvey": True,
+            "enableAgentAutomations": True,
+            "enableAgentCardCustomization": True,
+            "enableAgentDiffs": True,
+            "enableAgentGenerateImage": True,
+            "enableAgentIntegrations": True,
+            "enableAgentSkillsV2": False,
+            "enableAgentSupportPropertyReorder": True,
+            "enableAgentThreadTools": False,
+            "enableComputer": True,
+            "enableCrdtOperations": False,
+            "enableCsvAttachmentSupport": True,
+            "enableCustomAgentCreateGuidanceV2": True,
+            "enableCustomAgents": True,
+            "enableExperimentalIntegrations": False,
+            "enableLargeToolResultComputerOffload": False,
+            "enableMailAgentMultiProviderSupport": True,
+            "enableMailExplicitToolCalls": True,
+            "enableMailNotificationPreferences": False,
+            "enableMarkdownVNext": False,
+            "enableNotionMailDeprecated": False,
+            "enablePitCrewTableViewTool": False,
+            "enableQueryCalendar": False,
+            "enableQueryMail": False,
+            "enableScriptAgent": True,
+            "enableScriptAgentAdvanced": False,
+            "enableScriptAgentGoogleDriveInCustomAgent": False,
+            "enableScriptAgentGoogleDriveOAuthInCustomAgent": False,
+            "enableScriptAgentGtm": False,
+            "enableScriptAgentMcpServers": True,
+            "enableScriptAgentSearchConnectorsInCustomAgent": False,
+            "enableScriptAgentSlack": True,
+            "enableSoftwareFactoryPage": False,
+            "enableSuggestedEditsTools": False,
+            "enableSystemPromptAsPage": False,
+            "enableUpdatePageOrderUpdates": True,
+            "enableUserSessionContext": False,
+            "enableWebResearch": False,
+            "internetAccess": False,
+            "isAgentResearchRequest": False,
+            "isCustomAgent": False,
+            "isCustomAgentBuilder": False,
+            "isCustomAgentCreate": False,
+            "isHipaa": False,
+            "isMobile": False,
+            "isOnboardingAgent": False,
+            "manageWorkers": False,
+            "modelFromUser": False,
+            "searchScopes": [{"type": "everything"}],
+            "showDatabaseAgentsDiscoverability": True,
+            "type": "workflow",
+            "updatePageStaleViewGuardEnabled": False,
+            "useCustomAgentDraft": False,
+            "useReadOnlyMode": False,
+            "useRulePrioritization": True,
+            "useWebSearch": True,
+            "writerMode": False,
+        }
         converted: list[dict[str, Any]] = []
         for block in notion_transcript:
             updated = dict(block)
             value = block.get("value")
             if block.get("type") == "config" and isinstance(value, dict):
-                updated_value = dict(value)
-                updated_value.update({
-                    "type": "workflow",
-                    "enableComputer": True,
-                    "enableScriptAgent": True,
-                    "enableCsvAttachmentSupport": True,
-                    "enableCreateAndRunThread": True,
-                    "enableScriptAgentCustomToolCalling": True,
-                })
-                updated["value"] = updated_value
-            elif block.get("type") == "context" and isinstance(value, dict):
-                updated_value = dict(value)
-                updated_value["surface"] = "ai_module"
+                updated_value = dict(desktop_capabilities)
+                instructions = str(value.get("ephemeralInstructions") or "").strip()
+                if instructions:
+                    updated_value["ephemeralInstructions"] = instructions
                 updated["value"] = updated_value
             converted.append(updated)
         return converted
@@ -708,6 +761,13 @@ class NotionOpusAPI:
             raise NotionUpstreamError("Upload descriptor response invalid JSON", status_code=resp.status_code, retriable=True, response_excerpt=(resp.text or "")[:300]) from exc
 
         descriptor = self._normalize_upload_descriptor(body)
+        # Preserve the exact upload identity requested from Notion. The signed
+        # descriptor accepts ZIPs as application/x-zip-compressed with a
+        # Notion-generated upload name; using the caller's application/zip MIME
+        # on the multipart file part causes processAgentAttachment to finish
+        # with UNSUPPORTED_CONTENT_TYPE.
+        descriptor["upload_name"] = upload_name
+        descriptor["upload_content_type"] = notion_content_type
         if _attachment_descriptor_debug_enabled():
             logger.warning(
                 "Attachment descriptor response ok",
@@ -738,7 +798,15 @@ class NotionOpusAPI:
         # Use requests to POST multipart form data
         import requests
 
-        files = {"file": (name, data, content_type)}
+        upload_name = str(
+            descriptor.get("upload_name")
+            or _notion_attachment_upload_name(name, content_type)
+        )
+        upload_content_type = str(
+            descriptor.get("upload_content_type")
+            or _notion_upload_content_type(name, content_type)
+        )
+        files = {"file": (upload_name, data, upload_content_type)}
         try:
             resp = requests.post(upload_url, data=fields, files=files, timeout=60)
         except Exception as exc:
@@ -811,10 +879,25 @@ class NotionOpusAPI:
             result = status.get("result") if isinstance(status.get("result"), dict) else {}
             result_type = str(result.get("type") or "").strip()
             data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            semantic_code = str(
+                data.get("code")
+                or data.get("errorCode")
+                or data.get("error_code")
+                or ""
+            ).strip()
+            semantic_failure = bool(
+                semantic_code and semantic_code.upper() not in {"OK", "SUCCESS"}
+            )
+            if state == "error" or result_type == "error" or semantic_failure:
+                return {
+                    "status": "failed",
+                    "success": False,
+                    "data": data,
+                    "error_code": semantic_code or None,
+                    "message": str(data.get("message") or "").strip() or None,
+                }
             if state == "success" or result_type == "success":
                 return {"status": "completed", "success": True, "data": data}
-            if state == "error" or result_type == "error":
-                return {"status": "failed", "success": False, "data": data}
             return {"status": state or result_type or "pending", "success": False, "data": data}
 
         items = body.get("tasks") or body
@@ -836,7 +919,7 @@ class NotionOpusAPI:
         permission_table: str = "thread",
         permission_id: str = "",
     ) -> str:
-        endpoint = "https://www.notion.so/api/v3/getSignedFileUrls"
+        endpoint = "https://app.notion.com/api/v3/getSignedFileUrls"
         resolved_permission_id = str(permission_id or thread_id or "").strip()
         if not resolved_permission_id:
             raise ValueError("A permission record id is required for signed file access.")
@@ -884,7 +967,7 @@ class NotionOpusAPI:
 
     def warm_script_agent_cache(self) -> None:
         """Prime Notion's script-agent module cache before workflow ZIP reviews."""
-        endpoint = "https://www.notion.so/api/v3/warmScriptAgentDynamicModuleCache"
+        endpoint = "https://app.notion.com/api/v3/warmScriptAgentDynamicModuleCache"
         payload = {"spaceId": self.space_id}
         try:
             resp = self._scraper.post(
@@ -910,6 +993,327 @@ class NotionOpusAPI:
                 extra={"request_info": {"event": "script_agent_warm_cache_error"}},
             )
 
+    def _build_active_workspace_context_step(self) -> dict[str, Any]:
+        """Build the account-bound full-page context used by current Notion desktop."""
+        record_map = self._fetch_account_record_map()
+        space_view_id, space_view = self._resolve_space_view_record(record_map)
+        personalization = self._personalization_from_space_view(space_view)
+        user_record = self._record_value(
+            (record_map.get("notion_user") or {}).get(self.user_id, {})
+        )
+        space_record = self._record_value(
+            (record_map.get("space") or {}).get(self.space_id, {})
+        )
+        user_name = str(user_record.get("name") or self.user_name or "user").strip()
+        user_email = str(user_record.get("email") or self.user_email or "").strip()
+        space_name = str(
+            space_record.get("name") or self.workspace_name or "Notion"
+        ).strip()
+        agent_name = str(personalization.get("name") or user_name).strip()
+        context_page_id = str(
+            personalization.get("context_page_id") or self.context_page_id or ""
+        ).strip()
+        self.user_name = user_name
+        self.user_email = user_email
+        self.workspace_name = space_name
+        self.space_view_id = space_view_id
+        value: dict[str, Any] = {
+            "timezone": self.timezone,
+            "userName": user_name,
+            "userId": self.user_id,
+            "userEmail": user_email,
+            "spaceName": space_name,
+            "spaceId": self.space_id,
+            "spaceViewId": space_view_id,
+            "currentDatetime": datetime.datetime.now().astimezone().isoformat(),
+            "surface": "full_page_chat",
+            "agentName": agent_name,
+        }
+        if context_page_id:
+            value["context_page_id"] = context_page_id
+        return {"id": str(uuid.uuid4()), "type": "context", "value": value}
+
+    @staticmethod
+    def _build_computer_use_updated_config_step() -> dict[str, Any]:
+        return {
+            "id": str(uuid.uuid4()),
+            "type": "updated-config",
+            "value": {
+                "enableScriptAgentAdvanced": False,
+                "enableScriptAgentSearchConnectorsInCustomAgent": False,
+                "enableScriptAgentGoogleDriveInCustomAgent": False,
+                "enableScriptAgentGoogleDriveOAuthInCustomAgent": False,
+                "showDatabaseAgentsDiscoverability": True,
+                "enableCrdtOperations": False,
+                "enableScriptAgentGtm": False,
+                "enablePitCrewTableViewTool": False,
+                "enableCustomAgentCreateGuidanceV2": True,
+                "enableSoftwareFactoryPage": False,
+                "enableAgentGenerateImage": True,
+                "enableMailNotificationPreferences": False,
+                "enableMailAgentMultiProviderSupport": True,
+                "enableNotionMailDeprecated": False,
+                "enableWebResearch": False,
+                "isHipaa": False,
+                "internetAccess": False,
+                "manageWorkers": False,
+                "isCustomAgentCreate": False,
+                "enableMarkdownVNext": False,
+                "enableSuggestedEditsTools": False,
+                "enableAgentSkillsV2": False,
+                "updatePageStaleViewGuardEnabled": False,
+                "enableAgentAskSurvey": True,
+                "isMobile": False,
+            },
+        }
+
+    def _compose_computer_use_transcript(
+        self,
+        notion_transcript: list[dict[str, Any]],
+        attachment_steps: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Build the browser-equivalent workflow continuation transcript.
+
+        The uploaded ``computer-file`` record belongs in the persisted thread
+        state, not in ``runInferenceTranscript``. Current Notion desktop sends
+        the continuation lineage as two context/config-update pairs followed by
+        the request config and user turn.
+        """
+        config_steps = [
+            dict(block)
+            for block in notion_transcript
+            if block.get("type") == "config"
+        ]
+        messages = [
+            dict(block)
+            for block in notion_transcript
+            if block.get("type") in {"user", "assistant"}
+        ]
+
+        # The ordinary API transcript carries an ``ai_module`` context with
+        # incomplete identity fields. Workflow continuations require the fully
+        # resolved full-page Worker context for both lineage slots.
+        base_context = self._build_active_workspace_context_step()
+        first_updated_config = self._build_computer_use_updated_config_step()
+        active_context = self._build_active_workspace_context_step()
+        active_updated_config = self._build_computer_use_updated_config_step()
+
+        persisted_steps = (
+            [base_context, first_updated_config, active_context]
+            + list(attachment_steps)
+            + [active_updated_config]
+            + messages
+        )
+        inference_steps = (
+            [
+                base_context,
+                first_updated_config,
+                active_context,
+                active_updated_config,
+            ]
+            + config_steps[-1:]
+            + messages
+        )
+        return inference_steps, persisted_steps
+
+    @staticmethod
+    def _nested_record_value(entry: Any) -> dict[str, Any]:
+        current = entry
+        for _ in range(8):
+            if not isinstance(current, dict):
+                return {}
+            if any(key in current for key in ("messages", "file_ids", "parent_id")):
+                return current
+            nested = current.get("value")
+            if not isinstance(nested, dict):
+                return current
+            current = nested
+        return current if isinstance(current, dict) else {}
+
+    def _wait_for_thread_file_mount(
+        self, thread_id: str, expected_file_ids: list[str]
+    ) -> dict[str, Any]:
+        """Wait until Notion exposes uploaded files on the new workflow thread."""
+        expected = {str(item).strip() for item in expected_file_ids if str(item).strip()}
+        if not expected:
+            return {}
+        timeout_seconds = max(
+            0.0,
+            float(os.getenv("NOTION_ATTACHMENT_THREAD_READY_TIMEOUT_SECONDS", "15")),
+        )
+        poll_seconds = max(
+            0.05,
+            float(os.getenv("NOTION_ATTACHMENT_THREAD_READY_POLL_SECONDS", "0.5")),
+        )
+        endpoint = "https://app.notion.com/api/v3/syncRecordValuesSpaceInitial"
+        payload = {
+            "requests": [
+                {
+                    "pointer": {
+                        "table": "thread",
+                        "id": thread_id,
+                        "spaceId": self.space_id,
+                    },
+                    "version": -1,
+                }
+            ]
+        }
+        deadline = time.monotonic() + timeout_seconds
+        last_mounted: set[str] = set()
+        last_status: int | None = None
+        while True:
+            try:
+                response = self._scraper.post(
+                    endpoint,
+                    headers=self._build_chat_history_headers(),
+                    json=payload,
+                    timeout=30,
+                )
+                last_status = int(response.status_code)
+                if response.status_code == 200:
+                    body = response.json()
+                    record_map = body.get("recordMap", {}) if isinstance(body, dict) else {}
+                    bucket = record_map.get("thread", {}) if isinstance(record_map, dict) else {}
+                    entry = bucket.get(thread_id, {}) if isinstance(bucket, dict) else {}
+                    value = self._nested_record_value(entry)
+                    last_mounted = {
+                        str(item).strip()
+                        for item in (value.get("file_ids") or [])
+                        if str(item).strip()
+                    }
+                    if expected.issubset(last_mounted):
+                        return value
+            except Exception:
+                last_status = None
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(poll_seconds)
+        raise NotionUpstreamError(
+            "Uploaded attachment did not mount on the Notion workflow thread.",
+            status_code=502,
+            retriable=True,
+            response_excerpt=(
+                "attachment_thread_not_ready;"
+                f"thread_id={thread_id};"
+                f"expected={len(expected)};mounted={len(last_mounted)};"
+                f"last_status={last_status}"
+            ),
+        )
+
+    def _persist_computer_use_steps(
+        self, thread_id: str, steps: list[dict[str, Any]]
+    ) -> None:
+        """Persist the browser-visible workflow turn before inference dispatch."""
+        if not steps:
+            return
+        now_ms = int(time.time() * 1000)
+        message_ids: list[str] = []
+        operations: list[dict[str, Any]] = []
+        for raw_step in steps:
+            step = dict(raw_step)
+            if step.get("type") == "updated-config" and isinstance(
+                step.get("value"), dict
+            ):
+                step["value"] = {
+                    **step["value"],
+                    "availableConnectors": [],
+                }
+            message_id = str(step.get("id") or uuid.uuid4())
+            step["id"] = message_id
+            message_ids.append(message_id)
+            operations.append(
+                {
+                    "pointer": {
+                        "table": "thread_message",
+                        "id": message_id,
+                        "spaceId": self.space_id,
+                    },
+                    "path": [],
+                    "command": "set",
+                    "args": {
+                        "id": message_id,
+                        "version": 1,
+                        "step": step,
+                        "parent_id": thread_id,
+                        "parent_table": "thread",
+                        "space_id": self.space_id,
+                        "created_time": now_ms,
+                        "created_by_id": self.user_id,
+                        "created_by_table": "notion_user",
+                    },
+                }
+            )
+        operations.append(
+            {
+                "pointer": {
+                    "table": "thread",
+                    "id": thread_id,
+                    "spaceId": self.space_id,
+                },
+                "path": ["messages"],
+                "command": "listAfterMulti",
+                "args": {"ids": message_ids},
+            }
+        )
+        payload = {
+            "requestId": str(uuid.uuid4()),
+            "transactions": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "spaceId": self.space_id,
+                    "debug": {
+                        "userAction": "WorkflowActions.addStepsToExistingThreadAndRun",
+                        "clientCommitTimeMs": now_ms,
+                    },
+                    "operations": operations,
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "spaceId": self.space_id,
+                    "debug": {
+                        "userAction": "unifiedChatInputActions.updateThreadUpdatedTime",
+                        "clientCommitTimeMs": now_ms + 1,
+                    },
+                    "operations": [
+                        {
+                            "pointer": {
+                                "table": "thread",
+                                "id": thread_id,
+                                "spaceId": self.space_id,
+                            },
+                            "path": [],
+                            "command": "update",
+                            "args": {
+                                "updated_time": now_ms,
+                                "updated_by_id": self.user_id,
+                                "updated_by_table": "notion_user",
+                            },
+                        }
+                    ],
+                },
+            ],
+        }
+        try:
+            response = self._scraper.post(
+                self.thread_title_url,
+                headers=self._build_chat_history_headers(),
+                json=payload,
+                timeout=30,
+            )
+        except Exception as exc:
+            raise NotionUpstreamError(
+                "Failed to persist computer-use workflow steps.",
+                retriable=True,
+                response_excerpt=str(exc)[:300],
+            ) from exc
+        if response.status_code != 200:
+            raise NotionUpstreamError(
+                "Computer-use workflow step persistence returned an error.",
+                status_code=response.status_code,
+                retriable=response.status_code >= 500 or response.status_code == 429,
+                response_excerpt=_redact_response_excerpt(response.text or ""),
+            )
+
     def _build_attachment_transcript_steps(
         self,
         uploaded_attachments: list[UploadedAttachment],
@@ -921,7 +1325,6 @@ class NotionOpusAPI:
             metadata = uploaded.metadata or {}
             if computer_file:
                 metadata = {
-                    **metadata,
                     "fileSize": uploaded.size_bytes,
                     "attachmentSource": "user_upload",
                 }
@@ -964,19 +1367,6 @@ class NotionOpusAPI:
                 }
             )
         return manifest
-
-    def _build_computer_use_zip_instruction_step(self) -> dict[str, Any]:
-        return {
-            "id": str(uuid.uuid4()),
-            "type": "user",
-            "value": [[
-                "Use computer-use and script tools to download and extract the attached ZIP. "
-                "Inspect the extracted repository files and complete the requested review. "
-                "Do not wait for a manual response in the Notion app."
-            ]],
-            "userId": self.user_id,
-            "createdAt": datetime.datetime.now().astimezone().isoformat(),
-        }
 
     def fetch_chat_history(self, limit: int = 100, max_pages: int = 5) -> dict[str, Any]:
         """Best-effort pull of Notion AI chat transcripts for the current user."""
@@ -1637,6 +2027,7 @@ class NotionOpusAPI:
             self.try_set_thread_title(thread_id, requested_thread_title)
 
         uploaded_attachments: list[UploadedAttachment] = []
+        computer_use_persisted_steps: list[dict[str, Any]] = []
         if attachments:
             try:
                 uploader = NotionAttachmentUploader(self)
@@ -1662,22 +2053,35 @@ class NotionOpusAPI:
                 computer_file=bool(computer_use_review),
             )
             if attachment_steps:
-                notion_transcript = notion_transcript + attachment_steps
-                if computer_use_review and thread_persistence["persist"]:
-                    notion_transcript.append(self._build_computer_use_zip_instruction_step())
-                    if should_create_thread:
-                        # A new workflow needs inference to create its thread after
-                        # the assistant-chat upload pointer has been staged.
-                        request_profile["create_thread"] = True
-                        request_profile["is_partial_transcript"] = False
-                    else:
-                        # A bound review conversation is a continuation even when
-                        # each model pass attaches a fresh source archive.
-                        request_profile["create_thread"] = False
-                        request_profile["is_partial_transcript"] = True
-                else:
+                if computer_use_review:
+                    (
+                        notion_transcript,
+                        computer_use_persisted_steps,
+                    ) = self._compose_computer_use_transcript(
+                        notion_transcript,
+                        attachment_steps,
+                    )
+                    # The assistant-chat upload descriptor created/bound the thread.
+                    # Inference is therefore always a partial continuation.
                     should_create_thread = False
                     request_profile["create_thread"] = False
+                    request_profile["is_partial_transcript"] = True
+                    request_profile["precreate_thread"] = False
+                else:
+                    notion_transcript = notion_transcript + attachment_steps
+                    should_create_thread = False
+                    request_profile["create_thread"] = False
+
+        if computer_use_review and uploaded_attachments:
+            self._wait_for_thread_file_mount(
+                thread_id,
+                [uploaded.file_id for uploaded in uploaded_attachments],
+            )
+
+        if computer_use_review and computer_use_persisted_steps:
+            self._persist_computer_use_steps(
+                thread_id, computer_use_persisted_steps
+            )
 
         if computer_use_review and (uploaded_attachments or thread_type == "workflow"):
             self.warm_script_agent_cache()
@@ -1693,7 +2097,7 @@ class NotionOpusAPI:
             # text is_partial_transcript=Truetext Notion text
             request_profile["is_partial_transcript"] = True
 
-        # text cookie text headertext cloudscraper text cookie jar
+        # Build an explicit cookie header for the isolated Requests session.
         # textcookie jar text Cloudflare challenge text ASCII text cookietext
         cookie_header = self._build_cookie_header()
 
@@ -1711,8 +2115,8 @@ class NotionOpusAPI:
         }
 
         created_source = (
-            "ai_module"
-            if uploaded_attachments
+            "full_page_chat"
+            if computer_use_review
             else ("workflows" if thread_type == "workflow" else "ai_module")
         )
 
@@ -1741,9 +2145,10 @@ class NotionOpusAPI:
         if uploaded_attachments:
             if not payload["createThread"]:
                 payload.pop("threadParentPointer", None)
-            payload["attachments"] = self._build_attachment_request_manifest(
-                uploaded_attachments
-            )
+            if not computer_use_review:
+                payload["attachments"] = self._build_attachment_request_manifest(
+                    uploaded_attachments
+                )
         if request_profile["include_debug_overrides"]:
             payload["debugOverrides"] = {
                 "emitAgentSearchExtractedResults": True,
@@ -1772,12 +2177,9 @@ class NotionOpusAPI:
         )
 
         try:
-            # Create a fresh, isolated scraper for this request to ensure thread safety.
+            # Create a fresh, isolated session for this request to ensure thread safety.
             # Reusing requests.Session concurrently across threads is not thread-safe.
-            if cloudscraper is not None:
-                raw_scraper = cloudscraper.create_scraper()
-            else:
-                raw_scraper = requests.Session()
+            raw_scraper = _create_notion_http_session()
             raw_scraper.cookies.clear()
             scraper = admitted_session(raw_scraper, self)
             response = scraper.post(
@@ -1791,13 +2193,10 @@ class NotionOpusAPI:
                 # Cloudflare challenge text scraper text
                 response.close()
                 logger.warning(
-                    "Got 403, rebuilding cloudscraper to refresh Cloudflare challenge",
-                    extra={"request_info": {"event": "cloudflare_challenge_refresh", "account": self.account_key}},
+                    "Got 403, rebuilding the Notion HTTP session for one retry",
+                    extra={"request_info": {"event": "notion_http_session_refresh", "account": self.account_key}},
                 )
-                if cloudscraper is not None:
-                    raw_scraper = cloudscraper.create_scraper()
-                else:
-                    raw_scraper = requests.Session()
+                raw_scraper = _create_notion_http_session()
                 scraper = admitted_session(raw_scraper, self)
                 response = scraper.post(
                     self.url,
@@ -2121,7 +2520,7 @@ class NotionOpusAPI:
 
         try:
             response = self._scraper.post(
-                "https://www.notion.so/api/v3/getSpaces",
+                "https://app.notion.com/api/v3/getSpaces",
                 headers=self._build_chat_history_headers(),
                 json={},
                 timeout=30,

@@ -105,7 +105,7 @@ def test_stream_response_raises_rate_limit_instead_of_missing_finished_at() -> N
     transcript = [{"id": "config", "type": "config", "value": {"type": "workflow"}}]
 
     with (
-        patch("app.notion_client.cloudscraper.create_scraper", return_value=scraper),
+        patch("app.notion_client._create_notion_http_session", return_value=scraper),
         patch(
             "app.notion_client.parse_stream",
             return_value=iter(

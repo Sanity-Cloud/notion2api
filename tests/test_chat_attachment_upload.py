@@ -39,7 +39,7 @@ class ChatAttachmentRouteTests(unittest.TestCase):
             "stream": False,
         }
         resp = self.client.post("/v1/chat/completions", json=payload, headers=self.auth_headers)
-        self.assertIn(resp.status_code, (200, 401, 503))
+        self.assertIn(resp.status_code, (200, 401, 502, 503))
         if resp.status_code == 401:
             body = resp.json()
             self.assertEqual(body["error"]["code"], "NOTION_401")

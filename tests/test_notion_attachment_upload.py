@@ -143,3 +143,54 @@ class NotionAttachmentUploadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+def test_zip_upload_skips_indexing_task_for_computer_use_file():
+    from unittest.mock import Mock, patch
+    from app.attachments.models import InputAttachment
+    from app.attachments.notion_upload import NotionAttachmentUploader
+
+    notion = Mock()
+    uploader = NotionAttachmentUploader(notion)
+    descriptor = {
+        "file_id": "file-1",
+        "attachment_url": "attachment:file-1:source.zip",
+        "signed_get_url": "https://download.invalid/source.zip",
+    }
+    loaded = Mock(
+        name="source.zip",
+        content_type="application/zip",
+        size_bytes=4,
+        source="local_path",
+        data=b"PK\x03\x04",
+    )
+
+    with patch("app.attachments.notion_upload.load_attachment_data", return_value=loaded), patch.object(
+        uploader, "get_upload_descriptor", return_value=descriptor
+    ), patch.object(uploader, "do_multipart_upload"), patch.object(
+        uploader, "enqueue_attachment_processing"
+    ) as enqueue, patch.object(uploader, "wait_attachment_task") as wait, patch.object(
+        uploader,
+        "get_signed_attachment_url",
+        return_value="https://download.invalid/source.zip",
+    ):
+        uploaded, thread_id = uploader.upload_attachments(
+            thread_id="thread-1",
+            attachments=[
+                InputAttachment(
+                    name="source.zip",
+                    content_type="application/zip",
+                    source="local_path",
+                    path="source.zip",
+                )
+            ],
+            create_thread=False,
+        )
+
+    assert thread_id == "thread-1"
+    assert len(uploaded) == 1
+    assert uploaded[0].content_type == "application/x-zip-compressed"
+    assert uploaded[0].task_id == ""
+    enqueue.assert_not_called()
+    wait.assert_not_called()

@@ -2323,7 +2323,13 @@ def build_standard_transcript(
         "timezone": str(account.get("timezone") or "America/Chicago"),
         "currentDatetime": datetime.now().astimezone().isoformat(),
         "userId": account.get("user_id", ""),
+        "userName": str(account.get("user_name") or "user"),
+        "userEmail": str(account.get("user_email") or ""),
         "spaceId": account.get("space_id", ""),
+        "spaceName": str(account.get("workspace_name") or "Notion"),
+        "spaceViewId": str(account.get("space_view_id") or ""),
+        "agentName": str(account.get("agent_name") or "user"),
+        "surface": "ai_module",
     }
     context_page_id = str(account.get("context_page_id") or "").strip()
     if context_page_id:
@@ -2368,14 +2374,17 @@ def build_standard_transcript(
             latest_user_index = idx
             break
 
+    if system_instructions:
+        transcript[0]["value"]["ephemeralInstructions"] = "\n".join(
+            str(value or "").strip()
+            for value in system_instructions
+            if str(value or "").strip()
+        )
+
     if latest_user_index >= 0:
         latest_user_content = dialog_messages[latest_user_index][1]
         prior_messages = dialog_messages[:latest_user_index]
         prompt_parts = []
-
-        if system_instructions:
-            prompt_parts.append("[System Instructions]")
-            prompt_parts.append("\n".join(system_instructions))
 
         if prior_messages:
             history_lines = []

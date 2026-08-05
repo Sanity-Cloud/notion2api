@@ -91,7 +91,7 @@ class PersistRemoteChatTests(unittest.TestCase):
                 yield {"type": "stream_complete"}
 
             with patch("app.notion_client.parse_stream", side_effect=mock_parse_stream), patch(
-                "app.notion_client.cloudscraper.create_scraper",
+                "app.notion_client._create_notion_http_session",
                 return_value=mock_scraper,
             ):
                 mock_scraper.post.return_value = mock_response
@@ -146,6 +146,9 @@ class PersistRemoteChatTests(unittest.TestCase):
              patch.object(client_mock, "_with_thread_type", side_effect=lambda t, tt: t) as mock_with_type, \
              patch.object(client_mock, "_resolve_request_profile", return_value={"precreate_thread": False, "create_thread": True, "is_partial_transcript": False, "include_debug_overrides": False}), \
              patch.object(client_mock, "_build_cookie_header", return_value=""), \
+             patch.object(client_mock, "_build_active_workspace_context_step", return_value={"type": "context", "value": {"surface": "full_page_chat", "spaceViewId": "view-1"}}), \
+             patch.object(client_mock, "warm_script_agent_cache"), \
+             patch.object(client_mock, "_wait_for_thread_file_mount", return_value={"file_ids": ["file-1"]}), \
              patch.object(client_mock, "delete_thread") as mock_delete, \
              patch.object(client_mock, "_scraper", MagicMock()) as mock_scraper, \
              patch("app.notion_client.NotionAttachmentUploader") as uploader_cls:
@@ -166,7 +169,7 @@ class PersistRemoteChatTests(unittest.TestCase):
                 {"type": "content", "text": "ok"},
                 {"type": "stream_complete"},
             ])), patch(
-                "app.notion_client.cloudscraper.create_scraper",
+                "app.notion_client._create_notion_http_session",
                 return_value=mock_scraper,
             ):
                 mock_scraper.post.return_value = mock_response
@@ -183,17 +186,18 @@ class PersistRemoteChatTests(unittest.TestCase):
         self.assertEqual(payload["threadType"], "workflow")
         self.assertFalse(payload["createThread"])
         self.assertTrue(payload["isPartialTranscript"])
-        self.assertEqual(payload["createdSource"], "ai_module")
+        self.assertEqual(payload["createdSource"], "full_page_chat")
         config = next(step for step in payload["transcript"] if step.get("type") == "config")
         self.assertTrue(config["value"]["enableComputer"])
         self.assertTrue(config["value"]["enableScriptAgent"])
-        file_step = next(step for step in payload["transcript"] if step.get("type") == "computer-file")
-        self.assertEqual(file_step["fileName"], "source.zip")
-        self.assertEqual(file_step["metadata"]["fileSize"], 123)
-        self.assertEqual(file_step["metadata"]["attachmentSource"], "user_upload")
-        followup = payload["transcript"][-1]
-        self.assertEqual(followup["type"], "user")
-        self.assertIn("Do not wait for a manual response", followup["value"][0][0])
+        transcript_types = [step.get("type") for step in payload["transcript"]]
+        self.assertEqual(
+            transcript_types,
+            ["context", "updated-config", "context", "updated-config", "config"],
+        )
+        self.assertNotIn("computer-file", transcript_types)
+        self.assertNotIn("attachments", payload)
+        self.assertFalse(any(step.get("type") == "user" for step in payload["transcript"]))
         uploader.upload_attachments.assert_called_once()
         self.assertFalse(uploader.upload_attachments.call_args.kwargs["create_thread"])
         mock_delete.assert_not_called()
@@ -217,7 +221,7 @@ class PersistRemoteChatTests(unittest.TestCase):
                 yield {"type": "stream_complete"}
 
             with patch("app.notion_client.parse_stream", side_effect=mock_parse_stream), patch(
-                "app.notion_client.cloudscraper.create_scraper",
+                "app.notion_client._create_notion_http_session",
                 return_value=mock_scraper,
             ):
                 mock_scraper.post.return_value = mock_response
@@ -256,3 +260,43 @@ class PersistRemoteChatTests(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 
+
+
+
+def test_durable_computer_use_review_has_one_provider_attempt():
+    from types import SimpleNamespace
+    from app.api.chat import _outer_retry_limit
+
+    pool = SimpleNamespace(
+        get_workspace_account_count=lambda _selector: (_ for _ in ()).throw(
+            AssertionError("durable request must not fan out")
+        )
+    )
+    request = SimpleNamespace(
+        metadata={"persist_remote_chat": True, "computer_use_review": True},
+        workspace=None,
+        workspace_key=None,
+        workspace_id=None,
+    )
+
+    assert _outer_retry_limit(pool, request, persistent_thread=False) == 1
+
+
+
+def test_prepare_messages_keeps_system_text_out_of_user_prompt():
+    from app.api.chat import _prepare_messages
+    from app.schemas import ChatCompletionRequest, ChatMessage
+
+    request = ChatCompletionRequest(
+        model="orchid-muffin",
+        messages=[
+            ChatMessage(role="system", content="governance instruction"),
+            ChatMessage(role="user", content="review source.zip"),
+        ],
+    )
+
+    user_prompt, history, raw_user_prompt = _prepare_messages(request)
+
+    assert user_prompt == "review source.zip"
+    assert raw_user_prompt == "review source.zip"
+    assert history == []

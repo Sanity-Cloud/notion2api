@@ -91,7 +91,7 @@ class StreamResponseThreadTitleTests(unittest.TestCase):
                 {"type": "content", "text": "ok"},
                 {"type": "stream_complete"},
             ])), patch(
-                "app.notion_client.cloudscraper.create_scraper",
+                "app.notion_client._create_notion_http_session",
                 return_value=mock_scraper,
             ):
                 mock_scraper.post.return_value = mock_response
@@ -140,7 +140,7 @@ class StreamResponseThreadTitleTests(unittest.TestCase):
                 {"type": "content", "text": "grounded search result"},
                 {"type": "stream_complete"},
             ])), patch(
-                "app.notion_client.cloudscraper.create_scraper",
+                "app.notion_client._create_notion_http_session",
                 return_value=mock_scraper,
             ):
                 mock_scraper.post.return_value = mock_response

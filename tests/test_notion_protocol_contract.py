@@ -15,7 +15,7 @@ from app.unsafe_url_continuation import (
 
 
 def test_default_client_version_matches_captured_protocol():
-    assert NOTION_CLIENT_VERSION == "23.13.20260623.1532"
+    assert NOTION_CLIENT_VERSION == "23.13.20260805.0803"
 
 
 def test_workflow_request_uses_patch_protocol_v2():
@@ -47,7 +47,7 @@ def test_workflow_request_uses_patch_protocol_v2():
     with (
         patch.object(client, "_resolve_request_profile", return_value=profile),
         patch.object(client, "_build_cookie_header", return_value=""),
-        patch("app.notion_client.cloudscraper.create_scraper", return_value=client._scraper),
+        patch("app.notion_client._create_notion_http_session", return_value=client._scraper),
         patch("app.notion_client.parse_stream", return_value=iter([
             {"type": "content", "text": "ok"},
             {"type": "stream_complete"},

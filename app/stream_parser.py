@@ -1058,6 +1058,72 @@ def _stream_error_event(data: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _error_step_event(value: Any, *, raw_type: str) -> dict[str, Any] | None:
+    """Normalize an explicit persisted ``step.type=error`` record."""
+    current = value
+    for _ in range(5):
+        if not isinstance(current, dict):
+            return None
+        step = current.get("step")
+        if isinstance(step, dict):
+            current = step
+            break
+        if str(current.get("type") or "").strip().lower() == "error":
+            break
+        nested = current.get("value")
+        if not isinstance(nested, dict):
+            return None
+        current = nested
+
+    if not isinstance(current, dict):
+        return None
+    if str(current.get("type") or "").strip().lower() != "error":
+        return None
+    message = str(current.get("message") or "Notion workflow returned an error.").strip()
+    code = str(current.get("subType") or current.get("code") or "notion_workflow_error").strip()
+    retriable = bool(current.get("isRetryable", False))
+    return {
+        "type": "upstream_error",
+        "status_code": 502,
+        "code": code,
+        "message": message,
+        "retriable": retriable,
+        "raw_type": raw_type,
+        "trace_id": str(current.get("traceId") or "").strip() or None,
+    }
+
+
+def _embedded_step_error_event(data: dict[str, Any]) -> dict[str, Any] | None:
+    data_type = str(data.get("type") or "").strip().lower()
+    if data_type == "record-map":
+        record_map = data.get("recordMap")
+        thread_messages = (
+            record_map.get("thread_message", {})
+            if isinstance(record_map, dict)
+            else {}
+        )
+        if isinstance(thread_messages, dict):
+            for entry in thread_messages.values():
+                event = _error_step_event(entry, raw_type="record-map:error")
+                if event is not None:
+                    return event
+    if data_type == "patch":
+        operations = data.get("v")
+        if isinstance(operations, dict):
+            operations = [operations]
+        if isinstance(operations, list):
+            for operation in operations:
+                if not isinstance(operation, dict):
+                    continue
+                for key in ("v", "value"):
+                    event = _error_step_event(
+                        operation.get(key), raw_type="patch:error"
+                    )
+                    if event is not None:
+                        return event
+    return None
+
+
 def _normalize_finished_at(value: Any) -> Any | None:
     """Return a validated Notion completion timestamp or ``None``.
 
@@ -1191,6 +1257,10 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
         stream_error = _stream_error_event(data)
         if stream_error is not None:
             yield stream_error
+            continue
+        embedded_error = _embedded_step_error_event(data)
+        if embedded_error is not None:
+            yield embedded_error
             continue
         if not completion_emitted:
             completion_event = _envelope_completion_event(data)

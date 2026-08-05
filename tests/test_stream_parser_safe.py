@@ -234,3 +234,69 @@ def test_parser_rejects_finished_at_patch_outside_segment_path():
         event.get("type") == "stream_complete"
         for event in parse_stream(DummyResponse([line]))
     )
+
+
+
+def test_record_map_error_step_becomes_upstream_error():
+    line = json.dumps(
+        {
+            "type": "record-map",
+            "recordMap": {
+                "thread_message": {
+                    "message-1": {
+                        "value": {
+                            "value": {
+                                "step": {
+                                    "type": "error",
+                                    "message": "Something went wrong. Please try again later.",
+                                    "subType": "temporarily-unavailable",
+                                    "traceId": "trace-1",
+                                    "isRetryable": False,
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+
+    events = list(parse_stream(DummyResponse([line])))
+
+    assert events == [
+        {
+            "type": "upstream_error",
+            "status_code": 502,
+            "code": "temporarily-unavailable",
+            "message": "Something went wrong. Please try again later.",
+            "retriable": False,
+            "raw_type": "record-map:error",
+            "trace_id": "trace-1",
+        }
+    ]
+
+
+def test_patch_error_step_becomes_upstream_error():
+    line = json.dumps(
+        {
+            "type": "patch",
+            "v": [
+                {
+                    "o": "a",
+                    "p": "/s/-",
+                    "v": {
+                        "type": "error",
+                        "message": "Something went wrong.",
+                        "subType": "temporarily-unavailable",
+                        "isRetryable": False,
+                    },
+                }
+            ],
+        }
+    )
+
+    events = list(parse_stream(DummyResponse([line])))
+
+    assert events[0]["type"] == "upstream_error"
+    assert events[0]["code"] == "temporarily-unavailable"
+    assert events[0]["retriable"] is False

@@ -496,11 +496,32 @@ def _bind_or_verify_conversation_scope(
         raise AssertionError("openai_error must raise") from exc
 
 
+def _request_account_selector(req_body: ChatCompletionRequest) -> str:
+    metadata = req_body.metadata if isinstance(req_body.metadata, dict) else {}
+    explicit = str(
+        metadata.get("account_profile")
+        or metadata.get("profile_name")
+        or metadata.get("account_selector")
+        or metadata.get("notion_profile")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+    if _request_computer_use_review(req_body):
+        return str(os.getenv("NOTION_COMPUTER_USE_PROFILE") or "").strip()
+    return ""
+
+
 def _client_for_requested_workspace(pool: Any, req_body: ChatCompletionRequest) -> Any:
-    selector = _request_workspace_selector(req_body)
+    workspace_selector = _request_workspace_selector(req_body)
+    account_selector = _request_account_selector(req_body)
+    if account_selector:
+        return pool.get_client_for_workspace_account(
+            workspace_selector, account_selector
+        )
     return (
-        pool.get_client_for_workspace(selector)
-        if selector
+        pool.get_client_for_workspace(workspace_selector)
+        if workspace_selector
         else pool.get_client()
     )
 
@@ -511,7 +532,15 @@ def _outer_retry_limit(
     *,
     persistent_thread: bool = False,
 ) -> int:
-    if persistent_thread:
+    metadata = req_body.metadata if isinstance(req_body.metadata, dict) else {}
+    if (
+        persistent_thread
+        or bool(metadata.get("persist_remote_chat"))
+        or bool(metadata.get("computer_use_review"))
+    ):
+        # A durable remote thread is an externally visible side effect. Replaying
+        # the request after an indeterminate stream can duplicate threads, uploads,
+        # and model work, so reconciliation must precede any retry.
         return 1
     selector = _request_workspace_selector(req_body)
     try:
@@ -1547,11 +1576,34 @@ def _prepare_messages(
             status_code=400, detail="The last user message cannot be empty."
         )
 
-    if system_messages:
-        merged_system_prompt = "\n".join(system_messages)
-        user_prompt = f"[System Instructions: {merged_system_prompt}]\n\n{user_prompt}"
-
     return user_prompt, history_messages, raw_user_prompt
+
+
+def _apply_request_system_instructions(
+    transcript: list[dict[str, Any]], req_body: ChatCompletionRequest
+) -> list[dict[str, Any]]:
+    instructions = [
+        _message_content_to_text(message.content).strip()
+        for message in req_body.messages
+        if message.role == "system"
+        and _message_content_to_text(message.content).strip()
+    ]
+    if not instructions:
+        return transcript
+    merged = "\n".join(instructions)
+    updated: list[dict[str, Any]] = []
+    for block in transcript:
+        copied = dict(block)
+        value = block.get("value")
+        if block.get("type") == "config" and isinstance(value, dict):
+            copied_value = dict(value)
+            existing = str(copied_value.get("ephemeralInstructions") or "").strip()
+            copied_value["ephemeralInstructions"] = "\n".join(
+                part for part in (existing, merged) if part
+            )
+            copied["value"] = copied_value
+        updated.append(copied)
+    return updated
 
 
 def _prepare_messages_lite(req_body: ChatCompletionRequest) -> str:
@@ -2938,6 +2990,7 @@ async def create_chat_completion(
                 context_page_id=_request_context_page_id(req_body, client),
             )
             transcript = transcript_payload["transcript"]
+            transcript = _apply_request_system_instructions(transcript, req_body)
             transcript = _apply_notion_request_options(transcript, req_body, client)
             memory_degraded = bool(transcript_payload.get("memory_degraded"))
             memory_headers = {"X-Memory-Status": "degraded"} if memory_degraded else {}

@@ -234,3 +234,57 @@ def test_switch_route_pin_auto_and_rollback(monkeypatch: pytest.MonkeyPatch) -> 
     rolled_back = asyncio.run(rollback_account_switch(request))
     assert rolled_back.mode == "pinned"
     assert rolled_back.selected_profile_name == "har"
+
+
+def test_workspace_account_selector_does_not_advance_round_robin() -> None:
+    first = _account("math@example.com")
+    first.update({"profile_name": "sanity-management-math", "workspace_key": "sanity-management"})
+    worker = _account("worker@example.com")
+    worker.update(
+        {
+            "profile_name": "sanity-management-account-4",
+            "workspace_key": "sanity-management",
+            "user_id": "worker-user",
+        }
+    )
+    pool = AccountPool([first, worker])
+
+    selected = pool.get_client_for_workspace_account(
+        "sanity-management", "sanity-management-account-4"
+    )
+    automatic = pool.get_client_for_workspace("sanity-management")
+
+    assert selected.profile_name == "sanity-management-account-4"
+    assert selected.account_key == "worker@example.com"
+    assert automatic.account_key == "math@example.com"
+
+
+def test_computer_use_request_uses_configured_profile(monkeypatch) -> None:
+    from app.api.chat import _client_for_requested_workspace
+    from app.schemas import ChatCompletionRequest
+
+    first = _account("math@example.com")
+    first.update({"profile_name": "sanity-management-math", "workspace_key": "sanity-management"})
+    worker = _account("worker@example.com")
+    worker.update(
+        {
+            "profile_name": "sanity-management-account-4",
+            "workspace_key": "sanity-management",
+            "user_id": "worker-user",
+        }
+    )
+    pool = AccountPool([first, worker])
+    monkeypatch.setenv(
+        "NOTION_COMPUTER_USE_PROFILE", "sanity-management-account-4"
+    )
+    request = ChatCompletionRequest(
+        model="orchid-muffin",
+        messages=[{"role": "user", "content": "Review source.zip"}],
+        workspace="sanity-management",
+        metadata={"computer_use_review": True},
+    )
+
+    selected = _client_for_requested_workspace(pool, request)
+
+    assert selected.profile_name == "sanity-management-account-4"
+    assert selected.account_key == "worker@example.com"
