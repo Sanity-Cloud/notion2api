@@ -5,6 +5,10 @@ import sqlite3
 import uuid
 from typing import Any, Dict, List, Optional
 
+from app.compression_observability import (
+    log_compression_warning,
+    record_compression_event,
+)
 from app.logger import logger
 from app.model_registry import get_thread_type, is_gemini_model
 
@@ -1717,15 +1721,13 @@ async def compress_sliding_window_round(
             ]
 
         if not is_summarizer_configured():
-            logger.warning(
+            log_compression_warning(
+                logger,
                 "Skipping compression because summarizer is not configured",
-                extra={
-                    "request_info": {
-                        "event": "sliding_window_compress_skipped_no_summarizer",
-                        "conversation_id": conversation_id,
-                        "round_number": round_number,
-                    }
-                },
+                event="sliding_window_compress_skipped_no_summarizer",
+                conversation_id=conversation_id,
+                round_number=round_number,
+                prior_summary_count=len(old_summaries),
             )
             # text
             with manager._get_conn() as conn:
@@ -1746,22 +1748,27 @@ async def compress_sliding_window_round(
             str(round_row["assistant_thinking"] or ""),
         )
 
+        record_compression_event(
+            "sliding_window_compress_attempt",
+            conversation_id=conversation_id,
+            round_number=round_number,
+            prior_summary_count=len(old_summaries),
+            input_chars=len(user_content) + len(assistant_content),
+        )
         try:
             summary_text = await summarize_turn(
                 old_summaries=old_summaries,
                 user_msg=user_content,
                 assistant_msg=assistant_content,
             )
-        except SummarizerUnavailableError:
-            logger.warning(
+        except SummarizerUnavailableError as exc:
+            log_compression_warning(
+                logger,
                 "Compression summary unavailable",
-                extra={
-                    "request_info": {
-                        "event": "sliding_window_compress_summary_unavailable",
-                        "conversation_id": conversation_id,
-                        "round_number": round_number,
-                    }
-                },
+                event="sliding_window_compress_summary_unavailable",
+                conversation_id=conversation_id,
+                round_number=round_number,
+                reason=f"{type(exc).__name__}: {exc}",
             )
             # text
             with manager._get_conn() as conn:
@@ -1854,6 +1861,13 @@ async def compress_sliding_window_round(
             )
             conn.commit()
 
+        record_compression_event(
+            "sliding_window_compress_success",
+            conversation_id=conversation_id,
+            round_number=round_number,
+            summary_chars=len(summary_text),
+            input_chars=len(user_content) + len(assistant_content),
+        )
         logger.info(
             "Sliding window round compressed successfully",
             extra={
@@ -2041,34 +2055,40 @@ async def compress_round_if_needed(manager: ConversationManager, conversation_id
                 }
 
             if not is_summarizer_configured():
-                logger.warning(
+                log_compression_warning(
+                    logger,
                     "Skipping compression because summarizer is not configured",
-                    extra={
-                        "request_info": {
-                            "event": "conversation_compress_skipped_no_summarizer",
-                            "conversation_id": conversation_id,
-                            "message_count": message_count,
-                        }
-                    },
+                    event="conversation_compress_skipped_no_summarizer",
+                    conversation_id=conversation_id,
+                    message_count=message_count,
+                    input_chars=len(candidate["user_content"])
+                    + len(candidate["assistant_content"]),
                 )
                 return
 
+            record_compression_event(
+                "conversation_compress_attempt",
+                conversation_id=conversation_id,
+                round_index=candidate["round_index"],
+                message_count=message_count,
+                prior_summary_count=len(old_summaries),
+                input_chars=len(candidate["user_content"])
+                + len(candidate["assistant_content"]),
+            )
             try:
                 summary_text = await summarize_turn(
                     old_summaries=old_summaries,
                     user_msg=candidate["user_content"],
                     assistant_msg=candidate["assistant_content"],
                 )
-            except SummarizerUnavailableError:
-                logger.warning(
+            except SummarizerUnavailableError as exc:
+                log_compression_warning(
+                    logger,
                     "Compression summary unavailable; active messages retained",
-                    extra={
-                        "request_info": {
-                            "event": "conversation_compress_summary_unavailable",
-                            "conversation_id": conversation_id,
-                            "round_index": candidate["round_index"],
-                        }
-                    },
+                    event="conversation_compress_summary_unavailable",
+                    conversation_id=conversation_id,
+                    round_index=candidate["round_index"],
+                    reason=f"{type(exc).__name__}: {exc}",
                 )
                 return
             except Exception:
@@ -2183,7 +2203,20 @@ async def compress_round_if_needed(manager: ConversationManager, conversation_id
                         (conversation_id,),
                     )
                     conn.commit()
+                record_compression_event(
+                    "conversation_compress_success",
+                    conversation_id=conversation_id,
+                    round_index=candidate["round_index"],
+                    summary_chars=len(summary_text),
+                    input_chars=len(candidate["user_content"])
+                    + len(candidate["assistant_content"]),
+                    remaining_message_count=max(0, current_message_count - 2),
+                )
     except Exception:
+        record_compression_event(
+            "conversation_compress_task_crashed",
+            conversation_id=conversation_id,
+        )
         logger.error(
             "compress_round_if_needed crashed",
             exc_info=True,

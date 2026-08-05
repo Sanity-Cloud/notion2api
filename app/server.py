@@ -27,6 +27,7 @@ from app.config import (
     is_lite_mode,
     is_standard_mode,
 )
+from app.compression_observability import compression_telemetry_snapshot
 from app.conversation import ConversationManager
 from app.core.errors import openai_error_payload
 from app.core.internal_callers import is_repo_ai_internal_request
@@ -263,6 +264,7 @@ def health_check(request: Request):
         "account_selection": pool.get_selection_summary(),
         "governance": pool.get_governance_summary(),
         "notion_admission": get_notion_admission_controller().snapshot(),
+        "conversation_compression": compression_telemetry_snapshot(),
     }
 
 
