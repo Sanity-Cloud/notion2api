@@ -67,9 +67,10 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 50
+    assert len(names) == 51
     assert "aigentbee_hive_create_mission" in names
     assert "aigentbee_chat" in names
+    assert "aigentbee_chat_history" in names
     assert "aigentbee_health" in names
     assert "aigentbee_get_chat_job" in names
     assert "aigentbee_list_accounts" in names
@@ -125,9 +126,10 @@ def test_primary_profile_exposes_bare_machine_methods(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 47
+    assert len(names) == 48
     assert "hive_create_mission" in names
     assert "chat" in names
+    assert "chat_history" in names
     assert "health" in names
     assert "get_chat_job" in names
     assert "list_accounts" in names
@@ -629,6 +631,25 @@ def test_mcp_schema_exposes_continuation_and_cancellation(monkeypatch):
     tools = asyncio.run(server.list_tools())
     by_name = {tool.name: tool for tool in tools}
     chat_schema = by_name["chat"].inputSchema["properties"]
+    history_schema = by_name["chat_history"].inputSchema["properties"]
+
+    assert history_schema["action"]["enum"] == [
+        "status",
+        "list_threads",
+        "get_thread",
+        "search",
+        "export_markdown",
+        "model_stats",
+        "sync_from_notion",
+        "hydrate_thread",
+    ]
+    assert history_schema["limit"]["default"] == 50
+    assert history_schema["offset"]["default"] == 0
+    assert history_schema["message_limit"]["default"] == 100
+    assert history_schema["content_limit"]["default"] == 50000
+    assert history_schema["account_index"]["default"] == 0
+    assert history_schema["max_pages"]["default"] == 5
+    assert history_schema["hydrate"]["default"] is False
 
     assert chat_schema["model"]["default"] == "terra"
     assert "conversation_id" in chat_schema
