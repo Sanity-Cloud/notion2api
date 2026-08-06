@@ -238,12 +238,14 @@ class AccountPool:
             "workspace_key": workspace_key,
         }
 
-    def _resolve_account_index_unlocked(self, selector: str) -> int:
+    def _resolve_account_index_in_workspace_unlocked(
+        self, selector: str, workspace_key: str
+    ) -> int:
         normalized = str(selector or "").strip().casefold()
         if not normalized:
             raise ValueError("An account selector is required for pinned mode")
 
-        workspace_indices = self._active_workspace_indices_unlocked()
+        workspace_indices = self._workspace_indices_for_key(workspace_key)
         matches: list[int] = []
         for index in workspace_indices:
             account = self.account_configs[index]
@@ -265,16 +267,36 @@ class AccountPool:
 
         if not matches:
             raise ValueError(
-                f"No configured Notion account in workspace {self._workspace_key!r} "
+                f"No configured Notion account in workspace {workspace_key!r} "
                 f"matches selector: {selector}"
             )
         if len(matches) > 1:
             raise ValueError(f"Account selector is ambiguous: {selector}")
         return matches[0]
 
+    def _resolve_account_index_unlocked(self, selector: str) -> int:
+        return self._resolve_account_index_in_workspace_unlocked(
+            selector, self._workspace_key
+        )
+
     def get_client_for_selector(self, selector: str) -> NotionOpusAPI:
         with self._lock:
             return self._new_client(self._resolve_account_index_unlocked(selector))
+
+    def get_client_for_workspace_account(
+        self, workspace_selector: str, account_selector: str
+    ) -> NotionOpusAPI:
+        """Return one explicitly selected account without mutating pool cursors."""
+        with self._lock:
+            workspace_key = (
+                self._resolve_workspace_key_unlocked(workspace_selector)
+                if str(workspace_selector or "").strip()
+                else self._workspace_key
+            )
+            index = self._resolve_account_index_in_workspace_unlocked(
+                account_selector, workspace_key
+            )
+            return self._new_client(index)
 
     def get_client_for_binding(self, *, workspace_id: str, user_id: str) -> NotionOpusAPI:
         """Return the exact client bound to a persistent chat identity."""

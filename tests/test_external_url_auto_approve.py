@@ -296,12 +296,11 @@ def test_stream_response_auto_approves_without_waiting_for_user():
         patch.object(client, "_build_cookie_header", return_value=""),
         patch.object(client, "_to_notion_transcript", side_effect=lambda value: value),
         patch.object(client, "_resolve_thread_type", return_value="workflow"),
-        patch("app.notion_client.cloudscraper") as cloudscraper_mod,
+        patch("app.notion_client._create_notion_http_session", return_value=scraper),
         patch("app.notion_client.parse_stream", return_value=iter([confirmation])),
         patch.object(client, "iter_continue_confirmed_tool_steps", side_effect=_iter_continue),
         patch("app.notion_client.validate_bound_thread_transcript", return_value=None),
     ):
-        cloudscraper_mod.create_scraper.return_value = scraper
         events = list(
             client.stream_response(
                 transcript=[{"type": "user", "value": "research mn.gov"}],
@@ -375,12 +374,11 @@ def test_stream_auto_approve_failure_raises_operational_error():
         patch.object(client, "_build_cookie_header", return_value=""),
         patch.object(client, "_to_notion_transcript", side_effect=lambda value: value),
         patch.object(client, "_resolve_thread_type", return_value="workflow"),
-        patch("app.notion_client.cloudscraper") as cloudscraper_mod,
+        patch("app.notion_client._create_notion_http_session", return_value=scraper),
         patch("app.notion_client.parse_stream", return_value=iter([confirmation])),
         patch.object(client, "iter_continue_confirmed_tool_steps", side_effect=_iter_continue),
         patch("app.notion_client.validate_bound_thread_transcript", return_value=None),
     ):
-        cloudscraper_mod.create_scraper.return_value = scraper
         with pytest.raises(NotionUpstreamError) as exc_info:
             list(
                 client.stream_response(

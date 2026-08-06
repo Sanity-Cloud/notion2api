@@ -9,7 +9,7 @@ The dispatcher does not grant credentials, expand worker authority, or expose ar
 ## Fail-closed execution flow
 
 ```text
-MATERIALIZED plan + READY receipt + ACTIVE lease
+MATERIALIZED plan + READY receipt + ACTIVE, non-stale lease
   -> enabled compiled adapter
   -> capability/domain/authority/payload/timeout verification
   -> CLAIMED
@@ -43,14 +43,15 @@ A new execution requires all of the following:
 1. The plan is `MATERIALIZED`.
 2. The lane receipt is `READY`.
 3. The worker lease is `ACTIVE`.
-4. The assigned worker is `APPOINTED`.
-5. The adapter is `ENABLED`.
-6. The requested capability is explicitly allowed.
-7. Requested writable domains are allowed by both the adapter and lease.
-8. Lease authority meets the adapter requirement.
-9. The payload is JSON-serializable and within the byte limit.
-10. Blocked execution keys such as `command`, `shell`, `path`, `url`, `token`, and `credential` are absent.
-11. Any required per-execution governed authorization receipt is present.
+4. Lease liveness is not `STALE`, `OFFLINE`, or `EXPIRED`.
+5. The assigned worker is `APPOINTED`.
+6. The adapter is `ENABLED`.
+7. The requested capability is explicitly allowed.
+8. Requested writable domains are allowed by both the adapter and lease.
+9. Lease authority meets the adapter requirement.
+10. The payload is JSON-serializable and within the byte limit.
+11. Blocked execution keys such as `command`, `shell`, `path`, `url`, `token`, and `credential` are absent.
+12. Any required per-execution governed authorization receipt is present.
 
 Failure at a policy precondition produces a durable `DENIED` execution and leaves the lane available for a corrected request.
 

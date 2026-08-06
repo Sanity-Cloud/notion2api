@@ -63,6 +63,11 @@ from app.hive_workforce import (
     WorkforceSnapshot,
     get_hive_workforce_store,
 )
+from app.hive_workforce_lifecycle import (
+    LeaseReconciliationSnapshot,
+    RecruitmentMode,
+    WorkforceAuditSnapshot,
+)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
@@ -764,6 +769,8 @@ class Notion2APIClient:
         hygiene: dict[str, Any] = {}
         quarantined = False
         terminal_finish_reason = ""
+        done_received = False
+        stream_error: dict[str, Any] | None = None
 
         headers = self._headers()
         headers["Accept"] = "text/event-stream"
@@ -783,7 +790,10 @@ class Notion2APIClient:
                     if not line.startswith("data:"):
                         continue
                     raw = line[5:].strip()
-                    if not raw or raw == "[DONE]":
+                    if not raw:
+                        continue
+                    if raw == "[DONE]":
+                        done_received = True
                         continue
                     try:
                         event = json.loads(raw)
@@ -797,6 +807,40 @@ class Notion2APIClient:
                         model_metadata.update(event["model_metadata"])
 
                     event_type = str(event.get("type") or "").strip().lower()
+                    error_payload = event.get("error")
+                    if event_type in {"error", "stream_error", "stream-error"} or error_payload is not None:
+                        if isinstance(error_payload, dict):
+                            error_detail = dict(error_payload)
+                        elif error_payload not in (None, ""):
+                            error_detail = {"message": str(error_payload)}
+                        else:
+                            error_detail = dict(event)
+                        raw_status = (
+                            event.get("status_code")
+                            or event.get("status")
+                            or error_detail.get("status_code")
+                            or error_detail.get("status")
+                        )
+                        try:
+                            status_code = int(raw_status)
+                        except (TypeError, ValueError):
+                            status_code = 0
+                        fingerprint = json.dumps(error_detail, ensure_ascii=False).lower()
+                        if not 100 <= status_code <= 599:
+                            status_code = 429 if any(
+                                marker in fingerprint
+                                for marker in ("429", "too many requests", "too_many_requests", "rate limit", "rate_limit")
+                            ) else 502
+                        stream_error = {
+                            "ok": False,
+                            "status_code": status_code,
+                            "status": "upstream_rate_limit" if status_code == 429 else "upstream_error",
+                            "model": response_model,
+                            "actual_model": str(model_metadata.get("actual_model") or ""),
+                            "model_metadata": model_metadata or None,
+                            "error": error_detail,
+                        }
+                        break
                     if event_type == "output_hygiene":
                         candidate = event.get("hygiene")
                         if isinstance(candidate, dict):
@@ -844,6 +888,24 @@ class Notion2APIClient:
                             last_update = now
 
         visible_content = "".join(content_parts)
+        if stream_error is not None:
+            on_progress(reasoning_buffer, "", event_count, True)
+            return stream_error
+        if not terminal_finish_reason and not done_received:
+            on_progress(reasoning_buffer, "", event_count, True)
+            return {
+                "ok": False,
+                "status_code": 502,
+                "status": "stream_incomplete",
+                "model": response_model,
+                "actual_model": str(model_metadata.get("actual_model") or ""),
+                "model_metadata": model_metadata or None,
+                "error": {
+                    "code": "STREAM_INCOMPLETE",
+                    "message": "Backend stream ended without a terminal finish event.",
+                    "partial_content_chars": len(visible_content),
+                },
+            }
         if quarantined:
             visible_content = ""
         on_progress(reasoning_buffer, visible_content, event_count, True)
@@ -4941,6 +5003,8 @@ def create_server(
         file_types: list[str] | None = None,
         everything_available: bool = True,
         degraded_search_authorized: bool = False,
+        recruitment_mode: str = RecruitmentMode.DISABLED.value,
+        lease_ttl_seconds: int = 24 * 60 * 60,
         parent_context_id: str = "",
         lifecycle_stage: str = "Build",
         human_approval: bool = False,
@@ -4968,6 +5032,8 @@ def create_server(
                 file_types=file_types,
                 everything_available=everything_available,
                 degraded_search_authorized=degraded_search_authorized,
+                recruitment_mode=recruitment_mode,
+                lease_ttl_seconds=lease_ttl_seconds,
                 parent_context_id=parent_context_id,
                 lifecycle_stage=lifecycle_stage,
                 human_approval=human_approval,
@@ -5059,6 +5125,144 @@ def create_server(
             )
         except (HiveRuntimeError, ValueError) as exc:
             return _materialization_error_snapshot(exc, plan_id)
+
+
+    def _lease_reconciliation_error_snapshot(
+        exc: Exception,
+        *,
+        dry_run: bool,
+    ) -> LeaseReconciliationSnapshot:
+        return LeaseReconciliationSnapshot(
+            ok=False,
+            db_path=str(default_hive_runtime_db_path()),
+            dry_run=dry_run,
+            error=str(exc),
+        )
+
+    def _workforce_audit_error_snapshot(
+        exc: Exception,
+        *,
+        dry_run: bool,
+    ) -> WorkforceAuditSnapshot:
+        return WorkforceAuditSnapshot(
+            ok=False,
+            db_path=str(default_hive_runtime_db_path()),
+            dry_run=dry_run,
+            error=str(exc),
+        )
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_heartbeat_worker_lease"),
+        description=_tool_description(
+            "Record bounded execution-liveness evidence for one ACTIVE worker lease and "
+            "renew its expiry without granting additional authority or writable domains."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_heartbeat_worker_lease(
+        lease_id: str,
+        actor: str,
+        heartbeat_status: str = "RUNNING",
+        extend_seconds: int = 60 * 60,
+        evidence: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> LeaseReconciliationSnapshot:
+        try:
+            return get_hive_materialization_store().record_lease_heartbeat(
+                lease_id=lease_id,
+                actor=actor,
+                heartbeat_status=heartbeat_status,
+                extend_seconds=extend_seconds,
+                evidence=evidence,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _lease_reconciliation_error_snapshot(exc, dry_run=False)
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_reconcile_stale_leases"),
+        description=_tool_description(
+            "Inspect or reconcile objectively stale Hive worker leases using expiry and "
+            "heartbeat freshness. Dry-run is the default. Applying expiry is local and "
+            "audited; revocation requires governed A2 authorization."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_reconcile_stale_leases(
+        actor: str,
+        plan_id: str = "",
+        dry_run: bool = True,
+        heartbeat_stale_after_seconds: int = 30 * 60,
+        no_heartbeat_grace_seconds: int = 6 * 60 * 60,
+        revoke: bool = False,
+        human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> LeaseReconciliationSnapshot:
+        try:
+            return get_hive_materialization_store().reconcile_stale_leases(
+                actor=actor,
+                plan_id=plan_id,
+                dry_run=dry_run,
+                heartbeat_stale_after_seconds=heartbeat_stale_after_seconds,
+                no_heartbeat_grace_seconds=no_heartbeat_grace_seconds,
+                revoke=revoke,
+                human_approval=human_approval,
+                governance_authorization=governance_authorization,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _lease_reconciliation_error_snapshot(exc, dry_run=dry_run)
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_audit_workforce"),
+        description=_tool_description(
+            "Audit Hive requisitions and appointments for placeholders, abandoned "
+            "requisitions, stale suspensions, chronic inactivity, and duplicates. "
+            "Dry-run is the default; applying offboarding requires governed authorization "
+            "and protects leaders and reviewers unless A3 protected-role scope is explicit."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_audit_workforce(
+        actor: str,
+        dry_run: bool = True,
+        stale_after_days: int = 30,
+        include_protected: bool = False,
+        human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> WorkforceAuditSnapshot:
+        try:
+            return get_hive_materialization_store().audit_workforce(
+                actor=actor,
+                dry_run=dry_run,
+                stale_after_days=stale_after_days,
+                include_protected=include_protected,
+                human_approval=human_approval,
+                governance_authorization=governance_authorization,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _workforce_audit_error_snapshot(exc, dry_run=dry_run)
 
 
     def _adapter_error_snapshot(exc: Exception) -> HiveAdapterSnapshot:

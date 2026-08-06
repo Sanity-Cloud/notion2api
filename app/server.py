@@ -16,6 +16,7 @@ from app.api.chat_history import router as chat_history_router
 from app.api.chat_history_resume import router as chat_history_resume_router
 from app.api.chat_resume_thread_binding import apply_chat_resume_thread_bindings
 from app.api.features import router as features_router
+from app.api.hive_workforce import router as hive_workforce_router
 from app.api.models import router as models_router
 from app.api.responses import router as responses_router
 from app.api.notion import router as notion_router
@@ -239,6 +240,7 @@ app.include_router(models_router, prefix="/v1")
 app.include_router(chat_history_router, prefix="/v1")
 app.include_router(chat_history_resume_router, prefix="/v1")
 app.include_router(features_router, prefix="/v1")
+app.include_router(hive_workforce_router, prefix="/v1")
 app.include_router(responses_router, prefix="/v1")
 app.include_router(notion_router, prefix="/v1")
 

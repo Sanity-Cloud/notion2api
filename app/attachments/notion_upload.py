@@ -23,6 +23,14 @@ class NotionAttachmentUploadError(RuntimeError):
         self.reason = reason
 
 
+def _is_zip_attachment(name: str, content_type: str) -> bool:
+    normalized = str(content_type or "").split(";", 1)[0].strip().lower()
+    return normalized in {
+        "application/zip",
+        "application/x-zip-compressed",
+    } or str(name or "").strip().lower().endswith(".zip")
+
+
 class NotionAttachmentUploader:
     def __init__(self, notion_client: Any, poll_interval: float | None = None, poll_timeout: float | None = None) -> None:
         self.notion = notion_client
@@ -76,16 +84,29 @@ class NotionAttachmentUploader:
             if not attachment_url:
                 raise NotionAttachmentUploadError("Upload descriptor missing attachment URL", reason="missing_attachment_url")
 
-            task_id = self.enqueue_attachment_processing(attachment_url=attachment_url, thread_id=current_thread_id)
-            result = self.wait_attachment_task(task_id)
-            # normalize result handling
-            if not isinstance(result, dict) or not result.get("success"):
-                raise NotionAttachmentUploadError(f"Attachment processing failed for task {task_id}", reason="task_failed")
+            task_id = ""
+            if not _is_zip_attachment(loaded.name, loaded.content_type):
+                task_id = self.enqueue_attachment_processing(
+                    attachment_url=attachment_url,
+                    thread_id=current_thread_id,
+                )
+                result = self.wait_attachment_task(task_id)
+                # A successful task transport can still carry a semantic error.
+                if not isinstance(result, dict) or not result.get("success"):
+                    raise NotionAttachmentUploadError(
+                        f"Attachment processing failed for task {task_id}",
+                        reason="task_failed",
+                    )
 
             signed_url = self.get_signed_attachment_url(attachment_url=attachment_url, thread_id=current_thread_id, download_name=loaded.name)
+            effective_content_type = (
+                "application/x-zip-compressed"
+                if _is_zip_attachment(loaded.name, loaded.content_type)
+                else loaded.content_type
+            )
             metadata = self.build_attachment_step_metadata(uploaded={
                 "fileSizeBytes": loaded.size_bytes,
-                "contentType": loaded.content_type,
+                "contentType": effective_content_type,
                 "source": loaded.source,
                 "taskId": task_id,
                 "fileId": file_id,
@@ -95,7 +116,7 @@ class NotionAttachmentUploader:
             uploaded.append(
                 UploadedAttachment(
                     name=loaded.name,
-                    content_type=loaded.content_type,
+                    content_type=effective_content_type,
                     size_bytes=loaded.size_bytes,
                     source=loaded.source,
                     file_id=file_id,

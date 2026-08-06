@@ -1,7 +1,12 @@
 from app.core.models import normalize_model_id
+import os
 import re
+import threading
 import time
+import uuid
+
 from app.logger import logger
+from app.model_restriction_cache import ModelRestrictionCache
 
 
 
@@ -535,44 +540,137 @@ def get_model_icon(model_name: str) -> str:
 
 
 _RESTRICTED_MODELS_CACHE: dict[str, tuple[float, set[str]]] = {}
+_RESTRICTED_MODELS_LOCKS: dict[str, threading.Lock] = {}
+_RESTRICTED_MODELS_LOCK_GUARD = threading.Lock()
+_SHARED_RESTRICTION_CACHE = ModelRestrictionCache()
+_RESTRICTION_CACHE_OWNER = f"{os.getpid()}:{uuid.uuid4().hex}"
+
+
+def _restriction_cache_ttl_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("NOTION_MODEL_RESTRICTION_CACHE_TTL_SECONDS", "300")))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _restriction_refresh_wait_seconds() -> float:
+    try:
+        return max(0.1, float(os.getenv("NOTION_MODEL_RESTRICTION_REFRESH_WAIT_SECONDS", "10")))
+    except (TypeError, ValueError):
+        return 10.0
+
+
+def _restriction_lock(space_id: str) -> threading.Lock:
+    with _RESTRICTED_MODELS_LOCK_GUARD:
+        return _RESTRICTED_MODELS_LOCKS.setdefault(space_id, threading.Lock())
+
+
+def _restricted_models_from_picker_config(config: dict) -> set[str]:
+    restricted: set[str] = set()
+    for item in config.get("restrictedAccessModelsInPickerConfig", []):
+        codename = item.get("codename") if isinstance(item, dict) else None
+        if codename:
+            restricted.add(str(codename))
+    for item in config.get("models", []):
+        if not isinstance(item, dict) or not item.get("isDisabled"):
+            continue
+        model_name = item.get("model") if item.get("disabledReason") else None
+        codename = item.get("restrictedAccessModelCodename")
+        if model_name:
+            restricted.add(str(model_name))
+        if codename:
+            restricted.add(str(codename))
+    return restricted
+
+
+def _shared_restricted_models(space_id: str, *, allow_stale: bool = False) -> set[str] | None:
+    cached = _SHARED_RESTRICTION_CACHE.get(space_id, allow_stale=allow_stale)
+    if not cached:
+        return None
+    payload = cached.get("payload") if isinstance(cached, dict) else None
+    values = payload.get("restricted_models") if isinstance(payload, dict) else None
+    if not isinstance(values, list):
+        return None
+    return {str(value) for value in values if str(value)}
+
 
 def get_restricted_models_for_space(client) -> set[str]:
     now = time.time()
-    space_id = client.space_id
-    if space_id in _RESTRICTED_MODELS_CACHE:
-        t, val = _RESTRICTED_MODELS_CACHE[space_id]
-        if now - t < 300:  # 5 minutes cache
-            return val
+    space_id = str(client.space_id or "").strip()
+    account_id = str(
+        getattr(client, "user_id", "")
+        or getattr(client, "account_key", "")
+        or getattr(client, "user_email", "")
+        or "unknown-account"
+    ).strip()
+    cache_key = f"{space_id}:{account_id}"
+    ttl_seconds = _restriction_cache_ttl_seconds()
+    local = _RESTRICTED_MODELS_CACHE.get(cache_key)
+    if local and now - local[0] < ttl_seconds:
+        return set(local[1])
 
-    try:
-        config = client.get_ai_model_picker_config()
-        restricted = set()
+    with _restriction_lock(cache_key):
+        now = time.time()
+        local = _RESTRICTED_MODELS_CACHE.get(cache_key)
+        if local and now - local[0] < ttl_seconds:
+            return set(local[1])
+        shared = _shared_restricted_models(cache_key)
+        if shared is not None:
+            _RESTRICTED_MODELS_CACHE[cache_key] = (now, shared)
+            return set(shared)
 
-        # 1. Check restrictedAccessModelsInPickerConfig
-        for item in config.get("restrictedAccessModelsInPickerConfig", []):
-            codename = item.get("codename")
-            if codename:
-                restricted.add(codename)
+        stale = (
+            set(local[1])
+            if local
+            else (_shared_restricted_models(cache_key, allow_stale=True) or set())
+        )
+        deadline = time.monotonic() + _restriction_refresh_wait_seconds()
+        while True:
+            lease_token = _SHARED_RESTRICTION_CACHE.claim_refresh(
+                cache_key,
+                owner_id=_RESTRICTION_CACHE_OWNER,
+                lease_seconds=max(5.0, _restriction_refresh_wait_seconds()),
+            )
+            if lease_token:
+                try:
+                    restricted = _restricted_models_from_picker_config(
+                        client.get_ai_model_picker_config()
+                    )
+                    stored = _SHARED_RESTRICTION_CACHE.store(
+                        cache_key,
+                        {"restricted_models": sorted(restricted)},
+                        lease_token=lease_token,
+                        ttl_seconds=ttl_seconds,
+                    )
+                    if not stored:
+                        shared = _shared_restricted_models(cache_key)
+                        return set(shared if shared is not None else stale)
+                    _RESTRICTED_MODELS_CACHE[cache_key] = (
+                        time.time(),
+                        restricted,
+                    )
+                    return set(restricted)
+                except Exception as exc:
+                    _SHARED_RESTRICTION_CACHE.release_refresh(
+                        cache_key, lease_token=lease_token
+                    )
+                    logger.warning(
+                        "Failed to fetch restricted models for "
+                        f"space/account {cache_key}: {exc}"
+                    )
+                    return stale
 
-        # 2. Check models with isDisabled and disabledReason
-        for item in config.get("models", []):
-            if item.get("isDisabled") and item.get("disabledReason"):
-                model_name = item.get("model")
-                if model_name:
-                    restricted.add(model_name)
-            # Also check restrictedAccessModelCodename
-            if item.get("isDisabled") and item.get("restrictedAccessModelCodename"):
-                codename = item.get("restrictedAccessModelCodename")
-                if codename:
-                    restricted.add(codename)
-
-        _RESTRICTED_MODELS_CACHE[space_id] = (now, restricted)
-        return restricted
-    except Exception as e:
-        logger.warning(f"Failed to fetch restricted models for space {space_id}: {e}")
-        if space_id in _RESTRICTED_MODELS_CACHE:
-            return _RESTRICTED_MODELS_CACHE[space_id][1]
-        return set()
+            shared = _shared_restricted_models(cache_key)
+            if shared is not None:
+                _RESTRICTED_MODELS_CACHE[cache_key] = (time.time(), shared)
+                return set(shared)
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "Timed out waiting for restricted model refresh for "
+                    f"space/account {cache_key}"
+                )
+                return stale
+            time.sleep(0.05)
 
 def list_available_models_for_request(request) -> list[str]:
     try:

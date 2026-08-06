@@ -251,7 +251,7 @@ class NotionClientAttachmentTests(unittest.TestCase):
         transcript = [{"type": "config", "value": {"type": "workflow", "model": "gpt-4"}}, {"type": "user", "value": "hi"}]
 
         stream_chunks = [{"type": "chunk", "value": "ok"}, {"type": "stream_complete"}]
-        with patch("app.notion_client.requests.Session", return_value=scraper), patch("app.notion_client.cloudscraper", Mock(create_scraper=Mock(return_value=scraper))), patch("app.notion_client.parse_stream", return_value=stream_chunks), patch("app.notion_client._resolve_thread_persistence", return_value={"persist": True, "generate_title": False, "save_all_thread_operations": False, "set_unread_state": False, "delete_after_stream": False}):
+        with patch("app.notion_client._create_notion_http_session", return_value=scraper), patch("app.notion_client.parse_stream", return_value=stream_chunks), patch("app.notion_client._resolve_thread_persistence", return_value={"persist": True, "generate_title": False, "save_all_thread_operations": False, "set_unread_state": False, "delete_after_stream": False}):
             chunks = list(self.client.stream_response(transcript, thread_id="thread-1"))
 
         self.assertEqual(chunks, [{"type": "chunk", "value": "ok"}])
@@ -288,7 +288,7 @@ class NotionClientAttachmentTests(unittest.TestCase):
         uploader_instance = Mock()
         uploader_instance.upload_attachments.return_value = (uploaded, "thread-actual")
         stream_chunks = [{"type": "chunk", "value": "ok"}, {"type": "stream_complete"}]
-        with patch("app.notion_client.NotionAttachmentUploader", return_value=uploader_instance), patch("app.notion_client.requests.Session", return_value=scraper), patch("app.notion_client.cloudscraper", Mock(create_scraper=Mock(return_value=scraper))), patch("app.notion_client.parse_stream", return_value=stream_chunks), patch("app.notion_client._resolve_thread_persistence", return_value={"persist": True, "generate_title": False, "save_all_thread_operations": False, "set_unread_state": False, "delete_after_stream": False}):
+        with patch("app.notion_client.NotionAttachmentUploader", return_value=uploader_instance), patch("app.notion_client._create_notion_http_session", return_value=scraper), patch("app.notion_client.parse_stream", return_value=stream_chunks), patch("app.notion_client._resolve_thread_persistence", return_value={"persist": True, "generate_title": False, "save_all_thread_operations": False, "set_unread_state": False, "delete_after_stream": False}):
             chunks = list(self.client.stream_response(transcript, thread_id="thread-1", attachments=attachments))
 
         self.assertEqual(chunks, [{"type": "chunk", "value": "ok"}])
@@ -345,7 +345,7 @@ class NotionClientAttachmentTests(unittest.TestCase):
         with patch.object(self.client, "_create_thread", return_value=True) as create_thread, patch(
             "app.notion_client.NotionAttachmentUploader", return_value=uploader_instance
         ), patch("app.notion_client.requests.Session", return_value=scraper), patch(
-            "app.notion_client.cloudscraper", Mock(create_scraper=Mock(return_value=scraper))
+            "app.notion_client._create_notion_http_session", return_value=scraper
         ), patch(
             "app.notion_client.parse_stream",
             return_value=[{"type": "chunk", "value": "ok"}, {"type": "stream_complete"}],
@@ -387,7 +387,7 @@ class NotionClientAttachmentTests(unittest.TestCase):
         with patch.object(self.client, "_create_thread", return_value=True) as create_thread, patch(
             "app.notion_client.NotionAttachmentUploader", return_value=uploader_instance
         ), patch("app.notion_client.requests.Session", return_value=scraper), patch(
-            "app.notion_client.cloudscraper", Mock(create_scraper=Mock(return_value=scraper))
+            "app.notion_client._create_notion_http_session", return_value=scraper
         ), patch(
             "app.notion_client.parse_stream",
             return_value=[{"type": "chunk", "value": "ok"}, {"type": "stream_complete"}],
@@ -428,3 +428,279 @@ class NotionClientAttachmentTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+
+def test_current_zip_workflow_contract():
+    from app.attachments.models import UploadedAttachment
+    from app.notion_client import NOTION_CLIENT_VERSION, NotionOpusAPI
+
+    client = NotionOpusAPI(
+        {
+            "token_v2": "token",
+            "space_id": "space-1",
+            "user_id": "user-1",
+            "workspace_name": "Sanity Management",
+            "timezone": "America/Chicago",
+        }
+    )
+    response = Mock(status_code=200, text="")
+    client._scraper = Mock()
+    client._scraper.post.return_value = response
+    uploader = Mock()
+    uploader.upload_attachments.return_value = (
+        [
+            UploadedAttachment(
+                name="source.zip",
+                content_type="application/x-zip-compressed",
+                size_bytes=4096,
+                source="local_path",
+                file_id="file-1",
+                thread_mounted=True,
+                attachment_url="attachment:file-1:source.zip",
+            )
+        ],
+        "resolved-thread",
+    )
+    transcript = [
+        {"id": "config", "type": "config", "value": {"type": "workflow", "model": "gpt-4"}},
+        {"id": "context", "type": "context", "value": {"surface": "workflows"}},
+        {"id": "user", "type": "user", "value": [["Review the repository."]]},
+    ]
+    active_context = {
+        "id": "active-context",
+        "type": "context",
+        "value": {
+            "surface": "full_page_chat",
+            "spaceViewId": "space-view-1",
+            "agentName": "SanityBee Worker",
+        },
+    }
+    persistence = {
+        "persist": True,
+        "generate_title": False,
+        "save_all_thread_operations": True,
+        "set_unread_state": True,
+        "delete_after_stream": False,
+    }
+
+    with patch("app.notion_client.NotionAttachmentUploader", return_value=uploader), patch.object(
+        client, "_build_active_workspace_context_step", return_value=active_context
+    ), patch.object(
+        client,
+        "_wait_for_thread_file_mount",
+        return_value={"file_ids": ["file-1"]},
+    ) as wait_for_mount, patch.object(client, "warm_script_agent_cache"), patch(
+        "app.notion_client._resolve_thread_persistence", return_value=persistence
+    ), patch(
+        "app.notion_client.parse_stream",
+        return_value=iter([
+            {"type": "content", "text": "ok"},
+            {"type": "stream_complete", "finished_at": 1},
+        ]),
+    ), patch(
+        "app.notion_client._create_notion_http_session", return_value=client._scraper
+    ):
+        events = list(
+            client.stream_response(
+                transcript,
+                attachments=[object()],
+                persist_remote_chat=True,
+                computer_use_review=True,
+            )
+        )
+
+    assert events == [{"type": "content", "text": "ok"}]
+    uploader.upload_attachments.assert_called_once()
+    assert uploader.upload_attachments.call_args.kwargs["create_thread"] is True
+    persistence_calls = [
+        call
+        for call in client._scraper.post.call_args_list
+        if call.args and call.args[0].endswith("/saveTransactionsFanout")
+    ]
+    assert len(persistence_calls) == 1
+    persistence_payload = persistence_calls[0].kwargs["json"]
+    add_steps = persistence_payload["transactions"][0]
+    assert add_steps["debug"]["userAction"] == (
+        "WorkflowActions.addStepsToExistingThreadAndRun"
+    )
+    persisted_set_operations = [
+        operation
+        for operation in add_steps["operations"]
+        if operation["command"] == "set"
+    ]
+    assert [operation["args"]["step"]["type"] for operation in persisted_set_operations] == [
+        "context",
+        "updated-config",
+        "context",
+        "computer-file",
+        "updated-config",
+        "user",
+    ]
+    assert add_steps["operations"][-1]["command"] == "listAfterMulti"
+
+    inference_call = client._scraper.post.call_args_list[-1]
+    assert inference_call.args[0] == "https://www.notion.so/api/v3/runInferenceTranscript"
+    headers = inference_call.kwargs["headers"]
+    assert headers["notion-client-version"] == NOTION_CLIENT_VERSION == "23.13.20260805.0803"
+    assert headers["notion-audit-log-platform"] == "web"
+    assert headers["origin"] == "https://www.notion.so"
+    payload = inference_call.kwargs["json"]
+    assert payload["threadId"] == "resolved-thread"
+    assert payload["threadType"] == "workflow"
+    assert payload["createThread"] is False
+    assert payload["isPartialTranscript"] is True
+    assert payload["createdSource"] == "full_page_chat"
+    assert "supportsCustomAgentNudgeTranscriptStep" not in payload
+    assert "threadParentPointer" not in payload
+    assert "attachments" not in payload
+    assert [step["type"] for step in payload["transcript"]] == [
+        "context",
+        "updated-config",
+        "context",
+        "updated-config",
+        "config",
+        "user",
+    ]
+    config = payload["transcript"][4]["value"]
+    assert config["enableComputer"] is True
+    assert config["enableScriptAgent"] is True
+    assert config["modelFromUser"] is False
+    assert "model" not in config
+    assert "enableRunAgentTool" not in config
+    assert config["enableAgentThreadTools"] is False
+    assert not any(
+        step.get("type") == "computer-file" for step in payload["transcript"]
+    )
+    persisted_file = next(
+        operation["args"]["step"]
+        for operation in persisted_set_operations
+        if operation["args"]["step"]["type"] == "computer-file"
+    )
+    assert persisted_file["contentType"] == "application/x-zip-compressed"
+    assert persisted_file["metadata"] == {
+        "fileSize": 4096,
+        "attachmentSource": "user_upload",
+    }
+    assert sum(step["type"] == "user" for step in payload["transcript"]) == 1
+
+
+def test_zip_descriptor_uses_current_web_identity():
+    import re
+    from app.notion_client import NotionOpusAPI
+
+    client = NotionOpusAPI({"token_v2": "token", "space_id": "space", "user_id": "user"})
+    response = Mock(status_code=200, text="")
+    response.json.return_value = {
+        "fileId": "file-1",
+        "url": "https://upload.invalid",
+        "signedGetUrl": "https://download.invalid",
+        "chatId": "thread-2",
+        "fields": {"key": "value"},
+    }
+    client._scraper = Mock()
+    client._scraper.post.return_value = response
+
+    descriptor = client.request_upload_descriptor(
+        name="source.zip",
+        content_type="application/zip",
+        size=123,
+        thread_id="thread-1",
+        create_thread=True,
+    )
+
+    call = client._scraper.post.call_args
+    assert call.args[0] == "https://www.notion.so/api/v3/getUploadFileUrlForAssistantChatTranscriptUpload"
+    request = call.kwargs["json"]
+    assert re.fullmatch(r"[0-9a-f-]{36}\.zip", request["name"])
+    assert request["contentType"] == "application/x-zip-compressed"
+    assert request["allowUnsupportedTypes"] is True
+    assert request["createThread"] is True
+    headers = call.kwargs["headers"]
+    assert headers["x-notion-active-user-header"] == "user"
+    assert headers["x-notion-space-id"] == "space"
+    assert "notion-audit-log-platform" not in headers
+    assert descriptor["chat_id"] == "thread-2"
+
+
+def test_attachment_task_semantic_error_is_not_success():
+    from app.notion_client import NotionOpusAPI
+
+    client = NotionOpusAPI({"token_v2": "token", "space_id": "space", "user_id": "user"})
+    response = Mock(status_code=200, text="")
+    response.json.return_value = {
+        "results": [
+            {
+                "state": "success",
+                "status": {
+                    "result": {
+                        "type": "success",
+                        "data": {
+                            "code": "UNSUPPORTED_CONTENT_TYPE",
+                            "message": "Unsupported content type",
+                        },
+                    }
+                },
+            }
+        ]
+    }
+    client._scraper = Mock()
+    client._scraper.post.return_value = response
+
+    result = client.get_task_status("task-1")
+
+    assert result["status"] == "failed"
+    assert result["success"] is False
+    assert result["error_code"] == "UNSUPPORTED_CONTENT_TYPE"
+
+
+def test_wait_for_thread_file_mount_retries_until_visible(monkeypatch):
+    from app.notion_client import NotionOpusAPI
+
+    client = NotionOpusAPI(
+        {"token_v2": "token", "space_id": "space-1", "user_id": "user-1"}
+    )
+    first = Mock(status_code=200)
+    first.json.return_value = {
+        "recordMap": {"thread": {"thread-1": {"value": {"value": {"file_ids": []}}}}}
+    }
+    second = Mock(status_code=200)
+    second.json.return_value = {
+        "recordMap": {
+            "thread": {
+                "thread-1": {
+                    "value": {"value": {"file_ids": ["file-1"], "messages": []}}
+                }
+            }
+        }
+    }
+    client._scraper = Mock()
+    client._scraper.post.side_effect = [first, second]
+    monkeypatch.setenv("NOTION_ATTACHMENT_THREAD_READY_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("NOTION_ATTACHMENT_THREAD_READY_POLL_SECONDS", "0.05")
+
+    record = client._wait_for_thread_file_mount("thread-1", ["file-1"])
+
+    assert record["file_ids"] == ["file-1"]
+    assert client._scraper.post.call_count == 2
+
+
+def test_wait_for_thread_file_mount_fails_closed(monkeypatch):
+    import pytest
+    from app.notion_client import NotionOpusAPI, NotionUpstreamError
+
+    client = NotionOpusAPI(
+        {"token_v2": "token", "space_id": "space-1", "user_id": "user-1"}
+    )
+    response = Mock(status_code=200)
+    response.json.return_value = {
+        "recordMap": {"thread": {"thread-1": {"value": {"value": {"file_ids": []}}}}}
+    }
+    client._scraper = Mock()
+    client._scraper.post.return_value = response
+    monkeypatch.setenv("NOTION_ATTACHMENT_THREAD_READY_TIMEOUT_SECONDS", "0")
+
+    with pytest.raises(NotionUpstreamError) as exc_info:
+        client._wait_for_thread_file_mount("thread-1", ["file-1"])
+
+    assert "attachment_thread_not_ready" in exc_info.value.response_excerpt

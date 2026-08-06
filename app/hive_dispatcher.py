@@ -980,6 +980,11 @@ class HiveExecutionDispatcherStore:
                 "Adapter execution requires an ACTIVE worker lease; "
                 f"current status is {lease.status}."
             )
+        if lease.liveness_status in {"EXPIRED", "STALE", "OFFLINE"}:
+            raise HiveTransitionError(
+                "Adapter execution requires a fresh worker lease; "
+                f"current liveness is {lease.liveness_status}."
+            )
         workers = {
             item.worker_id: item
             for item in self.workforce.list_workers(limit=1000).workers

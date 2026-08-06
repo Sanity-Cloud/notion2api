@@ -67,7 +67,7 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 50
+    assert len(names) == 53
     assert "aigentbee_hive_create_mission" in names
     assert "aigentbee_chat" in names
     assert "aigentbee_health" in names
@@ -89,6 +89,9 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     assert "aigentbee_hive_get_materialization" in names
     assert "aigentbee_hive_record_dispatch_receipt" in names
     assert "aigentbee_hive_release_materialization_leases" in names
+    assert "aigentbee_hive_heartbeat_worker_lease" in names
+    assert "aigentbee_hive_reconcile_stale_leases" in names
+    assert "aigentbee_hive_audit_workforce" in names
     assert "aigentbee_hive_upsert_execution_adapter" in names
     assert "aigentbee_hive_list_execution_adapters" in names
     assert "aigentbee_hive_execute_dispatch" in names
@@ -125,7 +128,7 @@ def test_primary_profile_exposes_bare_machine_methods(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 47
+    assert len(names) == 50
     assert "hive_create_mission" in names
     assert "chat" in names
     assert "health" in names
@@ -144,6 +147,9 @@ def test_primary_profile_exposes_bare_machine_methods(monkeypatch):
     assert "hive_get_materialization" in names
     assert "hive_record_dispatch_receipt" in names
     assert "hive_release_materialization_leases" in names
+    assert "hive_heartbeat_worker_lease" in names
+    assert "hive_reconcile_stale_leases" in names
+    assert "hive_audit_workforce" in names
     assert "hive_upsert_execution_adapter" in names
     assert "hive_list_execution_adapters" in names
     assert "hive_execute_dispatch" in names
