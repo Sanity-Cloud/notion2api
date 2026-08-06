@@ -103,3 +103,28 @@ def test_chat_response_schema_preserves_nested_integrity_receipt():
 
     dumped = response.model_dump()
     assert dumped["hygiene"]["output_integrity"]["status"] == "validated"
+
+
+def test_nonsentence_keyword_dump_is_quarantined():
+    text = (
+        "Sanity Cloud AI Portal existing product architecture and governance concepts "
+        "including departments, Oz roles, authority A0-A4, QuickBind, workflow school "
+        "levels, and autonomy maturitySanity Cloud AI Portal governance QuickBind "
+        "authority A0 A4 Oz Hollywood White House Government Militaryall_time##"
+    )
+    receipt = assess_output_integrity(text)
+
+    assert receipt["quarantine_required"] is True
+    assert "nonsentence_keyword_dump" in receipt["reasons"]
+    assert receipt["nonsentence_keyword_dump_detected"] is True
+
+
+def test_normal_prose_with_product_names_is_not_keyword_dump():
+    text = (
+        "Use QuickBind to compose a Mission World packet. Keep authority ceilings "
+        "independent from themed labels, and require a human gate for mission-critical work."
+    )
+    receipt = assess_output_integrity(text)
+
+    assert receipt["quarantine_required"] is False
+    assert "nonsentence_keyword_dump" not in receipt["reasons"]

@@ -458,6 +458,31 @@ def get_standard_model(model_name: str) -> str:
     return DEFAULT_MODEL
 
 
+def get_model_route_resolution(model_name: str) -> dict[str, object]:
+    """Describe logical model selection separately from the concrete Notion route."""
+
+    requested = _normalize_registry_model_name(model_name) or DEFAULT_MODEL
+    configured = requested in MODEL_MAP or requested in NOTION_MODEL_REVERSE_MAP
+    canonical_model = get_standard_model(requested)
+    resolved_model = get_notion_model(requested)
+    public_model = NOTION_MODEL_REVERSE_MAP.get(resolved_model, canonical_model)
+    if not configured:
+        resolution_kind = "default_fallback"
+    elif requested != resolved_model:
+        resolution_kind = "configured_alias"
+    else:
+        resolution_kind = "direct_route"
+    return {
+        "requested_model": requested,
+        "canonical_model": canonical_model,
+        "resolved_model": resolved_model,
+        "public_model": public_model,
+        "display_name": get_display_name(public_model),
+        "resolution_kind": resolution_kind,
+        "is_alias": resolution_kind == "configured_alias",
+    }
+
+
 def list_available_models() -> list[str]:
     """Return one canonical selectable ID per underlying Notion model."""
     return list(EXPOSED_MODEL_IDS)

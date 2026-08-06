@@ -1754,3 +1754,122 @@ def test_terminal_normalization_preserves_upstream_quarantine_receipt():
     assert normalized["response_text"] == ""
     assert normalized["authoritative"] is False
     assert evidence is not None
+
+
+def test_chat_job_poll_preserves_terra_alias_resolution(monkeypatch):
+    alias_resolution = {
+        "requested_model": "terra",
+        "canonical_model": "terra",
+        "resolved_model": "orchid-muffin",
+        "public_model": "gpt-5.6-terra",
+        "display_name": "GPT-5.6 Terra",
+        "resolution_kind": "configured_alias",
+    }
+    job = {
+        "request_id": "terra-request",
+        "job_id": "terra-request",
+        "status": "completed",
+        "model": "terra",
+        "requested_model": "terra",
+        "resolved_model": "orchid-muffin",
+        "alias_resolution": alias_resolution,
+        "model_route_disposition": "alias_resolution",
+        "prompt": "Design the Mission World console.",
+    }
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _rid: job)
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    result = mcp_server._chat_job_output("terra-request")
+
+    assert result.model == "terra"
+    assert result.requested_model == "terra"
+    assert result.resolved_model == "orchid-muffin"
+    assert result.alias_resolution == alias_resolution
+    assert result.model_route_disposition == "alias_resolution"
+    assert result.raw_job["resolved_model"] == "orchid-muffin"
+    assert result.raw_job["prompt"] == "Design the Mission World console."
+
+
+def test_keyword_dump_response_is_quarantined_by_terminal_normalization():
+    text = (
+        "Sanity Cloud AI Portal existing product architecture and governance concepts "
+        "including departments, Oz roles, authority A0-A4, QuickBind, workflow school "
+        "levels, and autonomy maturitySanity Cloud AI Portal governance QuickBind "
+        "authority A0 A4 Oz Hollywood White House Government Militaryall_time##"
+    )
+    normalized, evidence = mcp_server._normalize_terminal_output(
+        {
+            "ok": True,
+            "status_code": 200,
+            "status": "completed",
+            "response_text": text,
+        },
+        source="test",
+    )
+
+    assert normalized["status"] == "indeterminate_output"
+    assert normalized["quarantined"] is True
+    assert normalized["authoritative"] is False
+    assert normalized["response_text"] == ""
+    assert "nonsentence_keyword_dump" in normalized["output_integrity"]["reasons"]
+    assert evidence is not None
+    assert evidence["response"]["response_text"] == text
+
+
+def test_messages_fallback_includes_persisted_job_prompt(monkeypatch, tmp_path):
+    db_path = tmp_path / "conversations.db"
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT, created_at INTEGER, "
+            "summary TEXT, next_round_index INTEGER, compress_failed_at INTEGER, "
+            "thread_id TEXT, thread_model TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id TEXT, role TEXT, "
+            "content TEXT, created_at INTEGER, thinking TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO conversations (id, title, created_at) VALUES (?, ?, ?)",
+            ("mcp-session-1", "session-1", 1),
+        )
+
+    monkeypatch.setattr(mcp_server, "_local_conversation_db_path", lambda: db_path)
+    monkeypatch.setattr(
+        mcp_server,
+        "_resolve_session_conversation_id",
+        lambda session_name=None, conversation_id=None: (
+            "session-1",
+            "mcp-session-1",
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "_load_chat_job_state",
+        lambda: {
+            "jobs": {
+                "job-1": {
+                    "status": "completed",
+                    "session_name": "session-1",
+                    "conversation_id": "mcp-session-1",
+                    "prompt": "Create the Academy page tree.",
+                    "response_text": "Created the Academy outline.",
+                    "updated_at": 20,
+                    "created_at": 10,
+                }
+            }
+        },
+    )
+
+    result = mcp_server._read_local_messages(session_name="session-1", limit=10)
+
+    assert result.ok is True
+    assert result.count == 2
+    assert result.persistence_source == "mcp_job_store"
+    assert result.reconciliation_required is True
+    assert result.messages[0]["role"] == "user"
+    assert result.messages[0]["content"] == "Create the Academy page tree."
+    assert result.messages[1]["role"] == "assistant"
+    assert result.messages[1]["content"] == "Created the Academy outline."

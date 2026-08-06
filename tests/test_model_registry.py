@@ -3,6 +3,7 @@ from pathlib import Path
 from app.model_registry import (
     get_display_name,
     get_model_metadata,
+    get_model_route_resolution,
     get_notion_model,
     get_standard_model,
     get_thread_type,
@@ -218,3 +219,27 @@ def test_legacy_grok_4_5_alias_remains_compatible():
     assert is_supported_model("grok-4.5")
     assert get_notion_model("grok-4.5") == "strawberry-whoopiepie"
     assert get_standard_model("strawberry-whoopiepie") == "spacexai-4.5"
+
+
+def test_terra_route_resolution_is_explicit_alias_not_substitution():
+    resolution = get_model_route_resolution("terra")
+
+    assert resolution == {
+        "requested_model": "terra",
+        "canonical_model": "terra",
+        "resolved_model": "orchid-muffin",
+        "public_model": "gpt-5.6-terra",
+        "display_name": "GPT-5.6 Terra",
+        "resolution_kind": "configured_alias",
+        "is_alias": True,
+    }
+
+
+def test_concrete_terra_route_remains_a_direct_route():
+    resolution = get_model_route_resolution("orchid-muffin")
+
+    assert resolution["requested_model"] == "orchid-muffin"
+    assert resolution["resolved_model"] == "orchid-muffin"
+    assert resolution["public_model"] == "gpt-5.6-terra"
+    assert resolution["resolution_kind"] == "direct_route"
+    assert resolution["is_alias"] is False
