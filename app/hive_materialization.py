@@ -38,10 +38,20 @@ from app.hive_workforce import (
     WorkerStage,
     get_hive_workforce_store,
 )
+from app.hive_workforce_lifecycle import (
+    DEFAULT_LEASE_TTL_SECONDS,
+    GapRecruitmentSnapshot,
+    HiveWorkforceLifecycleStore,
+    LeaseReconciliationSnapshot,
+    RecruitmentMode,
+    WorkforceAuditSnapshot,
+)
+from app.hive_workforce_control_plane import HiveWorkforceControlPlaneStore
 
 
 class MaterializationStatus(str, Enum):
     BLOCKED = "BLOCKED"
+    RECRUITING = "RECRUITING"
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
     PREPARING = "PREPARING"
     MATERIALIZED = "MATERIALIZED"
@@ -52,6 +62,7 @@ class MaterializationStatus(str, Enum):
 
 class LeaseStatus(str, Enum):
     ACTIVE = "ACTIVE"
+    EXPIRED = "EXPIRED"
     RELEASED = "RELEASED"
     REVOKED = "REVOKED"
 
@@ -100,6 +111,14 @@ class HiveWorkerLease(BaseModel):
     writable_domains: list[str] = Field(default_factory=list)
     source_boundary: str = ""
     release_reason: str = ""
+    issued_at: int = 0
+    expires_at: int = 0
+    last_heartbeat_at: int = 0
+    heartbeat_status: str = "UNKNOWN"
+    renewal_count: int = 0
+    liveness_status: str = "UNKNOWN"
+    execution_live: bool = False
+    liveness_evidence: dict[str, Any] = Field(default_factory=dict)
     created_at: int
     updated_at: int
     revision: int
@@ -136,6 +155,8 @@ class HiveMaterializationSnapshot(BaseModel):
     selected_worker_ids: list[str] = Field(default_factory=list)
     missing_competencies: list[str] = Field(default_factory=list)
     missing_writable_domains: list[str] = Field(default_factory=list)
+    recruitment_mode: str = RecruitmentMode.DISABLED.value
+    recruited_worker_ids: list[str] = Field(default_factory=list)
     parent_context_id: str = ""
     lifecycle_stage: str = ""
     mission_id: str = ""
@@ -161,6 +182,8 @@ class HiveMaterializationStore:
         self.workforce = get_hive_workforce_store(self.path)
         self.runtime = get_hive_runtime_store(self.path)
         self._ensure_schema()
+        self.lifecycle = HiveWorkforceLifecycleStore(self.path, self.workforce)
+        self.control_plane = HiveWorkforceControlPlaneStore(self.path, self.workforce)
 
     @staticmethod
     def _now_ms() -> int:
@@ -321,8 +344,13 @@ class HiveMaterializationStore:
         )
         return f"A{rank}"
 
-    @staticmethod
-    def _lease_from_row(row: sqlite3.Row) -> HiveWorkerLease:
+    def _lease_from_row(self, row: sqlite3.Row) -> HiveWorkerLease:
+        liveness_status, execution_live = self.lifecycle.lease_liveness(
+            status=str(row["status"]),
+            expires_at=int(row["expires_at"] or 0),
+            last_heartbeat_at=int(row["last_heartbeat_at"] or 0),
+            heartbeat_status=str(row["heartbeat_status"] or "UNKNOWN"),
+        )
         return HiveWorkerLease(
             lease_id=str(row["lease_id"]),
             plan_id=str(row["plan_id"]),
@@ -334,6 +362,14 @@ class HiveMaterializationStore:
             writable_domains=json.loads(str(row["writable_domains_json"])),
             source_boundary=str(row["source_boundary"]),
             release_reason=str(row["release_reason"]),
+            issued_at=int(row["issued_at"] or row["created_at"]),
+            expires_at=int(row["expires_at"] or 0),
+            last_heartbeat_at=int(row["last_heartbeat_at"] or 0),
+            heartbeat_status=str(row["heartbeat_status"] or "UNKNOWN"),
+            renewal_count=int(row["renewal_count"] or 0),
+            liveness_status=liveness_status,
+            execution_live=execution_live,
+            liveness_evidence=json.loads(str(row["liveness_evidence_json"] or "{}")),
             created_at=int(row["created_at"]),
             updated_at=int(row["updated_at"]),
             revision=int(row["revision"]),
@@ -402,6 +438,8 @@ class HiveMaterializationStore:
             missing_writable_domains=json.loads(
                 str(row["missing_writable_domains_json"])
             ),
+            recruitment_mode=str(row["recruitment_mode"]),
+            recruited_worker_ids=json.loads(str(row["recruited_worker_ids_json"])),
             parent_context_id=str(row["parent_context_id"]),
             lifecycle_stage=str(row["lifecycle_stage"]),
             mission_id=str(row["mission_id"]),
@@ -491,6 +529,8 @@ class HiveMaterializationStore:
         file_types: list[str] | None = None,
         everything_available: bool = True,
         degraded_search_authorized: bool = False,
+        recruitment_mode: str = RecruitmentMode.DISABLED.value,
+        lease_ttl_seconds: int = DEFAULT_LEASE_TTL_SECONDS,
         parent_context_id: str = "",
         lifecycle_stage: str = "Build",
         human_approval: bool = False,
@@ -543,6 +583,12 @@ class HiveMaterializationStore:
             "file_types": self._normalized_list(file_types),
             "everything_available": bool(everything_available),
             "degraded_search_authorized": bool(degraded_search_authorized),
+            "recruitment_mode": RecruitmentMode(
+                str(recruitment_mode or RecruitmentMode.REQUISITION_ONLY.value).strip().lower()
+            ).value,
+            "lease_ttl_seconds": self.lifecycle._bounded_seconds(
+                lease_ttl_seconds, default=DEFAULT_LEASE_TTL_SECONDS
+            ),
             "parent_context_id": str(parent_context_id or "").strip(),
             "lifecycle_stage": self._required(lifecycle_stage, "lifecycle_stage"),
             "mission_id": mission_key,
@@ -583,6 +629,10 @@ class HiveMaterializationStore:
                 return self._complete_materialization(replay_plan_id, actor=actor)
             return replay
 
+        self.lifecycle.reconcile_stale_leases(
+            actor="notion2api automatic lease reconciliation",
+            dry_run=False,
+        )
         plan = self.workforce.plan_invocation(
             objective=request["objective"],
             required_competencies=request["required_competencies"],
@@ -601,6 +651,93 @@ class HiveMaterializationStore:
             everything_available=request["everything_available"],
             degraded_search_authorized=request["degraded_search_authorized"],
         )
+        recruitment = GapRecruitmentSnapshot(
+            mode=request["recruitment_mode"], plan_id=plan_key
+        )
+        recruited_worker_ids: list[str] = []
+        if (
+            request["recruitment_mode"] != RecruitmentMode.DISABLED.value
+            and (plan.missing_competencies or plan.missing_writable_domains)
+        ):
+            urgency = (
+                "CRITICAL"
+                if request["risk_level"] == "critical"
+                else "HIGH"
+                if request["risk_level"] == "high"
+                else "NORMAL"
+            )
+            requisition_id = self.control_plane.open_requisition(
+                plan_id=plan_key,
+                objective=request["objective"],
+                requested_competencies=plan.missing_competencies,
+                requested_writable_domains=plan.missing_writable_domains,
+                urgency=urgency,
+            )
+            reviewer_missing = bool(
+                request["independent_review_required"]
+                and not any(
+                    worker.worker_class == WorkerClass.GOVERNANCE_REVIEWER.value
+                    for worker in plan.selected_workers
+                )
+            )
+            policy = self.control_plane.get_policy()
+            required_new_workers = 1 + int(reviewer_missing)
+            current_worker_count = self.workforce.list_workers(limit=1000).count
+            if current_worker_count + required_new_workers > policy.max_workers:
+                recruitment = GapRecruitmentSnapshot(
+                    ok=False,
+                    mode=request["recruitment_mode"],
+                    plan_id=plan_key,
+                    status="WORKER_LIMIT_REACHED",
+                    requested_competencies=list(plan.missing_competencies),
+                    requested_writable_domains=list(plan.missing_writable_domains),
+                    error=(
+                        f"Recruitment would exceed policy worker limit {policy.max_workers}; "
+                        f"current registry count is {current_worker_count}."
+                    ),
+                )
+            else:
+                recruitment = self.lifecycle.recruit_gaps(
+                    plan_id=plan_key,
+                    objective=request["objective"],
+                    missing_competencies=plan.missing_competencies,
+                    missing_writable_domains=plan.missing_writable_domains,
+                    requested_authority=plan.requested_authority,
+                    actor=actor,
+                    mode=request["recruitment_mode"],
+                    reviewer_missing=reviewer_missing,
+                    human_approval=human_approval,
+                    governance_authorization=governance_authorization,
+                )
+            self.control_plane.record_recruitment_result(
+                requisition_id=requisition_id,
+                result=recruitment,
+                requested_authority=plan.requested_authority,
+            )
+            recruited_worker_ids = list(recruitment.recruited_worker_ids)
+            if recruitment.appointed_worker_ids:
+                preferred_workers = sorted(
+                    set(request["preferred_worker_ids"])
+                    | set(recruitment.appointed_worker_ids)
+                )
+                plan = self.workforce.plan_invocation(
+                    objective=request["objective"],
+                    required_competencies=request["required_competencies"],
+                    writable_domains=request["writable_domains"],
+                    dependency_count=request["dependency_count"],
+                    parallelizable_workstreams=request["parallelizable_workstreams"],
+                    risk_level=request["risk_level"],
+                    authority_ceiling=request["authority_ceiling"],
+                    independent_review_required=request["independent_review_required"],
+                    external_effects=request["external_effects"],
+                    preferred_worker_ids=preferred_workers,
+                    file_operation_intent=request["file_operation_intent"],
+                    file_search_text=request["file_search_text"],
+                    file_search_roots=request["file_search_roots"],
+                    file_types=request["file_types"],
+                    everything_available=request["everything_available"],
+                    degraded_search_authorized=request["degraded_search_authorized"],
+                )
         selected_ids = [item.worker_id for item in plan.selected_workers]
         blocked = bool(
             plan.missing_competencies
@@ -621,7 +758,15 @@ class HiveMaterializationStore:
                 )
             except GovernedAuthorizationError as exc:
                 authorization_error = str(exc)
-        if blocked:
+        recruiting = bool(
+            blocked
+            and recruited_worker_ids
+            and not recruitment.appointed_worker_ids
+            and recruitment.ok
+        )
+        if recruiting:
+            status = MaterializationStatus.RECRUITING.value
+        elif blocked:
             status = MaterializationStatus.BLOCKED.value
         elif plan.governance_gate_required and not authorization_receipt:
             status = MaterializationStatus.AWAITING_APPROVAL.value
@@ -640,6 +785,7 @@ class HiveMaterializationStore:
                     selected_worker_ids_json,
                     missing_competencies_json,
                     missing_writable_domains_json,
+                    recruitment_mode, recruited_worker_ids_json,
                     plan_json, request_json, parent_context_id,
                     lifecycle_stage, mission_id,
                     human_gate_required, human_approval, approved_by,
@@ -647,7 +793,7 @@ class HiveMaterializationStore:
                     created_at, updated_at, revision
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, 1
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, 1
                 )
                 """,
                 (
@@ -662,6 +808,8 @@ class HiveMaterializationStore:
                     self._json(selected_ids),
                     self._json(plan.missing_competencies),
                     self._json(plan.missing_writable_domains),
+                    request["recruitment_mode"],
+                    self._json(recruited_worker_ids),
                     self._json(plan.model_dump(mode="json")),
                     self._json(request),
                     request["parent_context_id"],
@@ -689,6 +837,7 @@ class HiveMaterializationStore:
                     "selected_worker_ids": selected_ids,
                     "missing_competencies": plan.missing_competencies,
                     "missing_writable_domains": plan.missing_writable_domains,
+                    "recruitment": recruitment.model_dump(mode="json"),
                     "authorization": authorization_receipt,
                     "authorization_error": authorization_error,
                 },
@@ -911,8 +1060,11 @@ class HiveMaterializationStore:
                         lease_id, plan_id, mission_id, work_unit_id,
                         worker_id, status, authority_ceiling,
                         writable_domains_json, source_boundary,
-                        release_reason, created_at, updated_at, revision
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 1)
+                        release_reason, issued_at, expires_at,
+                        last_heartbeat_at, heartbeat_status, renewal_count,
+                        liveness_evidence_json, created_at, updated_at, revision
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 0,
+                              'UNKNOWN', 0, '{}', ?, ?, 1)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -924,6 +1076,8 @@ class HiveMaterializationStore:
                         lane["authority"],
                         self._json(lane["lease_domains"]),
                         worker.source_boundary,
+                        now,
+                        now + int(request["lease_ttl_seconds"]) * 1000,
                         now,
                         now,
                     ),
@@ -1156,6 +1310,28 @@ class HiveMaterializationStore:
                     work_unit_id,
                 ),
             )
+            if target == DispatchStatus.ACKNOWLEDGED.value:
+                heartbeat_expiry = now + 60 * 60 * 1000
+                conn.execute(
+                    """
+                    UPDATE hive_worker_leases
+                    SET last_heartbeat_at = ?, heartbeat_status = 'RUNNING',
+                        expires_at = MAX(expires_at, ?),
+                        renewal_count = renewal_count + 1,
+                        liveness_evidence_json = ?, updated_at = ?,
+                        revision = revision + 1
+                    WHERE plan_id = ? AND work_unit_id = ? AND status = ?
+                    """,
+                    (
+                        now,
+                        heartbeat_expiry,
+                        self._json(request["evidence"]),
+                        now,
+                        plan_id,
+                        work_unit_id,
+                        LeaseStatus.ACTIVE.value,
+                    ),
+                )
             self._event(
                 conn,
                 plan_id=plan_id,
@@ -1212,6 +1388,24 @@ class HiveMaterializationStore:
                     },
                 )
             return self._snapshot(conn, plan_id)
+
+    def record_lease_heartbeat(
+        self,
+        **kwargs: Any,
+    ) -> LeaseReconciliationSnapshot:
+        return self.lifecycle.record_lease_heartbeat(**kwargs)
+
+    def reconcile_stale_leases(
+        self,
+        **kwargs: Any,
+    ) -> LeaseReconciliationSnapshot:
+        return self.lifecycle.reconcile_stale_leases(**kwargs)
+
+    def audit_workforce(
+        self,
+        **kwargs: Any,
+    ) -> WorkforceAuditSnapshot:
+        return self.lifecycle.audit_workforce(**kwargs)
 
     def release_leases(
         self,

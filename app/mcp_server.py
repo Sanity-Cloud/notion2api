@@ -63,6 +63,11 @@ from app.hive_workforce import (
     WorkforceSnapshot,
     get_hive_workforce_store,
 )
+from app.hive_workforce_lifecycle import (
+    LeaseReconciliationSnapshot,
+    RecruitmentMode,
+    WorkforceAuditSnapshot,
+)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
@@ -4993,6 +4998,8 @@ def create_server(
         file_types: list[str] | None = None,
         everything_available: bool = True,
         degraded_search_authorized: bool = False,
+        recruitment_mode: str = RecruitmentMode.DISABLED.value,
+        lease_ttl_seconds: int = 24 * 60 * 60,
         parent_context_id: str = "",
         lifecycle_stage: str = "Build",
         human_approval: bool = False,
@@ -5020,6 +5027,8 @@ def create_server(
                 file_types=file_types,
                 everything_available=everything_available,
                 degraded_search_authorized=degraded_search_authorized,
+                recruitment_mode=recruitment_mode,
+                lease_ttl_seconds=lease_ttl_seconds,
                 parent_context_id=parent_context_id,
                 lifecycle_stage=lifecycle_stage,
                 human_approval=human_approval,
@@ -5111,6 +5120,144 @@ def create_server(
             )
         except (HiveRuntimeError, ValueError) as exc:
             return _materialization_error_snapshot(exc, plan_id)
+
+
+    def _lease_reconciliation_error_snapshot(
+        exc: Exception,
+        *,
+        dry_run: bool,
+    ) -> LeaseReconciliationSnapshot:
+        return LeaseReconciliationSnapshot(
+            ok=False,
+            db_path=str(default_hive_runtime_db_path()),
+            dry_run=dry_run,
+            error=str(exc),
+        )
+
+    def _workforce_audit_error_snapshot(
+        exc: Exception,
+        *,
+        dry_run: bool,
+    ) -> WorkforceAuditSnapshot:
+        return WorkforceAuditSnapshot(
+            ok=False,
+            db_path=str(default_hive_runtime_db_path()),
+            dry_run=dry_run,
+            error=str(exc),
+        )
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_heartbeat_worker_lease"),
+        description=_tool_description(
+            "Record bounded execution-liveness evidence for one ACTIVE worker lease and "
+            "renew its expiry without granting additional authority or writable domains."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_heartbeat_worker_lease(
+        lease_id: str,
+        actor: str,
+        heartbeat_status: str = "RUNNING",
+        extend_seconds: int = 60 * 60,
+        evidence: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> LeaseReconciliationSnapshot:
+        try:
+            return get_hive_materialization_store().record_lease_heartbeat(
+                lease_id=lease_id,
+                actor=actor,
+                heartbeat_status=heartbeat_status,
+                extend_seconds=extend_seconds,
+                evidence=evidence,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _lease_reconciliation_error_snapshot(exc, dry_run=False)
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_reconcile_stale_leases"),
+        description=_tool_description(
+            "Inspect or reconcile objectively stale Hive worker leases using expiry and "
+            "heartbeat freshness. Dry-run is the default. Applying expiry is local and "
+            "audited; revocation requires governed A2 authorization."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_reconcile_stale_leases(
+        actor: str,
+        plan_id: str = "",
+        dry_run: bool = True,
+        heartbeat_stale_after_seconds: int = 30 * 60,
+        no_heartbeat_grace_seconds: int = 6 * 60 * 60,
+        revoke: bool = False,
+        human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> LeaseReconciliationSnapshot:
+        try:
+            return get_hive_materialization_store().reconcile_stale_leases(
+                actor=actor,
+                plan_id=plan_id,
+                dry_run=dry_run,
+                heartbeat_stale_after_seconds=heartbeat_stale_after_seconds,
+                no_heartbeat_grace_seconds=no_heartbeat_grace_seconds,
+                revoke=revoke,
+                human_approval=human_approval,
+                governance_authorization=governance_authorization,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _lease_reconciliation_error_snapshot(exc, dry_run=dry_run)
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_audit_workforce"),
+        description=_tool_description(
+            "Audit Hive requisitions and appointments for placeholders, abandoned "
+            "requisitions, stale suspensions, chronic inactivity, and duplicates. "
+            "Dry-run is the default; applying offboarding requires governed authorization "
+            "and protects leaders and reviewers unless A3 protected-role scope is explicit."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_audit_workforce(
+        actor: str,
+        dry_run: bool = True,
+        stale_after_days: int = 30,
+        include_protected: bool = False,
+        human_approval: bool = False,
+        governance_authorization: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> WorkforceAuditSnapshot:
+        try:
+            return get_hive_materialization_store().audit_workforce(
+                actor=actor,
+                dry_run=dry_run,
+                stale_after_days=stale_after_days,
+                include_protected=include_protected,
+                human_approval=human_approval,
+                governance_authorization=governance_authorization,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _workforce_audit_error_snapshot(exc, dry_run=dry_run)
 
 
     def _adapter_error_snapshot(exc: Exception) -> HiveAdapterSnapshot:

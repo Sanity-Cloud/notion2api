@@ -9,9 +9,11 @@ The implementation is intentionally limited to:
 - recording worker requisitions and lifecycle transitions;
 - listing the current workforce registry;
 - planning whether a request should use one agent or a multi-lane Hive;
-- identifying capability, writable-domain, and authority gaps.
+- identifying capability, writable-domain, and authority gaps;
+- optionally creating deterministic gap-coverage requisitions;
+- recording worker execution heartbeats, lease expiry, and workforce-audit evidence.
 
-It does not automatically spawn workers, grant credentials, change access, publish content, spend funds, or execute external effects.
+Recruitment is disabled by default. `requisition_only` creates no execution authority, while `auto_appoint` must pass the existing governance authorization before a worker can advance through shadow, probation, and appointment. No mode grants credentials, changes access, publishes content, spends funds, or executes external effects.
 
 ## Worker classes
 
@@ -36,7 +38,7 @@ APPOINTED     -> SUSPENDED | OFFBOARDED
 SUSPENDED     -> PROBATION | APPOINTED | OFFBOARDED
 ```
 
-`REJECTED` and `OFFBOARDED` are terminal. Moving into `PROBATION` or `APPOINTED` requires `human_approval=true`. Revision checks and idempotency keys prevent stale or duplicated lifecycle changes.
+`REJECTED` and `OFFBOARDED` are terminal. Moving into `PROBATION` or `APPOINTED` requires a governed authorization receipt; `human_approval=true` remains accepted only as the compatibility path. Revision checks and idempotency keys prevent stale or duplicated lifecycle changes.
 
 A worker record is not a credential grant. Credentialing and account access remain separate governed actions.
 
@@ -87,6 +89,9 @@ Primary Notion2API exposes bare names. The dedicated AIgentBee profile exposes t
 - `hive_transition_worker`
 - `hive_list_workers`
 - `hive_plan_invocation`
+- `hive_heartbeat_worker_lease`
+- `hive_reconcile_stale_leases`
+- `hive_audit_workforce`
 
 Existing mission operations remain unchanged:
 
@@ -96,12 +101,12 @@ Existing mission operations remain unchanged:
 - `hive_cancel`
 - `hive_fan_in`
 
-## Phase 1 limitations
+## Remaining boundaries
 
-This phase does not yet:
+The workforce lifecycle still does not:
 
-- automatically create a mission from an invocation plan;
-- bind selected workers to new conversations;
+- grant credentials or connector access through recruitment;
+- infer production deployment or publication authority from an appointment;
 - maintain performance scores or promotion evidence summaries;
 - enforce worker selection inside every connector;
 - automate suspension after policy violations;

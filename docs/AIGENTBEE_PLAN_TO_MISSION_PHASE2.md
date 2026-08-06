@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Phase 2 converts a Phase 1 invocation plan into a durable, governed Hive mission. It does not create workers, grant credentials, elevate authority, or execute external actions by itself.
+Phase 2 converts a Phase 1 invocation plan into a durable, governed Hive mission. Missing coverage remains blocked by default. An explicit recruitment mode may create bounded requisitions, and governed `auto_appoint` may advance a deterministic gap worker through the existing lifecycle gate. It never grants credentials, exceeds the requested authority, or executes external actions by itself.
 
 The materialization boundary is fail-closed. A mission is created only when:
 
@@ -28,6 +28,7 @@ The existing Hive runtime schema version remains unchanged. Mission, work-unit, 
 
 ```text
 BLOCKED
+RECRUITING
 AWAITING_APPROVAL
 PREPARING
 MATERIALIZED
@@ -47,9 +48,10 @@ Each materialized lane receives a lease containing:
 - the bounded authority ceiling;
 - the intersected writable domains;
 - the worker's source boundary;
-- an active, released, or revoked state.
+- an active, expired, released, or revoked state;
+- issuance, expiry, heartbeat, renewal, and bounded liveness evidence.
 
-A lane authority is never higher than either the requested mission authority or the worker's appointment ceiling.
+`ACTIVE` records assignment state, not proven execution. Fresh heartbeats separately establish `LIVE` execution. A lane authority is never higher than either the requested mission authority or the worker's appointment ceiling.
 
 ## Conversation and dispatch bindings
 
@@ -90,6 +92,9 @@ aigentbee_hive_approve_materialization
 aigentbee_hive_get_materialization
 aigentbee_hive_record_dispatch_receipt
 aigentbee_hive_release_materialization_leases
+aigentbee_hive_heartbeat_worker_lease
+aigentbee_hive_reconcile_stale_leases
+aigentbee_hive_audit_workforce
 ```
 
 Primary Notion2API exposes the same operations without the `aigentbee_` prefix.
@@ -99,7 +104,7 @@ Primary Notion2API exposes the same operations without the `aigentbee_` prefix.
 Phase 2 does not:
 
 - provision or rotate credentials;
-- automatically appoint workers;
+- appoint workers without an explicit recruitment mode and governed lifecycle authorization;
 - invoke arbitrary tools from a lease;
 - bypass connector authorization;
 - publish externally;
@@ -109,4 +114,4 @@ Phase 2 does not:
 
 ## Next gate
 
-Phase 3 may add a guarded dispatcher that consumes `READY` receipts, calls an explicitly authorized execution adapter, records acknowledgements and terminal evidence, and preserves provider-specific cancellation and timeout semantics.
+Phase 3's guarded dispatcher additionally requires non-stale lease liveness. Workforce lifecycle details are governed by `AIGENTBEE_WORKFORCE_LIFECYCLE_GAP_CLOSURE.md`.
