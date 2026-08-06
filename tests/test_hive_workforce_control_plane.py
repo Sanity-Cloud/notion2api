@@ -40,7 +40,11 @@ def test_requisition_only_populates_portal_control_plane(tmp_path):
         plan_id="portal-gap-plan",
         mission_id="portal-gap-mission",
         idempotency_key="portal-gap-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
 
     assert materialized.status == "RECRUITING"
     assert len(materialized.recruited_worker_ids) == 1
@@ -81,7 +85,11 @@ def test_enabled_policy_processes_candidate_and_records_appointment(tmp_path):
         plan_id="queued-appointment-plan",
         mission_id="queued-appointment-mission",
         idempotency_key="queued-appointment-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     worker_id = materialized.recruited_worker_ids[0]
 
     current = store.control_plane.get_policy()
@@ -145,7 +153,11 @@ def test_lease_monitor_and_governor_cleanup_are_backend_owned(tmp_path):
         plan_id="stale-lease-plan",
         mission_id="stale-lease-mission",
         idempotency_key="stale-lease-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert materialized.status == "MATERIALIZED"
     lease = materialized.leases[0]
 
@@ -223,7 +235,11 @@ def test_worker_limit_blocks_new_recruitment_and_records_outcome(tmp_path):
         plan_id="worker-limit-plan",
         mission_id="worker-limit-mission",
         idempotency_key="worker-limit-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
 
     assert result.status == "BLOCKED"
     assert result.recruited_worker_ids == []
@@ -245,7 +261,11 @@ def test_governor_lane_failure_does_not_suppress_cleanup_or_audit(tmp_path):
         plan_id="governor-isolation-plan",
         mission_id="governor-isolation-mission",
         idempotency_key="governor-isolation-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     lease = materialized.leases[0]
     with sqlite3.connect(store.path) as conn:
         conn.execute(

@@ -67,7 +67,7 @@ def test_registry_coexists_with_hive_runtime_schema(tmp_path):
     assert created.count == 1
     assert created.workers[0].stage == "REQUISITIONED"
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
         tables = {
             row[0]
             for row in conn.execute(

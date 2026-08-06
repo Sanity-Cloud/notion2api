@@ -42,7 +42,11 @@ def _create(store: HiveRuntimeStore, mission_id: str = "m1"):
                 dependencies=[f"{mission_id}-scout"],
             ),
         ],
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
 
 
 def test_mission_round_trip_includes_actions_and_bindings(tmp_path):
@@ -78,7 +82,11 @@ def test_create_idempotency_dedupes_and_conflicting_reuse_fails(tmp_path):
             lifecycle_stage="Build",
             mission_id="m2",
             idempotency_key="create-m1",
-        )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
 
 
 def test_concurrent_create_replay_produces_one_mission(tmp_path):

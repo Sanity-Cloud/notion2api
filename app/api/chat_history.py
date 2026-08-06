@@ -16,6 +16,7 @@ from fastapi.responses import PlainTextResponse
 from app.account_scope import AccountScope
 from app.chat_history.har_importer import import_har_object
 from app.chat_history.notion_sync import hydrate_thread_from_notion, sync_chat_history_from_notion
+from app.chat_history.migrate import migrate_shared_chat_history
 from app.chat_history.store import (
     ChatHistoryStore,
     get_chat_history_db_root,
@@ -582,8 +583,38 @@ async def sync_from_notion(request: Request) -> dict[str, Any]:
 
 
 @router.get("/model-stats")
-def model_stats() -> dict[str, Any]:
-    return _store().model_response_stats()
+def model_stats(
+    request: Request,
+    account_index: int | None = Query(None, ge=0),
+    account_profile: str | None = Query(None),
+) -> dict[str, Any]:
+    client = _require_account_client(
+        request, account_index=account_index, account_profile=account_profile
+    )
+    scope, store = _account_store(client)
+    stats = store.model_response_stats()
+    return {
+        "account_key": scope.account_key,
+        "account_profile": scope.profile_name,
+        "db_path": store.db_path,
+        **(stats if isinstance(stats, dict) else {"stats": stats}),
+    }
+
+
+@router.post("/migrate/accounts")
+async def migrate_account_shards(request: Request) -> dict[str, Any]:
+    """One-time partition of the shared chat_history.db into account shards."""
+    payload = await _request_payload(request)
+    known = payload.get("known_thread_accounts") or {}
+    if known is not None and not isinstance(known, dict):
+        raise HTTPException(status_code=400, detail="known_thread_accounts must be an object")
+    result = migrate_shared_chat_history(
+        source_db=payload.get("source_db") or None,
+        known_thread_accounts={str(k): str(v) for k, v in dict(known or {}).items()},
+        dry_run=_bool_payload(payload.get("dry_run"), default=False),
+        keep_source=not _bool_payload(payload.get("move_source"), default=False),
+    )
+    return result.as_dict()
 
 
 @router.get("/threads")
@@ -724,11 +755,25 @@ async def post_delete_threads(request: Request) -> dict[str, Any]:
 
 
 @router.get("/threads/{thread_id}")
-def get_thread(thread_id: str) -> dict[str, Any]:
-    thread = _store().get_thread(thread_id)
+def get_thread(
+    thread_id: str,
+    request: Request,
+    account_index: int | None = Query(None, ge=0),
+    account_profile: str | None = Query(None),
+) -> dict[str, Any]:
+    client = _require_account_client(
+        request, account_index=account_index, account_profile=account_profile
+    )
+    scope, store = _account_store(client)
+    thread = store.get_thread(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
-    return thread
+    return {
+        **thread,
+        "account_key": scope.account_key,
+        "account_profile": scope.profile_name,
+        "db_path": store.db_path,
+    }
 
 
 @router.post("/threads/{thread_id}/hydrate")
@@ -806,12 +851,27 @@ async def resume_thread(thread_id: str, request: Request) -> dict[str, Any]:
     if mode not in {"fork", "continue"}:
         raise HTTPException(status_code=400, detail="mode must be either 'fork' or 'continue'")
 
-    thread = _store().get_thread(thread_id)
+    account_index = payload.get("account_index")
+    account_profile = payload.get("account_profile") or payload.get("profile_name")
+    try:
+        if account_index is not None:
+            account_index = int(account_index)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid resume parameters") from exc
+    client = _require_account_client(
+        request, account_index=account_index, account_profile=account_profile
+    )
+    scope, store = _account_store(client)
+    thread = store.get_thread(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
     manager = request.app.state.conversation_manager
-    conversation_id = manager.new_conversation()
+    conversation_id = manager.new_conversation(
+        workspace_id=scope.workspace_id,
+        user_id=scope.user_id,
+        profile_name=scope.profile_name,
+    )
 
     if mode == "continue":
         manager.set_conversation_thread_id(conversation_id, thread_id)
@@ -828,6 +888,9 @@ async def resume_thread(thread_id: str, request: Request) -> dict[str, Any]:
         seeded_messages.append({"role": role, "content": content})
 
     return {
+        "account_key": scope.account_key,
+        "account_profile": scope.profile_name,
+        "db_path": store.db_path,
         "conversation_id": conversation_id,
         "mode": mode,
         "thread_id": thread_id,
@@ -838,21 +901,60 @@ async def resume_thread(thread_id: str, request: Request) -> dict[str, Any]:
 
 
 @router.get("/threads/{thread_id}/debug")
-def debug_thread(thread_id: str) -> dict[str, Any]:
-    return _store().debug_thread(thread_id)
+def debug_thread(
+    thread_id: str,
+    request: Request,
+    account_index: int | None = Query(None, ge=0),
+    account_profile: str | None = Query(None),
+) -> dict[str, Any]:
+    client = _require_account_client(
+        request, account_index=account_index, account_profile=account_profile
+    )
+    scope, store = _account_store(client)
+    payload = store.debug_thread(thread_id)
+    return {
+        "account_key": scope.account_key,
+        "account_profile": scope.profile_name,
+        "db_path": store.db_path,
+        **(payload if isinstance(payload, dict) else {"debug": payload}),
+    }
 
 
 @router.get("/threads/{thread_id}/markdown", response_class=PlainTextResponse)
-def export_markdown(thread_id: str) -> str:
-    markdown = _store().thread_to_markdown(thread_id)
+def export_markdown(
+    thread_id: str,
+    request: Request,
+    account_index: int | None = Query(None, ge=0),
+    account_profile: str | None = Query(None),
+) -> str:
+    client = _require_account_client(
+        request, account_index=account_index, account_profile=account_profile
+    )
+    _scope, store = _account_store(client)
+    markdown = store.thread_to_markdown(thread_id)
     if markdown is None:
         raise HTTPException(status_code=404, detail="Thread not found")
     return markdown
 
 
 @router.get("/search")
-def search(q: str = Query(..., min_length=1), limit: int = Query(25, ge=1, le=100)) -> dict[str, Any]:
+def search(
+    request: Request,
+    q: str = Query(..., min_length=1),
+    limit: int = Query(25, ge=1, le=100),
+    account_index: int | None = Query(None, ge=0),
+    account_profile: str | None = Query(None),
+) -> dict[str, Any]:
+    client = _require_account_client(
+        request, account_index=account_index, account_profile=account_profile
+    )
+    scope, store = _account_store(client)
     try:
-        return {"results": _store().search(q, limit=limit)}
+        return {
+            "account_key": scope.account_key,
+            "account_profile": scope.profile_name,
+            "db_path": store.db_path,
+            "results": store.search(q, limit=limit),
+        }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

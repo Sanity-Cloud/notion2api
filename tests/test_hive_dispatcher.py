@@ -107,7 +107,11 @@ def _materialize_one(
         plan_id=plan_id,
         mission_id=f"mission-{plan_id}",
         idempotency_key=f"materialize-{plan_id}",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
 
 
 def _enable(
@@ -144,7 +148,11 @@ def test_schema_is_additive_and_builtin_adapters_start_disabled(tmp_path):
         objective="Preserve existing state.",
         lifecycle_stage="Pilot",
         mission_id="existing-phase3-mission",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     with sqlite3.connect(path) as conn:
         before_version = conn.execute("PRAGMA user_version").fetchone()[0]
     dispatcher = HiveExecutionDispatcherStore(path)
@@ -155,7 +163,7 @@ def test_schema_is_additive_and_builtin_adapters_start_disabled(tmp_path):
         }
         after_version = conn.execute("PRAGMA user_version").fetchone()[0]
         mission_count = conn.execute("SELECT COUNT(*) FROM hive_missions").fetchone()[0]
-    assert before_version == after_version == 1
+    assert before_version == after_version == 2
     assert mission_count == 1
     assert {
         "hive_execution_adapters",

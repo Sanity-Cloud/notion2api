@@ -508,7 +508,9 @@ class NotionAdmissionController:
 
     @property
     def max_account_inflight(self) -> int:
-        return _env_int("NOTION_ADMISSION_ACCOUNT_MAX_INFLIGHT", 1, minimum=1)
+        # Default raised for multi-bee fleets per account; thread_key still
+        # enforces one in-flight Notion operation per conversation/thread.
+        return _env_int("NOTION_ADMISSION_ACCOUNT_MAX_INFLIGHT", 4, minimum=1)
 
     @property
     def queue_timeout(self) -> float:

@@ -12,6 +12,9 @@ from app.account_scope import AccountScopeError, safe_account_key
 from app.chat_history.extractor import describe_thread_record, visible_message_role, visible_message_text
 from app.model_registry import NOTION_MODEL_REVERSE_MAP
 
+LEGACY_ACCOUNT_KEY = "legacy"
+
+
 DDL = """
 CREATE TABLE IF NOT EXISTS chat_history_meta (
   key TEXT PRIMARY KEY,
@@ -85,14 +88,20 @@ def get_account_chat_history_db_path(account_key: str) -> str:
     return os.path.join(get_chat_history_db_root(), f"{safe_account_key(key)}.db")
 
 
+def get_legacy_chat_history_db_path() -> str:
+    """Path of the pre-partition monolithic archive (migration source)."""
+    explicit = os.getenv("CHAT_HISTORY_DB_PATH")
+    if explicit:
+        return os.path.abspath(explicit)
+    base = os.getenv("DB_PATH", "./data/conversations.db")
+    return os.path.join(os.path.dirname(os.path.abspath(base)), "chat_history.db")
+
+
 def get_default_chat_history_db_path(account_key: str | None = None) -> str:
     if account_key:
         return get_account_chat_history_db_path(account_key)
-    explicit = os.getenv("CHAT_HISTORY_DB_PATH")
-    if explicit:
-        return explicit
-    base = os.getenv("DB_PATH", "./data/conversations.db")
-    return os.path.join(os.path.dirname(os.path.abspath(base)), "chat_history.db")
+    # Unscoped accessor remains the legacy monolith for migration/compat only.
+    return get_legacy_chat_history_db_path()
 
 
 def _quote_fts_phrase(query: str) -> str:
