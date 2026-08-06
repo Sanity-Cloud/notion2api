@@ -7,6 +7,13 @@ import uuid
 
 from app.logger import logger
 from app.model_restriction_cache import ModelRestrictionCache
+from app.model_catalog import (
+    CatalogEnvelope,
+    ModelCatalogService,
+    ModelSelectionError,
+    model_by_id,
+    resolve_reasoning_effort,
+)
 
 
 
@@ -32,13 +39,17 @@ MODEL_MAP: dict[str, str] = {
     "claude-opus-4.8": "ambrosia-tart-high",
     "opus-4.8": "ambrosia-tart-high",
     "opus4.8": "ambrosia-tart-high",
+    "claude-opus5": "agave-flan",
+    "claude-opus-5": "agave-flan",
+    "opus-5": "agave-flan",
+    "opus5": "agave-flan",
     "claude-haiku4.5": "anthropic-haiku-4.5",
     "haiku-4.5": "anthropic-haiku-4.5",
     "haiku4.5": "anthropic-haiku-4.5",
-    "claude-fable5": "acai-budino",
-    "claude-fable-5": "acai-budino",
-    "fable-5": "acai-budino",
-    "fable5": "acai-budino",
+    "claude-fable5": "acai-budino-high",
+    "claude-fable-5": "acai-budino-high",
+    "fable-5": "acai-budino-high",
+    "fable5": "acai-budino-high",
     "claude-fable5-high": "acai-budino-high",
     "claude-fable-5-high": "acai-budino-high",
     "fable5-high": "acai-budino-high",
@@ -84,6 +95,8 @@ MODEL_MAP: dict[str, str] = {
     "kimi-2.7-code": "fireworks-kimi-k2.7",
     "kimi-k2.7": "fireworks-kimi-k2.7",
     "kimi-k2.7-code": "fireworks-kimi-k2.7",
+    "kimi-3": "fireworks-kimi-k3",
+    "kimi-k3": "fireworks-kimi-k3",
     "deepseek-v4pro": "baseten-deepseek-v4-pro",
     "glm-5.2": "baseten-glm-5.2",
 
@@ -108,11 +121,13 @@ MODEL_MAP: dict[str, str] = {
     "avocado-froyo-medium": "avocado-froyo-medium",
     "apricot-sorbet-high": "apricot-sorbet-high",
     "ambrosia-tart-high": "ambrosia-tart-high",
+    "agave-flan": "agave-flan",
     "oregon-grape-medium": "oregon-grape-medium",
     "otaheite-apple-medium": "otaheite-apple-medium",
     "fireworks-minimax-m2.5": "fireworks-minimax-m2.5",
     "fireworks-kimi-k2.6": "fireworks-kimi-k2.6",
     "fireworks-kimi-k2.7": "fireworks-kimi-k2.7",
+    "fireworks-kimi-k3": "fireworks-kimi-k3",
     "baseten-deepseek-v4-pro": "baseten-deepseek-v4-pro",
     "baseten-glm-5.2": "baseten-glm-5.2",
     "xigua-mochi-medium": "xigua-mochi-medium",
@@ -121,7 +136,7 @@ MODEL_MAP: dict[str, str] = {
     "galette-medium-thinking": "galette-medium-thinking",
     "anthropic-haiku-4.5": "anthropic-haiku-4.5",
     "gingerbread": "gingerbread",
-    "acai-budino": "acai-budino",
+    "acai-budino": "acai-budino-high",
     "acai-budino-high": "acai-budino-high",
 }
 
@@ -132,9 +147,9 @@ NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
     "avocado-froyo-medium": "claude-opus4.6",
     "apricot-sorbet-high": "claude-opus4.7",
     "ambrosia-tart-high": "claude-opus4.8",
+    "agave-flan": "claude-opus5",
     "anthropic-haiku-4.5": "claude-haiku4.5",
-    "acai-budino": "claude-fable5",
-    "acai-budino-high": "claude-fable5-high",
+    "acai-budino-high": "claude-fable5",
 
     # OpenAI
     "orange-mousse": "gpt-5.6-sol",
@@ -161,6 +176,7 @@ NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
     "fireworks-minimax-m2.5": "minimax-m2.5",
     "fireworks-kimi-k2.6": "kimi-2.6",
     "fireworks-kimi-k2.7": "kimi-2.7-code",
+    "fireworks-kimi-k3": "kimi-3",
     "baseten-deepseek-v4-pro": "deepseek-v4pro",
     "baseten-glm-5.2": "glm-5.2",
 }
@@ -172,6 +188,10 @@ DISPLAY_NAMES: dict[str, str] = {
     "claude-opus4.6": "Claude Opus 4.6",
     "claude-opus4.7": "Claude Opus 4.7",
     "claude-opus4.8": "Claude Opus 4.8",
+    "claude-opus5": "Claude Opus 5",
+    "claude-opus-5": "Claude Opus 5",
+    "opus-5": "Claude Opus 5",
+    "opus5": "Claude Opus 5",
     "claude-haiku4.5": "Claude Haiku 4.5",
     "claude-fable5": "Fable 5",
     "claude-fable5-high": "Fable 5",
@@ -202,6 +222,8 @@ DISPLAY_NAMES: dict[str, str] = {
     "kimi-2.7-code": "Kimi K2.7 Code",
     "kimi-k2.7": "Kimi K2.7 Code",
     "kimi-k2.7-code": "Kimi K2.7 Code",
+    "kimi-3": "Kimi K3",
+    "kimi-k3": "Kimi K3",
     "deepseek-v4pro": "DeepSeek V4 Pro",
     "glm-5.2": "GLM 5.2",
 
@@ -219,11 +241,13 @@ DISPLAY_NAMES: dict[str, str] = {
     "avocado-froyo-medium": "Opus 4.6",
     "apricot-sorbet-high": "Opus 4.7",
     "ambrosia-tart-high": "Opus 4.8",
+    "agave-flan": "Opus 5",
     "oregon-grape-medium": "GPT-5.4 Mini",
     "otaheite-apple-medium": "GPT-5.4 Nano",
     "fireworks-minimax-m2.5": "MiniMax M2.5",
     "fireworks-kimi-k2.6": "Kimi K2.6",
     "fireworks-kimi-k2.7": "Kimi K2.7 Code",
+    "fireworks-kimi-k3": "Kimi K3",
     "baseten-deepseek-v4-pro": "DeepSeek V4 Pro",
     "baseten-glm-5.2": "GLM 5.2",
     "xigua-mochi-medium": "Grok 4.3",
@@ -232,7 +256,6 @@ DISPLAY_NAMES: dict[str, str] = {
     "galette-medium-thinking": "Gemini 3.1 Pro",
     "anthropic-haiku-4.5": "Haiku 4.5",
     "gingerbread": "Gemini 3 Flash",
-    "acai-budino": "Fable 5",
     "acai-budino-high": "Fable 5",
 }
 
@@ -259,10 +282,12 @@ MODEL_DISPLAY_GROUPS: dict[str, str] = {
     "avocado-froyo-medium": "intelligent",
     "apricot-sorbet-high": "intelligent",
     "ambrosia-tart-high": "intelligent",
+    "agave-flan": "intelligent",
     "oregon-grape-medium": "fast",
     "otaheite-apple-medium": "fast",
     "fireworks-kimi-k2.6": "intelligent",
     "fireworks-kimi-k2.7": "intelligent",
+    "fireworks-kimi-k3": "intelligent",
     "baseten-deepseek-v4-pro": "intelligent",
     "baseten-glm-5.2": "intelligent",
     "xigua-mochi-medium": "intelligent",
@@ -271,7 +296,6 @@ MODEL_DISPLAY_GROUPS: dict[str, str] = {
     "galette-medium-thinking": "intelligent",
     "anthropic-haiku-4.5": "fast",
     "gingerbread": "fast",
-    "acai-budino": "intelligent",
     "acai-budino-high": "intelligent",
 }
 
@@ -288,10 +312,12 @@ MODEL_CARD_ATTRIBUTES: dict[str, dict[str, int]] = {
     "avocado-froyo-medium": {"speed": 2, "intelligence": 5, "cost": 5},
     "apricot-sorbet-high": {"speed": 2, "intelligence": 5, "cost": 5},
     "ambrosia-tart-high": {"speed": 2, "intelligence": 5, "cost": 5},
+    "agave-flan": {"speed": 2, "intelligence": 5, "cost": 5},
     "oregon-grape-medium": {"speed": 5, "intelligence": 2, "cost": 2},
     "otaheite-apple-medium": {"speed": 5, "intelligence": 1, "cost": 1},
     "fireworks-kimi-k2.6": {"speed": 5, "intelligence": 4, "cost": 2},
     "fireworks-kimi-k2.7": {"speed": 5, "intelligence": 4, "cost": 2},
+    "fireworks-kimi-k3": {"speed": 3, "intelligence": 5, "cost": 5},
     "baseten-deepseek-v4-pro": {"speed": 3, "intelligence": 5, "cost": 4},
     "baseten-glm-5.2": {"speed": 3, "intelligence": 5, "cost": 3},
     "xigua-mochi-medium": {"speed": 3, "intelligence": 5, "cost": 4},
@@ -308,8 +334,8 @@ MODEL_FAMILIES: dict[str, str] = {
     "avocado-froyo-medium": "anthropic",
     "apricot-sorbet-high": "anthropic",
     "ambrosia-tart-high": "anthropic",
+    "agave-flan": "anthropic",
     "anthropic-haiku-4.5": "anthropic",
-    "acai-budino": "anthropic",
     "acai-budino-high": "anthropic",
     "orange-mousse": "openai",
     "orchid-muffin": "openai",
@@ -329,6 +355,7 @@ MODEL_FAMILIES: dict[str, str] = {
     "fireworks-minimax-m2.5": "minimax",
     "fireworks-kimi-k2.6": "kimi",
     "fireworks-kimi-k2.7": "kimi",
+    "fireworks-kimi-k3": "kimi",
     "baseten-deepseek-v4-pro": "deepseek",
     "baseten-glm-5.2": "glm",
 }
@@ -340,6 +367,7 @@ MODEL_ICONS: dict[str, str] = {
     "claude-opus4.6": "✳️",
     "claude-opus4.7": "✳️",
     "claude-opus4.8": "✳️",
+    "claude-opus5": "✳️",
     "claude-haiku4.5": "✳️",
     "claude-fable5": "✳️",
     # OpenAI
@@ -369,6 +397,8 @@ MODEL_ICONS: dict[str, str] = {
     "kimi-2.7-code": "🌙",
     "kimi-k2.7": "🌙",
     "kimi-k2.7-code": "🌙",
+    "kimi-3": "🌙",
+    "kimi-k3": "🌙",
     "deepseek-v4pro": "🔷",
     "glm-5.2": "◆",
 
@@ -378,8 +408,8 @@ MODEL_ICONS: dict[str, str] = {
     "avocado-froyo-medium": "✳️",
     "apricot-sorbet-high": "✳️",
     "ambrosia-tart-high": "✳️",
+    "agave-flan": "✳️",
     "anthropic-haiku-4.5": "✳️",
-    "acai-budino": "✳️",
     "acai-budino-high": "✳️",
     "orange-mousse": "⚙",
     "orchid-muffin": "⚙",
@@ -399,6 +429,7 @@ MODEL_ICONS: dict[str, str] = {
     "fireworks-minimax-m2.5": "◈",
     "fireworks-kimi-k2.6": "🌙",
     "fireworks-kimi-k2.7": "🌙",
+    "fireworks-kimi-k3": "🌙",
     "baseten-deepseek-v4-pro": "🔷",
     "baseten-glm-5.2": "◆",
 }
@@ -597,13 +628,11 @@ def _shared_restricted_models(space_id: str, *, allow_stale: bool = False) -> se
 def get_restricted_models_for_space(client) -> set[str]:
     now = time.time()
     space_id = str(client.space_id or "").strip()
-    account_id = str(
-        getattr(client, "user_id", "")
-        or getattr(client, "account_key", "")
-        or getattr(client, "user_email", "")
-        or "unknown-account"
-    ).strip()
-    cache_key = f"{space_id}:{account_id}"
+    if not space_id:
+        raise ValueError("Notion workspace id is unavailable for model restriction lookup")
+    # Notion model availability is workspace-global. Account rotation affects
+    # capacity and continuity, not the catalog or restriction contract.
+    cache_key = f"model-restrictions:v2:{space_id}"
     ttl_seconds = _restriction_cache_ttl_seconds()
     local = _RESTRICTED_MODELS_CACHE.get(cache_key)
     if local and now - local[0] < ttl_seconds:
@@ -687,3 +716,185 @@ def list_available_models_for_request(request) -> list[str]:
             continue
         filtered.append(model_id)
     return filtered
+
+
+def _static_catalog_records() -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for canonical_id in NOTION_MODEL_REVERSE_MAP:
+        metadata = get_model_metadata(canonical_id)
+        records.append(
+            {
+                **metadata,
+                "model_provider": metadata["model_family"],
+                "supported_reasoning_efforts": [],
+                "default_reasoning_effort": "",
+                "is_disabled_only_by_disaster_recovery": False,
+                "is_approaching_rate_limit": False,
+                "routes": {
+                    "workflow": {
+                        "final_model_name": canonical_id,
+                        "beta": False,
+                        "supported": get_thread_type(canonical_id) == "workflow",
+                    },
+                    "custom_agent": {
+                        "final_model_name": "",
+                        "beta": False,
+                        "supported": False,
+                    },
+                    "agent_service": {
+                        "final_model_name": "",
+                        "beta": False,
+                        "supported": False,
+                    },
+                },
+                "metadata_source": "static_fallback",
+            }
+        )
+    return records
+
+
+def _upstream_host_for_route(canonical_id: str) -> str:
+    if canonical_id.startswith("fireworks-"):
+        return "fireworks"
+    if canonical_id.startswith("baseten-"):
+        return "baseten"
+    if canonical_id.startswith("vertex-"):
+        return "vertex"
+    return "notion"
+
+
+def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
+    enriched_models: list[dict[str, object]] = []
+    for raw in envelope.snapshot.get("models", []):
+        if not isinstance(raw, dict):
+            continue
+        canonical_id = str(raw.get("canonical_id") or "").strip()
+        known_static = canonical_id in NOTION_MODEL_REVERSE_MAP
+        static = get_model_metadata(canonical_id) if known_static else {}
+        public_name = NOTION_MODEL_REVERSE_MAP.get(canonical_id, canonical_id)
+        aliases = [
+            alias
+            for alias, target in MODEL_MAP.items()
+            if target == canonical_id and alias != canonical_id
+        ]
+        enriched_models.append(
+            {
+                **static,
+                **raw,
+                "canonical_id": canonical_id,
+                "public_name": public_name,
+                "aliases": aliases,
+                "transport": "notion2api",
+                "upstream_host": _upstream_host_for_route(canonical_id),
+                "metadata_source": envelope.source,
+            }
+        )
+    snapshot = dict(envelope.snapshot)
+    snapshot["models"] = enriched_models
+    return CatalogEnvelope(
+        snapshot=snapshot,
+        source=envelope.source,
+        fetched_at=envelope.fetched_at,
+        expires_at=envelope.expires_at,
+        age_seconds=envelope.age_seconds,
+        stale=envelope.stale,
+        upstream_error=envelope.upstream_error,
+    )
+
+
+def get_model_catalog_for_client(
+    client,
+    *,
+    allow_static_fallback: bool = False,
+) -> CatalogEnvelope:
+    service = ModelCatalogService(_SHARED_RESTRICTION_CACHE)
+    envelope = service.get(
+        client,
+        allow_static_fallback=allow_static_fallback,
+        static_records=_static_catalog_records(),
+    )
+    return _enrich_catalog_envelope(envelope)
+
+
+def list_model_metadata_for_request(request) -> tuple[list[dict[str, object]], dict[str, object]]:
+    pool = request.app.state.account_pool
+    client = pool.get_client(wait_if_cooling=False)
+    envelope = get_model_catalog_for_client(client, allow_static_fallback=True)
+    return list(envelope.snapshot.get("models", [])), envelope.receipt()
+
+
+def _catalog_model_for_request(
+    snapshot: dict[str, object], requested_model: str
+) -> dict[str, object] | None:
+    requested_key = _normalize_registry_model_name(requested_model)
+    if not requested_key:
+        return None
+    mapped_id = MODEL_MAP.get(requested_key)
+    models = [
+        model
+        for model in snapshot.get("models", [])
+        if isinstance(model, dict)
+    ]
+    if mapped_id:
+        return model_by_id(snapshot, mapped_id)
+    for model in models:
+        candidates = {
+            _normalize_registry_model_name(str(model.get("canonical_id") or "")),
+            _normalize_registry_model_name(str(model.get("public_name") or "")),
+            _normalize_registry_model_name(str(model.get("display_name") or "")),
+        }
+        candidates.update(
+            _normalize_registry_model_name(str(alias))
+            for alias in (model.get("aliases") or [])
+        )
+        if requested_key in candidates:
+            return model
+    return None
+
+
+def resolve_model_selection(
+    client,
+    requested_model: str,
+    requested_reasoning_effort: str | None = None,
+    *,
+    surface: str = "workflow",
+) -> dict[str, object]:
+    allow_static = str(
+        os.getenv("NOTION_MODEL_CATALOG_ALLOW_STATIC_SELECTION", "")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    envelope = get_model_catalog_for_client(
+        client, allow_static_fallback=allow_static
+    )
+    model = _catalog_model_for_request(envelope.snapshot, requested_model)
+    if model is None:
+        raise ModelSelectionError(
+            f"Model '{requested_model}' is not present in the authoritative Notion model catalog.",
+            code="model_not_available",
+            param="model",
+        )
+    canonical_id = str(model.get("canonical_id") or "")
+    if bool(model.get("is_disabled")):
+        reason = str(model.get("disabled_reason") or "model_disabled")
+        raise ModelSelectionError(
+            f"Model '{requested_model}' is disabled by Notion policy: {reason}.",
+            code="model_disabled",
+            param="model",
+        )
+    routes = model.get("routes") if isinstance(model.get("routes"), dict) else {}
+    route = routes.get(surface) if isinstance(routes, dict) else None
+    if surface and (not isinstance(route, dict) or not bool(route.get("supported"))):
+        raise ModelSelectionError(
+            f"Model '{requested_model}' is unavailable on the '{surface}' surface.",
+            code="model_surface_not_supported",
+            param="model",
+        )
+    effort = resolve_reasoning_effort(model, requested_reasoning_effort)
+    return {
+        "requested_model": requested_model,
+        "canonical_id": canonical_id,
+        "public_name": model.get("public_name") or canonical_id,
+        "surface": surface,
+        "model_metadata": model,
+        **effort,
+        **envelope.receipt(),
+    }

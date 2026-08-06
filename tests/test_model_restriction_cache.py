@@ -112,7 +112,7 @@ def test_expired_refresh_owner_cannot_overwrite_takeover(tmp_path: Path) -> None
     ]
 
 
-def test_restriction_cache_is_scoped_to_account(
+def test_restriction_cache_is_global_to_workspace(
     monkeypatch, tmp_path: Path
 ) -> None:
     _reset_registry_cache(monkeypatch, tmp_path / "account-cache.sqlite3")
@@ -141,7 +141,7 @@ def test_restriction_cache_is_scoped_to_account(
         "restricted-a"
     }
     assert model_registry.get_restricted_models_for_space(second) == {
-        "restricted-b"
+        "restricted-a"
     }
     assert first.calls == 1
-    assert second.calls == 1
+    assert second.calls == 0

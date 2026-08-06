@@ -2245,6 +2245,7 @@ def apply_notion_ai_options(
     web_access: bool | None = None,
     persona: str | None = None,
     instructions: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> list[dict[str, Any]]:
     """Apply Notion AI home controls to transcript config blocks."""
     source_aliases = {"all": "everything", "notion-help-center": "helpdocs"}
@@ -2266,6 +2267,10 @@ def apply_notion_ai_options(
         if block.get("type") not in {"config", "updated-config"} or not isinstance(block.get("value"), dict):
             continue
         value = block["value"]
+        if reasoning_effort:
+            value["reasoningEffort"] = reasoning_effort
+        else:
+            value.pop("reasoningEffort", None)
         research = mode == "research" or task == "deep_research"
         value["useReadOnlyMode"] = mode == "ask"
         value["isAgentResearchRequest"] = research

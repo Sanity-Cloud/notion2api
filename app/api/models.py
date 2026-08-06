@@ -2,7 +2,7 @@ from typing import Dict, Any
 
 from fastapi import APIRouter, Request
 
-from app.model_registry import get_model_metadata, list_available_models_for_request
+from app.model_registry import list_model_metadata_for_request
 
 router = APIRouter()
 
@@ -12,15 +12,15 @@ async def list_models(request: Request) -> Dict[str, Any]:
     """
     List available models in OpenAI-compatible format.
     """
-    data = []
-    for model_id in list_available_models_for_request(request):
-        metadata = get_model_metadata(model_id)
-        data.append({
-            "id": model_id,
+    models, catalog = list_model_metadata_for_request(request)
+    data = [
+        {
+            "id": str(metadata.get("canonical_id") or ""),
             "object": "model",
             "created": 0,
-            "owned_by": metadata["model_family"],
+            "owned_by": str(metadata.get("model_family") or "unknown"),
             **metadata,
-        })
-
-    return {"object": "list", "data": data}
+        }
+        for metadata in models
+    ]
+    return {"object": "list", "data": data, "catalog": catalog}

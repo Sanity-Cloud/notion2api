@@ -152,17 +152,32 @@ class HealthOutput(BaseModel):
 
 
 class ModelInfo(BaseModel):
-    id: str = Field(description="Model id.")
+    id: str = Field(description="Canonical Notion model route id.")
     object: str | None = Field(default=None, description="OpenAI-style object type, usually model.")
     created: int | None = Field(default=None, description="Creation timestamp, if supplied.")
     owned_by: str | None = Field(default=None, description="Provider or owner, if supplied.")
+    canonical_id: str = Field(default="")
+    public_name: str = Field(default="")
+    display_name: str = Field(default="")
+    model_family: str = Field(default="")
+    model_provider: str = Field(default="")
+    display_group: str = Field(default="")
+    model_card_attributes: dict[str, int] | None = Field(default=None)
+    supported_reasoning_efforts: list[str] = Field(default_factory=list)
+    default_reasoning_effort: str = Field(default="")
+    routes: dict[str, Any] = Field(default_factory=dict)
+    is_disabled: bool = Field(default=False)
+    disabled_reason: str = Field(default="")
+    is_approaching_rate_limit: bool = Field(default=False)
+    metadata_source: str = Field(default="")
 
 
 class ListModelsOutput(BaseModel):
     ok: bool = Field(description="Whether the models call succeeded.")
     status_code: int | None = Field(default=None, description="HTTP status code returned by Notion2API.")
     count: int = Field(default=0, description="Number of model entries returned.")
-    models: list[ModelInfo] = Field(default_factory=list, description="JSON-safe OpenAI-style model entries.")
+    models: list[ModelInfo] = Field(default_factory=list, description="Authoritative model, effort, rating, restriction, and route entries.")
+    catalog: dict[str, Any] = Field(default_factory=dict, description="Catalog source, freshness, hash, and fallback receipt.")
     error: str | None = Field(default=None, description="Error summary if the backend did not return models.")
 
 
@@ -172,6 +187,9 @@ class ChatOutput(BaseModel):
     model: str = Field(description="Requested model id passed through the MCP wrapper.")
     actual_model: str = Field(default="", description="Actual Notion model/provider route used, if returned.")
     model_metadata: dict[str, Any] | None = Field(default=None, description="Notion2API model metadata, if any.")
+    requested_reasoning_effort: str | None = Field(default=None, description="Exact reasoning effort requested by the caller.")
+    resolved_reasoning_effort: str | None = Field(default=None, description="Validated effort sent to Notion, including catalog defaults.")
+    reasoning_effort_source: str = Field(default="", description="explicit, catalog_default, or not_supported.")
     requested_model: str = Field(default="", description="Requested model alias originally passed to the MCP wrapper.")
     resolved_model: str = Field(default="", description="Concrete Notion route resolved from the requested alias.")
     verified_model: str = Field(default="", description="Responder model only when supported by authoritative upstream evidence.")
@@ -241,6 +259,9 @@ class ResponsesOutput(BaseModel):
     model: str = Field(description="Requested model id passed through the MCP wrapper.")
     actual_model: str = Field(default="", description="Observed Notion model/provider route, if returned.")
     model_metadata: dict[str, Any] | None = Field(default=None, description="Notion2API model metadata, if any.")
+    requested_reasoning_effort: str | None = Field(default=None, description="Exact reasoning effort requested by the caller.")
+    resolved_reasoning_effort: str | None = Field(default=None, description="Validated effort sent to Notion, including catalog defaults.")
+    reasoning_effort_source: str = Field(default="", description="explicit, catalog_default, or not_supported.")
     requested_model: str = Field(default="", description="Requested model alias originally passed to the MCP wrapper.")
     resolved_model: str = Field(default="", description="Concrete Notion route resolved from the requested alias.")
     verified_model: str = Field(default="", description="Responder model only when verified by upstream evidence.")
@@ -681,6 +702,15 @@ MCPModel = Annotated[
         )
     ),
 ]
+MCPReasoningEffort = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Exact model-specific Notion reasoning effort. Omit to use the live catalog default. "
+            "Unsupported values fail closed and are never silently downgraded."
+        )
+    ),
+]
 
 MCPSessionName = Annotated[
     str | None,
@@ -1012,6 +1042,28 @@ def _model_info_from_entry(entry: Any) -> ModelInfo | None:
         object=_string_or_none(entry.get("object")),
         created=_int_or_none(entry.get("created")),
         owned_by=_string_or_none(entry.get("owned_by")),
+        canonical_id=str(entry.get("canonical_id") or model_id),
+        public_name=str(entry.get("public_name") or ""),
+        display_name=str(entry.get("display_name") or ""),
+        model_family=str(entry.get("model_family") or ""),
+        model_provider=str(entry.get("model_provider") or ""),
+        display_group=str(entry.get("display_group") or ""),
+        model_card_attributes=(
+            dict(entry.get("model_card_attributes"))
+            if isinstance(entry.get("model_card_attributes"), dict)
+            else None
+        ),
+        supported_reasoning_efforts=[
+            str(value)
+            for value in (entry.get("supported_reasoning_efforts") or [])
+            if str(value)
+        ],
+        default_reasoning_effort=str(entry.get("default_reasoning_effort") or ""),
+        routes=dict(entry.get("routes") or {}) if isinstance(entry.get("routes"), dict) else {},
+        is_disabled=bool(entry.get("is_disabled", False)),
+        disabled_reason=str(entry.get("disabled_reason") or ""),
+        is_approaching_rate_limit=bool(entry.get("is_approaching_rate_limit", False)),
+        metadata_source=str(entry.get("metadata_source") or ""),
     )
 
 
@@ -1184,6 +1236,28 @@ def _extract_responses_text(data: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _reasoning_effort_trace(data: dict[str, Any]) -> dict[str, Any]:
+    metadata = data.get("model_metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    selection = metadata.get("model_selection")
+    if not isinstance(selection, dict):
+        selection = {}
+    return {
+        "requested_reasoning_effort": metadata.get(
+            "requested_reasoning_effort", selection.get("requested_reasoning_effort")
+        ),
+        "resolved_reasoning_effort": metadata.get(
+            "resolved_reasoning_effort", selection.get("resolved_reasoning_effort")
+        ),
+        "reasoning_effort_source": str(
+            metadata.get("reasoning_effort_source")
+            or selection.get("reasoning_effort_source")
+            or ""
+        ),
+    }
+
+
 def _responses_output_from_backend(
     *,
     data: dict[str, Any],
@@ -1205,6 +1279,7 @@ def _responses_output_from_backend(
             if isinstance(data.get("model_metadata"), dict)
             else None
         ),
+        **_reasoning_effort_trace(data),
         **_model_identity_trace(data, model),
         **_governance_trace(data),
         **_caller_trace(
@@ -2078,6 +2153,7 @@ def _chat_output_from_backend(
             if isinstance(data.get("model_metadata"), dict)
             else None
         ),
+        **_reasoning_effort_trace(data),
         **_model_identity_trace(data, model),
         **_governance_trace(data),
         **_caller_trace(
@@ -4353,13 +4429,15 @@ def create_server(
             status_code=data.get("status_code"),
             count=len(model_list),
             models=model_list,
+            catalog=dict(data.get("catalog") or {}) if isinstance(data.get("catalog"), dict) else {},
             error=_error_summary(data),
         )
 
-    @server.tool(name=_tool_name("notion2api_chat"), description=_tool_description("Submit a prompt to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_chat"), description=_tool_description("Submit a prompt to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. reasoning_effort is exact and model-specific; omit it for the live catalog default. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id."), structured_output=True)
     async def notion2api_chat(
         prompt: str,
         model: MCPModel = DEFAULT_MODEL,
+        reasoning_effort: MCPReasoningEffort = None,
         system_prompt: str | None = None,
         persist_remote_chat: bool = True,
         session_name: MCPSessionName = None,
@@ -4397,6 +4475,7 @@ def create_server(
         prepared = prepare_mcp_file_attachments(local_paths)
         payload = {
             "model": model,
+            "reasoning_effort": reasoning_effort,
             "messages": messages,
             "stream": False,
             "conversation_id": resolved_conversation_id,
@@ -4470,6 +4549,7 @@ def create_server(
         file: TransferredFile,
         prompt: str,
         model: MCPModel = DEFAULT_MODEL,
+        reasoning_effort: MCPReasoningEffort = None,
         system_prompt: str | None = None,
         persist_remote_chat: bool = True,
         session_name: MCPSessionName = None,
@@ -4491,6 +4571,7 @@ def create_server(
         return await notion2api_chat(
             prompt=prompt,
             model=model,
+            reasoning_effort=reasoning_effort,
             system_prompt=system_prompt,
             persist_remote_chat=persist_remote_chat,
             session_name=session_name,
@@ -4554,10 +4635,11 @@ def create_server(
             if staged_path is not None:
                 cleanup_staged_mcp_file(staged_path, was_staged)
 
-    @server.tool(name=_tool_name("notion2api_chat_completion"), description=_tool_description("Submit explicit messages to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_chat_completion"), description=_tool_description("Submit explicit messages to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. reasoning_effort is exact and model-specific; omit it for the live catalog default. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id."), structured_output=True)
     async def notion2api_chat_completion(
         messages: list[dict[str, Any]],
         model: MCPModel = DEFAULT_MODEL,
+        reasoning_effort: MCPReasoningEffort = None,
         persist_remote_chat: bool = True,
         session_name: MCPSessionName = None,
         conversation_id: str | None = None,
@@ -4595,6 +4677,7 @@ def create_server(
         prepared = prepare_mcp_file_attachments(local_paths)
         payload = {
             "model": model,
+            "reasoning_effort": reasoning_effort,
             "messages": explicit_messages,
             "stream": False,
             "conversation_id": resolved_conversation_id,
@@ -4631,10 +4714,11 @@ def create_server(
             wait_seconds=wait_seconds,
         )
 
-    @server.tool(name=_tool_name("notion2api_responses"), description=_tool_description("Call Notion2API /v1/responses and return extracted output text plus the raw response. Terra is the default; omit model unless the user explicitly requests another."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_responses"), description=_tool_description("Call Notion2API /v1/responses and return extracted output text plus the raw response. Terra is the default; omit model unless the user explicitly requests another. reasoning_effort is exact and model-specific; omit it for the live catalog default."), structured_output=True)
     async def notion2api_responses(
         input_text: str,
         model: MCPModel = DEFAULT_MODEL,
+        reasoning_effort: MCPReasoningEffort = None,
         instructions: str | None = None,
         persist_remote_chat: bool = True,
         attachments: FileAttachments = None,
@@ -4665,6 +4749,7 @@ def create_server(
             )
         payload: dict[str, Any] = {
             "model": model,
+            "reasoning_effort": reasoning_effort,
             "input": validated_input,
             "metadata": {
                 "persist_remote_chat": persist_remote_chat,
