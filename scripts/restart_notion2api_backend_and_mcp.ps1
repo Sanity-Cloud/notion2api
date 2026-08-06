@@ -31,6 +31,15 @@ function Get-ProcessCommandLine {
 function Test-ExpectedBackendProcess {
     param([int]$ProcessId, [int]$Port)
     $commandLine = Get-ProcessCommandLine -ProcessId $ProcessId
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        # Some hosts redact Win32 CommandLine; fall back to health shape.
+        try {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
+            return ($health.status -eq 'ok' -or $health.ok)
+        } catch {
+            return $false
+        }
+    }
     return (
         $commandLine -match '(?i)(^|\s)-m\s+uvicorn(\.main:main)?(\s|$)' -and
         $commandLine -match '(?i)(^|\s)app\.server:app(\s|$)' -and
@@ -41,6 +50,10 @@ function Test-ExpectedBackendProcess {
 function Test-ExpectedMcpProcess {
     param([int]$ProcessId, [int]$Port)
     $commandLine = Get-ProcessCommandLine -ProcessId $ProcessId
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        return ($null -ne $process -and $process.ProcessName -match '(?i)python')
+    }
     return (
         $commandLine -match '(?i)(^|\s)-m\s+app\.mcp_server(\s|$)' -and
         $commandLine -match "(?i)(^|\s)--port\s+$Port(\s|$)"
@@ -135,9 +148,14 @@ try {
     New-Item -ItemType Directory -Force -Path $sharedAdmissionState, $StateRoot | Out-Null
     $env:NOTION_ACCOUNT_SELECTION_STATE = Join-Path $StateRoot 'account-selection.json'
     $env:NOTION_ADMISSION_DB_PATH = Join-Path $sharedAdmissionState 'notion-admission.sqlite3'
-    $env:NOTION_ADMISSION_ACCOUNT_MAX_INFLIGHT = '1'
-    $env:NOTION_ADMISSION_ACCOUNT_CAPACITY = '2'
-    $env:NOTION_ADMISSION_ACCOUNT_REFILL_PER_SECOND = '0.5'
+    # Align with multi-account hive fleets; one-inflight-per-thread remains in code.
+    $env:NOTION_ADMISSION_ACCOUNT_MAX_INFLIGHT = '4'
+    $env:NOTION_ADMISSION_ACCOUNT_CAPACITY = '4'
+    $env:NOTION_ADMISSION_ACCOUNT_REFILL_PER_SECOND = '1.0'
+    $env:CHAT_HISTORY_DB_DIR = Join-Path $StateRoot 'chat_history'
+    if (-not $env:CHAT_HISTORY_DB_PATH) {
+        $env:CHAT_HISTORY_DB_PATH = Join-Path $StateRoot 'chat_history.db'
+    }
 
     $python = Resolve-BackendPython -Root $RepoRoot
     $backendOutLog = Join-Path $LogRoot "notion2api-backend-$BackendPort.out.log"
