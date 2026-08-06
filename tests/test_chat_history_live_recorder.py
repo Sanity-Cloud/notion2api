@@ -73,7 +73,8 @@ def test_live_turn_uses_notion_message_id_and_records_model_metadata() -> None:
 def test_record_live_turn_merges_without_clobbering_hydrated_raw() -> None:
     with TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "chat_history.db"
-        store = ChatHistoryStore(str(db_path))
+        account_key = "workspace-1:user-1"
+        store = ChatHistoryStore(str(db_path), account_key=account_key)
         store.upsert_bundle(
             {
                 "threads": {
@@ -100,6 +101,7 @@ def test_record_live_turn_merges_without_clobbering_hydrated_raw() -> None:
         result = record_live_chat_turn(
             thread_id="thread-1",
             conversation_id="conv-1",
+            account_key=account_key,
             user_prompt="follow up",
             assistant_reply="Already hydrated body",
             model_metadata={
@@ -117,6 +119,7 @@ def test_record_live_turn_merges_without_clobbering_hydrated_raw() -> None:
         record_live_chat_turn(
             thread_id="thread-1",
             conversation_id="conv-1",
+            account_key=account_key,
             user_prompt="second question",
             assistant_reply="second answer",
             request_metadata={
