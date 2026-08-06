@@ -119,6 +119,7 @@ TEXT_CORRUPTION_ARTIFACT_RE = re.compile(
     r"\bqueming\b|\bsated\s+basis\b|\bex\s+available\s+sources\b|"
     r"recordingearns\b|AxonmLet\b)"
 )
+TRAILING_ORPHAN_MARKDOWN_RE = re.compile(r"(?s)[\s#]*#+\s*$")
 HIDDEN_CONTENT_TYPES = frozenset({
     "thinking",
     "reasoning",
@@ -257,6 +258,15 @@ def detect_visible_output_contamination(text: Any) -> bool:
     return legacy_contamination or bool(assess_output_integrity(cleaned)["contaminated"])
 
 
+def strip_trailing_orphan_markdown(text: Any) -> str:
+    """Remove dangling trailing heading markers left by truncated streams."""
+
+    cleaned = str(text or "")
+    if not cleaned:
+        return ""
+    return TRAILING_ORPHAN_MARKDOWN_RE.sub("", cleaned).rstrip()
+
+
 def clean_visible_output(text: Any) -> str:
     """Clean visible output without changing substantive answer content."""
 
@@ -271,6 +281,7 @@ def clean_visible_output(text: Any) -> str:
             cleaned = LEADING_PARTIAL_TAG_RE.sub("", cleaned).strip()
     cleaned = strip_model_name_splices(cleaned)
     cleaned = repair_missing_inter_word_spaces(cleaned)
+    cleaned = strip_trailing_orphan_markdown(cleaned)
     return cleaned.strip()
 
 

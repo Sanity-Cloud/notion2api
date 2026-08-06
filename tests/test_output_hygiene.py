@@ -106,3 +106,15 @@ def test_is_hidden_content_type_matches_transport_reasoning_types():
     assert is_hidden_content_type("thinking") is True
     assert is_hidden_content_type("redacted-thinking") is True
     assert is_hidden_content_type("text") is False
+
+
+def test_clean_visible_output_strips_trailing_orphan_markdown():
+    assert clean_visible_output("Useful answer about Mission World.##") == (
+        "Useful answer about Mission World."
+    )
+    assert detect_visible_output_contamination(
+        "Sanity Cloud AI Portal existing product architecture and governance concepts "
+        "including departments, Oz roles, authority A0-A4, QuickBind, workflow school "
+        "levels, and autonomy maturitySanity Cloud AI Portal governance QuickBind "
+        "authority A0 A4 Oz Hollywood White House Government Militaryall_time##"
+    ) is True

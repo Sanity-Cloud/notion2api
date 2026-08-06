@@ -167,3 +167,40 @@ def test_mcp_identity_trace_requires_explicit_verification() -> None:
     assert trace["resolved_model"] == "orange-mousse"
     assert trace["verified_model"] == ""
     assert trace["model_identity_confidence"] == "observed"
+
+
+def test_terra_alias_resolution_is_not_reported_as_substitution() -> None:
+    metadata = _response_model_metadata(
+        "terra",
+        {
+            "actual_model": "orchid-muffin",
+            "actual_model_source": "notion_model_name_observation",
+        },
+    )
+
+    assert metadata["requested_model"] == "terra"
+    assert metadata["resolved_model"] == "orchid-muffin"
+    assert metadata["alias_resolution"]["display_name"] == "GPT-5.6 Terra"
+    assert metadata["model_route_disposition"] == "alias_resolution"
+    assert metadata["model_identity_verified"] is False
+    assert "model_substitution" not in metadata
+
+
+def test_mcp_trace_preserves_terra_alias_without_substitution() -> None:
+    trace = _model_identity_trace(
+        {
+            "actual_model": "orchid-muffin",
+            "model_metadata": {
+                "requested_model": "terra",
+                "actual_model": "orchid-muffin",
+                "actual_model_verified": False,
+            },
+        },
+        "terra",
+    )
+
+    assert trace["requested_model"] == "terra"
+    assert trace["resolved_model"] == "orchid-muffin"
+    assert trace["alias_resolution"]["resolution_kind"] == "configured_alias"
+    assert trace["model_route_disposition"] == "alias_resolution"
+    assert trace["model_substitution"] is None
