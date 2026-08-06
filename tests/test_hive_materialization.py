@@ -87,7 +87,11 @@ def test_schema_is_additive_and_preserves_runtime_version(tmp_path):
         objective="Preserve me",
         lifecycle_stage="Pilot",
         mission_id="existing-mission",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     with sqlite3.connect(path) as conn:
         before_version = conn.execute("PRAGMA user_version").fetchone()[0]
 
@@ -100,7 +104,7 @@ def test_schema_is_additive_and_preserves_runtime_version(tmp_path):
         }
         after_version = conn.execute("PRAGMA user_version").fetchone()[0]
         mission_count = conn.execute("SELECT COUNT(*) FROM hive_missions").fetchone()[0]
-    assert before_version == after_version == 1
+    assert before_version == after_version == 2
     assert mission_count == 1
     assert {
         "hive_invocation_materializations",
@@ -119,7 +123,11 @@ def test_no_worker_path_is_durably_blocked_and_idempotent(tmp_path):
         plan_id="blocked-plan",
         mission_id="blocked-mission",
         idempotency_key="blocked-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert blocked.status == MaterializationStatus.BLOCKED.value
     assert blocked.selected_worker_ids == []
     assert runtime.get_mission("blocked-mission").found is False
@@ -131,7 +139,11 @@ def test_no_worker_path_is_durably_blocked_and_idempotent(tmp_path):
         plan_id="blocked-plan",
         mission_id="blocked-mission",
         idempotency_key="blocked-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert replay.model_dump() == blocked.model_dump()
     with pytest.raises(HiveIdempotencyConflict):
         store.materialize_invocation(
@@ -139,7 +151,11 @@ def test_no_worker_path_is_durably_blocked_and_idempotent(tmp_path):
             plan_id="different-plan",
             mission_id="different-mission",
             idempotency_key="blocked-request",
-        )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
 
 
 def test_governance_gate_waits_for_authorization_then_materializes(tmp_path):
@@ -160,7 +176,11 @@ def test_governance_gate_waits_for_authorization_then_materializes(tmp_path):
         plan_id="approval-plan",
         mission_id="approval-mission",
         idempotency_key="approval-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert prepared.status == MaterializationStatus.AWAITING_APPROVAL.value
     assert prepared.governance_gate_required is True
     assert prepared.human_gate_required is True  # persisted compatibility mirror
@@ -218,7 +238,11 @@ def test_probation_worker_cannot_receive_execution_lease(tmp_path):
         human_approval=True,
         plan_id="probation-plan",
         mission_id="probation-mission",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert result.status == MaterializationStatus.BLOCKED.value
     assert result.leases == []
     assert runtime.get_mission("probation-mission").found is False
@@ -272,7 +296,11 @@ def _materialize_three_lane_hive(tmp_path):
         plan_id="phase2-plan",
         mission_id="phase2-mission",
         idempotency_key="phase2-materialize",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     return store, workforce, runtime, result
 
 
@@ -435,7 +463,11 @@ def test_idempotent_retry_resumes_interrupted_materialization(tmp_path, monkeypa
             human_approval=True,
             actor="accountable-human",
             idempotency_key="resume-materialization",
-        )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     monkeypatch.setattr(store, "_complete_materialization", original)
 
     resumed = store.materialize_invocation(
@@ -446,7 +478,11 @@ def test_idempotent_retry_resumes_interrupted_materialization(tmp_path, monkeypa
         human_approval=True,
         actor="accountable-human",
         idempotency_key="resume-materialization",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert resumed.status == MaterializationStatus.MATERIALIZED.value
     assert runtime.get_mission(resumed.mission_id).found is True
 
@@ -468,7 +504,11 @@ def test_idempotent_retry_resumes_interrupted_approval(tmp_path, monkeypatch):
         preferred_worker_ids=[worker.worker_id],
         plan_id="resume-approval-plan",
         mission_id="resume-approval-mission",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert prepared.status == MaterializationStatus.AWAITING_APPROVAL.value
     original = store._complete_materialization
 

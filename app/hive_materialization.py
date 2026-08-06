@@ -17,6 +17,7 @@ from app.governed_authorization import (
     GovernedAuthorizationError,
     require_governed_authorization,
 )
+from app.hive_lane_scope import ensure_mission_lane_conversation_scopes
 from app.hive_runtime import (
     HiveIdempotencyConflict,
     HiveNotFoundError,
@@ -24,6 +25,7 @@ from app.hive_runtime import (
     HiveWorkUnitSpec,
     default_hive_runtime_db_path,
     get_hive_runtime_store,
+    resolve_mission_account_scope,
 )
 from app.hive_multithread import (
     leader_conversation_id,
@@ -181,6 +183,7 @@ class HiveMaterializationStore:
         self._schema_lock = threading.RLock()
         self.workforce = get_hive_workforce_store(self.path)
         self.runtime = get_hive_runtime_store(self.path)
+        self._conversation_manager: Any = None
         self._ensure_schema()
         self.lifecycle = HiveWorkforceLifecycleStore(self.path, self.workforce)
         self.control_plane = HiveWorkforceControlPlaneStore(self.path, self.workforce)
@@ -539,7 +542,23 @@ class HiveMaterializationStore:
         plan_id: str | None = None,
         mission_id: str | None = None,
         idempotency_key: str | None = None,
+        account_key: str = "",
+        workspace_id: str = "",
+        user_id: str = "",
+        profile_name: str = "",
+        account_profile: str = "",
+        account_selector: str = "",
+        conversation_manager: Any = None,
     ) -> HiveMaterializationSnapshot:
+        account = resolve_mission_account_scope(
+            account_key=account_key,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            profile_name=profile_name,
+            account_profile=account_profile,
+            account_selector=account_selector,
+        )
+        self._conversation_manager = conversation_manager
         stable = (
             hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:20]
             if idempotency_key
@@ -592,6 +611,10 @@ class HiveMaterializationStore:
             "parent_context_id": str(parent_context_id or "").strip(),
             "lifecycle_stage": self._required(lifecycle_stage, "lifecycle_stage"),
             "mission_id": mission_key,
+            "account_key": account["account_key"],
+            "workspace_id": account["workspace_id"],
+            "user_id": account["user_id"],
+            "profile_name": account["profile_name"],
             "governance_authorization": dict(governance_authorization or {}),
         }
         fingerprint = self._fingerprint(request)
@@ -1038,6 +1061,12 @@ class HiveMaterializationStore:
             )
             for lane in lanes
         ]
+        account = resolve_mission_account_scope(
+            account_key=str(request.get("account_key") or ""),
+            workspace_id=str(request.get("workspace_id") or ""),
+            user_id=str(request.get("user_id") or ""),
+            profile_name=str(request.get("profile_name") or ""),
+        )
         self.runtime.create_mission(
             title=f"Materialized: {request['objective'][:100]}",
             objective=request["objective"],
@@ -1048,6 +1077,30 @@ class HiveMaterializationStore:
             mission_id=mission_id,
             idempotency_key=f"materialize:{plan_id}",
             actor=actor,
+            account_key=account["account_key"],
+            workspace_id=account["workspace_id"],
+            user_id=account["user_id"],
+            profile_name=account["profile_name"],
+        )
+        manager = self._conversation_manager
+        if manager is None:
+            from app.conversation import ConversationManager
+
+            # Keep hive lane conversations beside the hive runtime DB so tests
+            # and single-process fleets do not collide with unrelated chat DBs.
+            manager = ConversationManager(
+                db_path=str(Path(self.path).with_name("hive_lane_conversations.db"))
+            )
+        ensure_mission_lane_conversation_scopes(
+            manager,
+            mission_id=mission_id,
+            account_key=account["account_key"],
+            workspace_id=account["workspace_id"],
+            user_id=account["user_id"],
+            profile_name=account["profile_name"],
+            work_unit_conversation_ids=[
+                str(lane["conversation_id"]) for lane in lanes
+            ],
         )
 
         now = self._now_ms()
@@ -1137,6 +1190,10 @@ class HiveMaterializationStore:
                     "work_unit_ids": [item["work_unit_id"] for item in lanes],
                     "worker_ids": selected_ids,
                     "topology": "one_leader_many_independent_workers",
+                    "account_key": account["account_key"],
+                    "workspace_id": account["workspace_id"],
+                    "user_id": account["user_id"],
+                    "profile_name": account["profile_name"],
                     "leader_conversation_id": leader_conversation_id(mission_id),
                     "worker_conversation_ids": {
                         item["worker"].worker_id: item["conversation_id"]

@@ -18,8 +18,8 @@ class ConversationManager:
     RECALL_LIMIT = 5
     ASSISTANT_EMPTY_PLACEHOLDER = "[assistant_no_visible_content]"
 
-    def __init__(self):
-        self.db_path = os.getenv("DB_PATH", "./data/conversations.db")
+    def __init__(self, db_path: str | None = None):
+        self.db_path = str(db_path or os.getenv("DB_PATH", "./data/conversations.db"))
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         self._init_db()
 

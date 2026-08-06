@@ -52,13 +52,49 @@ from app.schemas import (
 )
 from app.thread_title import resolve_requested_thread_title
 from app.api.chat_resume_thread_binding import _resolve_persistent_thread_id
-from app.chat_history.live_recorder import record_live_chat_turn
+from app.account_scope import account_key_from_client
+from app.chat_history.live_recorder import infer_source_system, record_live_chat_turn
+from app.hive_bee_call import validate_bee_notion_call
+from app.hive_multithread import MultithreadContractError
 
 router = APIRouter()
 
 
+def _enforce_bee_notion_call_contract(
+    *,
+    manager: Any,
+    conversation_id: str,
+    client: Any,
+    req_body: Any,
+) -> None:
+    """Reject AIgentBee lane chats that borrow another account/conversation/thread."""
+    metadata = req_body.metadata if isinstance(getattr(req_body, "metadata", None), dict) else {}
+    try:
+        scope = (
+            manager.get_conversation_scope(conversation_id)
+            if manager and conversation_id and hasattr(manager, "get_conversation_scope")
+            else {}
+        )
+        validate_bee_notion_call(
+            metadata=metadata,
+            conversation_id=str(conversation_id or ""),
+            client=client,
+            conversation_scope=scope,
+            bound_thread_id=str((scope or {}).get("thread_id") or ""),
+        )
+    except MultithreadContractError as exc:
+        openai_error(
+            str(exc),
+            "bee_call_contract_mismatch",
+            status_code=409,
+            param="metadata.caller",
+        )
+        raise AssertionError("openai_error must raise") from exc
+
+
 def _record_live_chat_history_turn(
     *,
+    client: Any,
     thread_id: str | None,
     conversation_id: str,
     user_prompt: str,
@@ -67,7 +103,7 @@ def _record_live_chat_history_turn(
     model_metadata: dict[str, Any] | None = None,
     request_metadata: dict[str, Any] | None = None,
 ) -> None:
-    """Mirror completed Notion-backed turns into the shared chat-history archive."""
+    """Mirror completed turns into the selected account's history shard."""
     notion_thread_id = str(thread_id or "").strip()
     if not notion_thread_id:
         return
@@ -77,6 +113,7 @@ def _record_live_chat_history_turn(
         record_live_chat_turn(
             thread_id=notion_thread_id,
             conversation_id=conversation_id,
+            account_key=account_key_from_client(client),
             user_prompt=user_prompt,
             assistant_reply=assistant_reply,
             requested_model=requested_model,
@@ -84,6 +121,7 @@ def _record_live_chat_history_turn(
             request_metadata=request_metadata,
         )
     except Exception:
+        source_system = infer_source_system(request_metadata)
         logger.warning(
             "Failed to record live chat turn into chat history archive",
             exc_info=True,
@@ -95,6 +133,8 @@ def _record_live_chat_history_turn(
                 }
             },
         )
+        if source_system in {"aigentbee", "repoai"}:
+            raise
 
 
 def _apply_notion_request_options(
@@ -2279,6 +2319,7 @@ def _handle_lite_request(
                     lite_user_prompt = str(getattr(message, "content", "") or "")
                     break
             _record_live_chat_history_turn(
+                client=client,
                 thread_id=lite_thread_id,
                 conversation_id=str(getattr(req_body, "conversation_id", "") or ""),
                 user_prompt=lite_user_prompt,
@@ -2468,6 +2509,13 @@ def _handle_standard_request(
             else:
                 client = _client_for_requested_workspace(pool, req_body)
             _bind_governance_request_metadata(req_body, client)
+            if manager and conversation_id:
+                _enforce_bee_notion_call_contract(
+                    manager=manager,
+                    conversation_id=conversation_id,
+                    client=client,
+                    req_body=req_body,
+                )
 
             # Read poll configuration from headers if available
             poll_interval_hdr = request.headers.get("x-notion-poll-interval")
@@ -3051,6 +3099,12 @@ async def create_chat_completion(
                 pool, manager, conversation_id, req_body
             )
             _bind_governance_request_metadata(req_body, client)
+            _enforce_bee_notion_call_contract(
+                manager=manager,
+                conversation_id=conversation_id,
+                client=client,
+                req_body=req_body,
+            )
             transcript_payload = manager.get_transcript_payload(
                 notion_client=client,
                 conversation_id=conversation_id,
@@ -3476,6 +3530,7 @@ async def create_chat_completion(
                         model_metadata["remote_chat_id"] = active_thread_id
                     if (final_reply.strip() or persisted_thinking.strip()) and not quarantined:
                         _record_live_chat_history_turn(
+                            client=client,
                             thread_id=active_thread_id,
                             conversation_id=conversation_id,
                             user_prompt=user_prompt,
@@ -3595,6 +3650,7 @@ async def create_chat_completion(
                 model_metadata["notion_thread_id"] = notion_thread_id
                 response.headers["X-Notion-Thread-Id"] = notion_thread_id
             _record_live_chat_history_turn(
+                client=active_client,
                 thread_id=notion_thread_id,
                 conversation_id=conversation_id,
                 user_prompt=user_prompt,

@@ -83,7 +83,11 @@ def test_materialization_dispatch_receipt_carries_routing_evidence(tmp_path):
         plan_id="file-routing-plan",
         mission_id="file-routing-mission",
         idempotency_key="file-routing-materialization",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert result.status == MaterializationStatus.MATERIALIZED.value
     assert len(result.dispatch_receipts) == 1
     evidence = result.dispatch_receipts[0].evidence
@@ -110,6 +114,10 @@ def test_materialization_blocks_when_everything_is_unavailable_without_gate(tmp_
         authority_ceiling="A2",
         plan_id="blocked-file-routing-plan",
         mission_id="blocked-file-routing-mission",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert result.status == MaterializationStatus.BLOCKED.value
     assert result.dispatch_receipts == []

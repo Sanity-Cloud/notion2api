@@ -165,7 +165,11 @@ def test_typed_mission_bus_supports_leader_worker_and_worker_worker_crosstalk(tm
                 conversation_id="thread-b",
             ),
         ],
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     bus = HiveMissionBus(store)
     leader_id = leader_conversation_id("mission-1")
     first = bus.publish(

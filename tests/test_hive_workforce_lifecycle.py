@@ -31,7 +31,11 @@ def _auto_materialize(tmp_path, *, plan_id: str = "auto-plan"):
         plan_id=plan_id,
         mission_id=f"{plan_id}-mission",
         idempotency_key=f"{plan_id}-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     return store, result
 
 
@@ -113,7 +117,11 @@ def test_requisition_only_creates_deterministic_gap_worker_and_recruiting_plan(t
         plan_id="recruiting-plan",
         mission_id="recruiting-mission",
         idempotency_key="recruiting-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     replay = store.materialize_invocation(
         objective="Fill missing runtime capability.",
         required_competencies=["worker heartbeat and liveness"],
@@ -123,7 +131,11 @@ def test_requisition_only_creates_deterministic_gap_worker_and_recruiting_plan(t
         plan_id="recruiting-plan",
         mission_id="recruiting-mission",
         idempotency_key="recruiting-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert first.status == MaterializationStatus.RECRUITING.value
     assert first.recruitment_mode == RecruitmentMode.REQUISITION_ONLY.value
     assert len(first.recruited_worker_ids) == 1
@@ -163,7 +175,11 @@ def test_auto_appointment_requires_governed_authorization(tmp_path):
         plan_id="unauthorized-plan",
         mission_id="unauthorized-mission",
         idempotency_key="unauthorized-request",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     assert result.status == MaterializationStatus.BLOCKED.value
     assert result.recruited_worker_ids == []
     assert result.missing_competencies == ["sqlite schema migration"]

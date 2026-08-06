@@ -1,8 +1,7 @@
-"""Record live notion2api chat turns into the shared Notion chat-history archive.
+"""Record live notion2api chat turns into account-partitioned history shards.
 
-RepoAI and AIgentBee create Notion AI threads through /v1/chat/completions.
-Those transcripts must land in chat_history.db immediately (same parser/store as
-sync/hydrate), with caller provenance, not only after a later Notion archive sync.
+RepoAI and AIgentBee create Notion AI threads through /v1/chat/completions. Each
+completed turn is written immediately to the shard bound to workspace_id:user_id.
 """
 
 from __future__ import annotations
@@ -86,6 +85,7 @@ def build_live_turn_bundle(
     *,
     thread_id: str,
     conversation_id: str,
+    account_key: str = "",
     user_prompt: str,
     assistant_reply: str,
     requested_model: str = "",
@@ -111,6 +111,7 @@ def build_live_turn_bundle(
     provenance = {
         "source": "live_chat",
         "source_system": source_system,
+        "account_key": str(account_key or "").strip(),
         "conversation_id": str(conversation_id or "").strip(),
         "session_name": str(req_meta.get("session_name") or "").strip(),
         "caller": {
@@ -209,6 +210,7 @@ def record_live_chat_turn(
     *,
     thread_id: str,
     conversation_id: str,
+    account_key: str,
     user_prompt: str,
     assistant_reply: str,
     requested_model: str = "",
@@ -216,10 +218,16 @@ def record_live_chat_turn(
     request_metadata: dict[str, Any] | None = None,
     store: ChatHistoryStore | None = None,
 ) -> dict[str, Any]:
-    """Best-effort write of one live chat turn into the shared archive."""
+    """Write one live chat turn into its mandatory account history shard."""
+    key = str(account_key or "").strip()
+    if not key:
+        raise ValueError("account_key is required for live chat-history writes")
+    if store is not None and store.account_key and store.account_key != key:
+        raise ValueError("live recorder account_key does not match the supplied store")
     bundle = build_live_turn_bundle(
         thread_id=thread_id,
         conversation_id=conversation_id,
+        account_key=key,
         user_prompt=user_prompt,
         assistant_reply=assistant_reply,
         requested_model=requested_model,
@@ -229,7 +237,7 @@ def record_live_chat_turn(
     if not bundle.get("threads"):
         return {"recorded": False, "reason": "empty_turn"}
 
-    history_store = store or ChatHistoryStore()
+    history_store = store or ChatHistoryStore(account_key=key)
     imported = history_store.record_live_turn(bundle)
     source_system = infer_source_system(request_metadata)
     logger.info(
@@ -240,10 +248,18 @@ def record_live_chat_turn(
                 "thread_id": str(thread_id or "").strip(),
                 "conversation_id": str(conversation_id or "").strip(),
                 "source_system": source_system,
+                "account_key": key,
+                "db_path": history_store.db_path,
                 "messages": imported.get("messages", 0),
                 "messages_inserted": imported.get("messages_inserted", 0),
                 "messages_updated": imported.get("messages_updated", 0),
             }
         },
     )
-    return {"recorded": True, "source_system": source_system, "imported": imported}
+    return {
+        "recorded": True,
+        "source_system": source_system,
+        "account_key": key,
+        "db_path": history_store.db_path,
+        "imported": imported,
+    }
