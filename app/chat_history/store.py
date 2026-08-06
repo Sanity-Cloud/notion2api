@@ -8,10 +8,15 @@ import os
 import sqlite3
 from typing import Any
 
+from app.account_scope import AccountScopeError, safe_account_key
 from app.chat_history.extractor import describe_thread_record, visible_message_role, visible_message_text
 from app.model_registry import NOTION_MODEL_REVERSE_MAP
 
 DDL = """
+CREATE TABLE IF NOT EXISTS chat_history_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS chat_threads (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -65,7 +70,24 @@ def _ensure_chat_message_columns(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
-def get_default_chat_history_db_path() -> str:
+def get_chat_history_db_root() -> str:
+    explicit = str(os.getenv("CHAT_HISTORY_DB_DIR") or "").strip()
+    if explicit:
+        return os.path.abspath(explicit)
+    base = os.getenv("DB_PATH", "./data/conversations.db")
+    return os.path.join(os.path.dirname(os.path.abspath(base)), "chat_history")
+
+
+def get_account_chat_history_db_path(account_key: str) -> str:
+    key = str(account_key or "").strip()
+    if not key:
+        raise AccountScopeError("account_key is required for an account history shard")
+    return os.path.join(get_chat_history_db_root(), f"{safe_account_key(key)}.db")
+
+
+def get_default_chat_history_db_path(account_key: str | None = None) -> str:
+    if account_key:
+        return get_account_chat_history_db_path(account_key)
     explicit = os.getenv("CHAT_HISTORY_DB_PATH")
     if explicit:
         return explicit
@@ -389,14 +411,36 @@ def _process_steps(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 class ChatHistoryStore:
-    def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or get_default_chat_history_db_path()
+    def __init__(
+        self,
+        db_path: str | None = None,
+        *,
+        account_key: str | None = None,
+    ):
+        self.account_key = str(account_key or "").strip()
+        self.db_path = db_path or get_default_chat_history_db_path(self.account_key or None)
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         with self._conn() as conn:
             conn.executescript(DDL)
             _ensure_chat_message_columns(conn)
+            self._bind_account_metadata(conn)
             conn.commit()
         self._ensure_indexes()
+
+    def _bind_account_metadata(self, conn: sqlite3.Connection) -> None:
+        if not self.account_key:
+            return
+        row = conn.execute(
+            "SELECT value FROM chat_history_meta WHERE key='account_key'"
+        ).fetchone()
+        if row and str(row[0]) != self.account_key:
+            raise AccountScopeError(
+                "Chat-history shard is already bound to a different account_key"
+            )
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_history_meta(key,value) VALUES('account_key',?)",
+            (self.account_key,),
+        )
 
     def _ensure_indexes(self) -> None:
         """Best-effort indexes; another process may hold the live archive DB."""
