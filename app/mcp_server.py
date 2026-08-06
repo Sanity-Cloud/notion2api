@@ -4707,16 +4707,25 @@ def create_server(
         title: str,
         objective: str,
         lifecycle_stage: str,
+        workspace_id: str,
+        user_id: str,
         work_units: list[dict[str, Any]] | None = None,
         authority_ceiling: str = "A3",
         parent_context_id: str = "",
         mission_id: str | None = None,
         idempotency_key: str | None = None,
         actor: str = "notion2api",
+        account_key: str = "",
+        profile_name: str = "",
+        account_profile: str = "",
+        account_selector: str = "",
     ) -> HiveMissionSnapshot:
         try:
+            from app.conversation import ConversationManager
+            from app.hive_lane_scope import ensure_mission_lane_conversation_scopes
+
             specs = [HiveWorkUnitSpec.model_validate(item) for item in (work_units or [])]
-            return get_hive_runtime_store().create_mission(
+            snapshot = get_hive_runtime_store().create_mission(
                 title=title,
                 objective=objective,
                 lifecycle_stage=lifecycle_stage,
@@ -4726,7 +4735,25 @@ def create_server(
                 mission_id=mission_id,
                 idempotency_key=idempotency_key,
                 actor=actor,
+                account_key=account_key,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                profile_name=profile_name,
+                account_profile=account_profile,
+                account_selector=account_selector,
             )
+            ensure_mission_lane_conversation_scopes(
+                ConversationManager(),
+                mission_id=snapshot.mission_id,
+                account_key=snapshot.account_key,
+                workspace_id=snapshot.workspace_id,
+                user_id=snapshot.user_id,
+                profile_name=snapshot.profile_name,
+                work_unit_conversation_ids=[
+                    item.conversation_id for item in snapshot.work_units
+                ],
+            )
+            return snapshot
         except (HiveRuntimeError, ValueError) as exc:
             return _hive_error_snapshot(exc, mission_id or "")
 
@@ -4988,6 +5015,8 @@ def create_server(
     @server.tool(name=_tool_name("notion2api_hive_materialize_invocation"), description=_tool_description("Persist an invocation plan and, when coverage and governance-plan authorization gates pass, create a durable Hive mission with appointed-worker bindings, bounded leases, conversation bindings, and READY dispatch receipts."), structured_output=True)
     async def notion2api_hive_materialize_invocation(
         objective: str,
+        workspace_id: str,
+        user_id: str,
         required_competencies: list[str] | None = None,
         writable_domains: list[str] | None = None,
         dependency_count: int = 0,
@@ -5013,8 +5042,14 @@ def create_server(
         plan_id: str | None = None,
         mission_id: str | None = None,
         idempotency_key: str | None = None,
+        account_key: str = "",
+        profile_name: str = "",
+        account_profile: str = "",
+        account_selector: str = "",
     ) -> HiveMaterializationSnapshot:
         try:
+            from app.conversation import ConversationManager
+
             return get_hive_materialization_store().materialize_invocation(
                 objective=objective,
                 required_competencies=required_competencies,
@@ -5042,6 +5077,13 @@ def create_server(
                 plan_id=plan_id,
                 mission_id=mission_id,
                 idempotency_key=idempotency_key,
+                account_key=account_key,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                profile_name=profile_name,
+                account_profile=account_profile,
+                account_selector=account_selector,
+                conversation_manager=ConversationManager(),
             )
         except (HiveRuntimeError, ValueError) as exc:
             return _materialization_error_snapshot(

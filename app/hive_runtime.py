@@ -14,12 +14,55 @@ from typing import Any, Iterator
 
 from pydantic import BaseModel, Field
 
-HIVE_RUNTIME_SCHEMA_VERSION = 1
+from app.account_scope import AccountScopeError, canonical_account_key, require_matching_account_key
+
+HIVE_RUNTIME_SCHEMA_VERSION = 2
 MAX_SNAPSHOT_ITEMS = 1000
+
+
+def _account_mission_prefix(account_key: str) -> str:
+    digest = hashlib.sha256(str(account_key).encode("utf-8")).hexdigest()[:12]
+    return f"acct-{digest}"
 
 
 class HiveRuntimeError(RuntimeError):
     """Base error for the durable Hive runtime."""
+
+
+def resolve_mission_account_scope(
+    *,
+    account_key: str = "",
+    workspace_id: str = "",
+    user_id: str = "",
+    profile_name: str = "",
+    account_profile: str = "",
+    account_selector: str = "",
+) -> dict[str, str]:
+    """Require an explicit account identity for mission create/materialize."""
+    workspace = str(workspace_id or "").strip()
+    user = str(user_id or "").strip()
+    profile = str(
+        profile_name or account_profile or account_selector or ""
+    ).strip()
+    supplied_key = str(account_key or "").strip()
+    if not workspace or not user:
+        raise AccountScopeError(
+            "workspace_id and user_id are required to bind a Hive mission account"
+        )
+    key = canonical_account_key(workspace, user)
+    if supplied_key:
+        key = require_matching_account_key(
+            supplied_key,
+            workspace_id=workspace,
+            user_id=user,
+            profile_name=profile,
+        )
+    return {
+        "account_key": key,
+        "workspace_id": workspace,
+        "user_id": user,
+        "profile_name": profile,
+    }
 
 
 class HiveSchemaVersionError(HiveRuntimeError):
@@ -160,6 +203,10 @@ class HiveMissionSnapshot(BaseModel):
     authority_ceiling: str = "A3"
     parent_context_id: str = ""
     cancellation_reason: str = ""
+    account_key: str = ""
+    workspace_id: str = ""
+    user_id: str = ""
+    profile_name: str = ""
     created_at: int = 0
     updated_at: int = 0
     revision: int = 0
@@ -224,8 +271,19 @@ class HiveRuntimeStore:
                 if version == HIVE_RUNTIME_SCHEMA_VERSION:
                     self._validate_schema(conn)
                     return
+                if version == 1:
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        self._migrate_v1_to_v2(conn)
+                        conn.execute(f"PRAGMA user_version = {HIVE_RUNTIME_SCHEMA_VERSION}")
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        raise
+                    self._validate_schema(conn)
+                    return
                 conn.executescript(
-                    """
+                    f"""
                     BEGIN IMMEDIATE;
                     CREATE TABLE hive_missions (
                         mission_id TEXT PRIMARY KEY,
@@ -236,6 +294,10 @@ class HiveRuntimeStore:
                         authority_ceiling TEXT NOT NULL,
                         parent_context_id TEXT NOT NULL DEFAULT '',
                         cancellation_reason TEXT NOT NULL DEFAULT '',
+                        account_key TEXT NOT NULL DEFAULT '',
+                        workspace_id TEXT NOT NULL DEFAULT '',
+                        user_id TEXT NOT NULL DEFAULT '',
+                        profile_name TEXT NOT NULL DEFAULT '',
                         idempotency_key TEXT UNIQUE,
                         request_sha256 TEXT NOT NULL,
                         created_at INTEGER NOT NULL,
@@ -263,7 +325,7 @@ class HiveRuntimeStore:
                         event_type TEXT NOT NULL,
                         sender TEXT NOT NULL,
                         recipient TEXT NOT NULL DEFAULT 'swarm',
-                        payload_json TEXT NOT NULL DEFAULT '{}',
+                        payload_json TEXT NOT NULL DEFAULT '{{}}',
                         context_version INTEGER NOT NULL DEFAULT 0,
                         idempotency_key TEXT UNIQUE,
                         request_sha256 TEXT NOT NULL,
@@ -286,7 +348,7 @@ class HiveRuntimeStore:
                         action_type TEXT NOT NULL,
                         actor TEXT NOT NULL,
                         correlation_id TEXT NOT NULL DEFAULT '',
-                        payload_json TEXT NOT NULL DEFAULT '{}',
+                        payload_json TEXT NOT NULL DEFAULT '{{}}',
                         created_at INTEGER NOT NULL
                     );
                     CREATE INDEX idx_hive_work_units_mission_status
@@ -297,7 +359,9 @@ class HiveRuntimeStore:
                         ON hive_actions(mission_id, created_at DESC, record_id DESC);
                     CREATE INDEX idx_hive_decisions_mission_created
                         ON hive_decisions(mission_id, created_at DESC, decision_id DESC);
-                    PRAGMA user_version = 1;
+                    CREATE INDEX idx_hive_missions_account_key
+                        ON hive_missions(account_key, updated_at DESC);
+                    PRAGMA user_version = {HIVE_RUNTIME_SCHEMA_VERSION};
                     COMMIT;
                     """
                 )
@@ -310,6 +374,23 @@ class HiveRuntimeStore:
                 raise
             finally:
                 conn.close()
+
+    @staticmethod
+    def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(hive_missions)").fetchall()
+        }
+        for name in ("account_key", "workspace_id", "user_id", "profile_name"):
+            if name not in columns:
+                conn.execute(
+                    f"ALTER TABLE hive_missions ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"
+                )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_hive_missions_account_key
+                ON hive_missions(account_key, updated_at DESC)
+            """
+        )
 
     @staticmethod
     def _validate_schema(conn: sqlite3.Connection) -> None:
@@ -326,8 +407,9 @@ class HiveRuntimeStore:
         missing = required - present
         if missing:
             raise HiveSchemaVersionError(
-                "Hive runtime database declares schema version 1 but is "
-                f"missing tables: {sorted(missing)}"
+                "Hive runtime database declares schema version "
+                f"{HIVE_RUNTIME_SCHEMA_VERSION} but is missing tables: "
+                f"{sorted(missing)}"
             )
 
     @contextmanager
@@ -411,13 +493,32 @@ class HiveRuntimeStore:
         mission_id: str | None = None,
         idempotency_key: str | None = None,
         actor: str = "notion2api",
+        account_key: str = "",
+        workspace_id: str = "",
+        user_id: str = "",
+        profile_name: str = "",
+        account_profile: str = "",
+        account_selector: str = "",
     ) -> HiveMissionSnapshot:
         specs = [
             item if isinstance(item, HiveWorkUnitSpec)
             else HiveWorkUnitSpec.model_validate(item)
             for item in (work_units or [])
         ]
-        mission_key = str(mission_id or f"hive-{uuid.uuid4()}").strip()
+        account = resolve_mission_account_scope(
+            account_key=account_key,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            profile_name=profile_name,
+            account_profile=account_profile,
+            account_selector=account_selector,
+        )
+        if mission_id is None:
+            mission_key = (
+                f"{_account_mission_prefix(account['account_key'])}-hive-{uuid.uuid4().hex[:12]}"
+            )
+        else:
+            mission_key = str(mission_id).strip()
         normalized_specs: list[tuple[str, HiveWorkUnitSpec]] = []
         seen_work_ids: set[str] = set()
         for index, spec in enumerate(specs, start=1):
@@ -441,6 +542,10 @@ class HiveRuntimeStore:
             "authority_ceiling": str(authority_ceiling or "A3").strip(),
             "parent_context_id": str(parent_context_id or "").strip(),
             "mission_id": mission_key,
+            "account_key": account["account_key"],
+            "workspace_id": account["workspace_id"],
+            "user_id": account["user_id"],
+            "profile_name": account["profile_name"],
         }
         fingerprint = self._fingerprint(request)
         with self._write() as conn:
@@ -470,13 +575,16 @@ class HiveRuntimeStore:
                 INSERT INTO hive_missions(
                     mission_id, title, objective, lifecycle_stage, status,
                     authority_ceiling, parent_context_id, cancellation_reason,
+                    account_key, workspace_id, user_id, profile_name,
                     idempotency_key, request_sha256, created_at, updated_at, revision
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 1)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 (
                     mission_key, request["title"], request["objective"],
                     request["lifecycle_stage"], MissionStatus.ACTIVE.value,
                     request["authority_ceiling"], request["parent_context_id"],
+                    request["account_key"], request["workspace_id"],
+                    request["user_id"], request["profile_name"],
                     idempotency_key, fingerprint, now, now,
                 ),
             )
@@ -975,6 +1083,7 @@ class HiveRuntimeStore:
                 evidence=json.loads(str(decision_row["evidence_json"])),
                 created_at=int(decision_row["created_at"]),
             )
+        mission_keys = set(mission.keys())
         return HiveMissionSnapshot(
             ok=True,
             found=True,
@@ -987,6 +1096,10 @@ class HiveRuntimeStore:
             authority_ceiling=str(mission["authority_ceiling"]),
             parent_context_id=str(mission["parent_context_id"]),
             cancellation_reason=str(mission["cancellation_reason"]),
+            account_key=str(mission["account_key"] if "account_key" in mission_keys else ""),
+            workspace_id=str(mission["workspace_id"] if "workspace_id" in mission_keys else ""),
+            user_id=str(mission["user_id"] if "user_id" in mission_keys else ""),
+            profile_name=str(mission["profile_name"] if "profile_name" in mission_keys else ""),
             created_at=int(mission["created_at"]),
             updated_at=int(mission["updated_at"]),
             revision=int(mission["revision"]),

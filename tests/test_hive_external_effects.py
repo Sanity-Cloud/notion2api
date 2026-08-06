@@ -141,7 +141,11 @@ def _materialize(materialization, worker_id: str, plan_id: str):
         plan_id=plan_id,
         mission_id=f"mission-{plan_id}",
         idempotency_key=f"materialize-{plan_id}",
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
 
 
 def _execute(dispatcher, plan, payload, worker_id: str, key: str):
@@ -168,7 +172,7 @@ def test_schema_and_builtin_adapter_are_additive(tmp_path, monkeypatch):
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
     assert {
         "hive_external_adapter_certifications",
         "hive_external_certification_events",

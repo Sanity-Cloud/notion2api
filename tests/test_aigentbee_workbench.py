@@ -271,7 +271,11 @@ def test_leader_request_is_durable_retry_safe_and_member_bound(
                 authority_ceiling="A3",
             )
         ],
-    )
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        profile_name="profile-test",
+)
     member_id = snapshot.work_units[0].work_unit_id
     jobs: dict[str, dict[str, object]] = {}
 

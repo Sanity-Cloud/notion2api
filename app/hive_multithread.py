@@ -16,6 +16,11 @@ import uuid
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.account_scope import (
+    account_key_matches,
+    canonical_account_key,
+    require_matching_account_key,
+)
 from app.hive_runtime import HiveMissionSnapshot, HiveRuntimeStore
 
 
@@ -94,6 +99,7 @@ class ThreadBinding(BaseModel):
     profile_id: str = Field(min_length=1)
     notion_user_id: str = Field(min_length=1)
     workspace_id: str = Field(min_length=1)
+    account_key: str = ""
     authority_ceiling: str = "A0"
     writable_domains: list[str] = Field(default_factory=list)
 
@@ -112,6 +118,16 @@ class ThreadBinding(BaseModel):
                 raise MultithreadContractError("worker bindings require work_unit_id and worker_id")
             if self.conversation_id == self.leader_conversation_id:
                 raise MultithreadContractError("worker and leader conversations must be independent")
+        resolved = canonical_account_key(self.workspace_id, self.notion_user_id)
+        if self.account_key:
+            require_matching_account_key(
+                self.account_key,
+                workspace_id=self.workspace_id,
+                user_id=self.notion_user_id,
+                profile_name=self.profile_id,
+            )
+        else:
+            self.account_key = resolved
         return self
 
     @property
@@ -121,6 +137,7 @@ class ThreadBinding(BaseModel):
             self.work_unit_id,
             self.worker_id,
             self.conversation_id,
+            self.account_key,
             self.profile_id,
             self.notion_user_id,
             self.workspace_id,
@@ -136,6 +153,7 @@ class MCPInvocationEnvelope(BaseModel):
     profile_id: str = Field(min_length=1)
     notion_user_id: str = Field(min_length=1)
     workspace_id: str = Field(min_length=1)
+    account_key: str = ""
     mcp_server_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
@@ -146,6 +164,16 @@ class MCPInvocationEnvelope(BaseModel):
     @model_validator(mode="after")
     def validate_no_credentials(self) -> "MCPInvocationEnvelope":
         _assert_no_credentials(self.payload)
+        resolved = canonical_account_key(self.workspace_id, self.notion_user_id)
+        if self.account_key:
+            require_matching_account_key(
+                self.account_key,
+                workspace_id=self.workspace_id,
+                user_id=self.notion_user_id,
+                profile_name=self.profile_id,
+            )
+        else:
+            self.account_key = resolved
         return self
 
     def validate_binding(self, binding: ThreadBinding) -> None:
@@ -156,6 +184,7 @@ class MCPInvocationEnvelope(BaseModel):
             binding.work_unit_id,
             binding.worker_id,
             binding.conversation_id,
+            binding.account_key,
             binding.profile_id,
             binding.notion_user_id,
             binding.workspace_id,
@@ -165,12 +194,95 @@ class MCPInvocationEnvelope(BaseModel):
             self.work_unit_id,
             self.worker_id,
             self.conversation_id,
+            self.account_key,
             self.profile_id,
             self.notion_user_id,
             self.workspace_id,
         )
         if actual != expected:
             raise MultithreadContractError("MCP invocation identity does not match worker binding")
+
+
+class BeeNotionCallEnvelope(BaseModel):
+    """Validated bee→bee / bee→lane notion2api chat call contract."""
+
+    account_key: str = Field(min_length=1)
+    conversation_id: str = Field(min_length=1)
+    mission_id: str = Field(min_length=1)
+    work_unit_id: str = Field(min_length=1)
+    worker_id: str = ""
+    notion_thread_id: str = ""
+    idempotency_key: str = Field(min_length=1)
+    profile_id: str = ""
+    workspace_id: str = ""
+    user_id: str = ""
+
+    @model_validator(mode="after")
+    def normalize_account(self) -> "BeeNotionCallEnvelope":
+        workspace = str(self.workspace_id or "").strip()
+        user = str(self.user_id or "").strip()
+        if workspace and user:
+            require_matching_account_key(
+                self.account_key,
+                workspace_id=workspace,
+                user_id=user,
+                profile_name=self.profile_id,
+            )
+        elif ":" not in self.account_key:
+            raise MultithreadContractError(
+                "account_key must be workspace_id:user_id for bee notion2api calls"
+            )
+        return self
+
+    def validate_lane(
+        self,
+        binding: ThreadBinding,
+        *,
+        mission_conversation_ids: Iterable[str],
+        bound_thread_id: str = "",
+        lane_thread_ids: Mapping[str, str] | None = None,
+    ) -> None:
+        """Reject account/lane/thread borrowing across bees."""
+        if binding.thread_kind == ThreadKind.LEADER and self.work_unit_id:
+            # Leaders may coordinate, but chat must still target a declared lane conversation.
+            pass
+        if self.mission_id != binding.mission_id:
+            raise MultithreadContractError("bee call mission_id does not match lane binding")
+        if self.conversation_id != binding.conversation_id:
+            raise MultithreadContractError("bee call conversation_id does not match lane binding")
+        if self.work_unit_id and self.work_unit_id != binding.work_unit_id:
+            raise MultithreadContractError("bee call work_unit_id does not match lane binding")
+        if self.worker_id and binding.worker_id and self.worker_id != binding.worker_id:
+            raise MultithreadContractError("bee call worker_id does not match lane binding")
+        if not account_key_matches(
+            self.account_key,
+            workspace_id=binding.workspace_id,
+            user_id=binding.notion_user_id,
+            profile_name=binding.profile_id,
+        ):
+            raise MultithreadContractError("bee call account_key does not match lane binding")
+        allowed = {str(item).strip() for item in mission_conversation_ids if str(item).strip()}
+        allowed.add(leader_conversation_id(self.mission_id))
+        if self.conversation_id not in allowed:
+            raise MultithreadContractError(
+                "bee call conversation_id is not a declared mission lane conversation"
+            )
+        target_thread = str(self.notion_thread_id or "").strip()
+        bound = str(bound_thread_id or "").strip()
+        if target_thread and bound and target_thread != bound:
+            raise MultithreadContractError(
+                "bee call notion_thread_id does not match the conversation's bound Notion thread"
+            )
+        if target_thread and lane_thread_ids:
+            owners = [
+                lane_id
+                for lane_id, thread_id in lane_thread_ids.items()
+                if str(thread_id or "").strip() == target_thread
+            ]
+            if owners and binding.conversation_id not in owners and self.conversation_id not in owners:
+                raise MultithreadContractError(
+                    "bee call notion_thread_id is bound to a different mission lane"
+                )
 
 
 def _assert_no_credentials(value: Any, path: str = "$") -> None:
@@ -343,15 +455,20 @@ def topology_receipt(
     profile_id: str,
     notion_user_id: str,
     workspace_id: str,
+    account_key: str = "",
 ) -> dict[str, Any]:
     """Return a secret-free leader/worker thread topology receipt."""
     leader_id = leader_conversation_id(mission_id)
+    resolved_account = str(account_key or "").strip() or canonical_account_key(
+        workspace_id, notion_user_id
+    )
     bindings = [
         {
             "worker_id": worker_id,
             "work_unit_id": work_unit_id,
             "conversation_id": worker_conversation_id(plan_id, worker_id),
             "leader_conversation_id": leader_id,
+            "account_key": resolved_account,
             "profile_id": profile_id,
             "notion_user_id": notion_user_id,
             "workspace_id": workspace_id,
@@ -361,6 +478,7 @@ def topology_receipt(
     return {
         "mission_id": mission_id,
         "plan_id": plan_id,
+        "account_key": resolved_account,
         "topology": "one_leader_many_independent_workers",
         "leader_conversation_id": leader_id,
         "worker_bindings": bindings,
