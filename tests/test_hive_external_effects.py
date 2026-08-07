@@ -172,7 +172,7 @@ def test_schema_and_builtin_adapter_are_additive(tmp_path, monkeypatch):
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
     assert {
         "hive_external_adapter_certifications",
         "hive_external_certification_events",

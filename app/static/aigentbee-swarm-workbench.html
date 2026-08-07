@@ -349,7 +349,7 @@
         const details = element("div", "card detail-list");
         addDetail(details, "Mission ID", mission.mission_id);
         addDetail(details, "Lifecycle", mission.lifecycle_stage);
-        addDetail(details, "Authority ceiling", mission.authority_ceiling);
+        addDetail(details, "Authority level", mission.authority_level || mission.authority_ceiling);
         addDetail(details, "Revision", mission.revision);
         addDetail(details, "Updated", formatTime(mission.updated_at));
         addDetail(details, "Leader requests", mission.request_allowed ? "Available" : "Closed");
@@ -389,7 +389,7 @@
             header,
             element("div", "member-role", member.role),
             element("div", "member-task", `Current lane: ${member.lane_title || member.task}`),
-            element("div", "member-meta", `Authority ${member.authority_ceiling} · ${member.dependencies.length} dependencies`),
+            element("div", "member-meta", `${member.authority_level || member.authority_ceiling} · ${member.dependencies.length} dependencies`),
           );
           button.addEventListener("click", () => {
             state.selectedMemberId = member.member_id;
@@ -441,7 +441,7 @@
         const governance = document.querySelector("#governance");
         clear(governance);
         const values = data.governance || {};
-        addDetail(governance, "Authority ceiling", values.authorityCeiling);
+        addDetail(governance, "Authority level", values.authorityLevel || values.authorityCeiling);
         addDetail(governance, "Request path", values.requestPath);
         addDetail(governance, "Leader decision required", values.leaderDecisionRequired ? "Yes" : "No");
         addDetail(governance, "Direct worker execution", values.directWorkerExecution ? "Enabled" : "Not exposed");

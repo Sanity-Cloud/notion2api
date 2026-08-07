@@ -21,6 +21,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.attachments.normalizer import validate_chat_messages, validate_prompt_text
+from app.model_registry import get_model_route_resolution
 from app.file_discovery_routing import (
     FileRoutingDecision,
     route_file_operation,
@@ -39,7 +40,10 @@ from app.aigentbee_workbench import (
 from app.output_hygiene import detect_visible_output_contamination
 from app.output_integrity import assess_output_integrity
 from app.hive_runtime import (
+    HiveDelegatedTaskSpec,
+    HiveHandoffReceipt,
     HiveMissionSnapshot,
+    HiveProjectContract,
     HiveRuntimeError,
     HiveWorkUnitSpec,
     default_hive_runtime_db_path,
@@ -118,6 +122,7 @@ DEFAULT_CHAT_JOB_DB_PATH = Path(
 DEFAULT_CHAT_STALL_SECONDS = 180.0
 MAX_PROGRESS_REASONING_CHARS = 200_000
 MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS = 4_000
+MAX_CHAT_JOB_PROMPT_CHARS = 20_000
 DEFAULT_STAGED_FILE_TTL_SECONDS = 24 * 60 * 60
 STAGED_FILE_ID_RE = re.compile(r"^stage-[a-f0-9]{32}$")
 SESSION_STATE_VERSION = 2
@@ -179,6 +184,8 @@ class ChatOutput(BaseModel):
     model_identity_source: str = Field(default="", description="Evidence source used for model identity classification.")
     model_identity_confidence: str = Field(default="unverified", description="Model identity confidence: verified, observed, or unverified.")
     model_substitution: dict[str, Any] | None = Field(default=None, description="Requested/resolved/responding route change, when observed.")
+    alias_resolution: dict[str, Any] | None = Field(default=None, description="Configured logical alias to concrete Notion route mapping.")
+    model_route_disposition: str = Field(default="direct_route", description="Route classification such as alias_resolution or verified_substitution.")
     caller_id: str = Field(default="", description="Stable identity of the system or agent that initiated the request.")
     caller_type: str = Field(default="", description="Caller class, such as repoai, chatgpt, or mcp.")
     caller_metadata: dict[str, Any] | None = Field(default=None, description="Bounded caller provenance supplied with the request.")
@@ -248,6 +255,8 @@ class ResponsesOutput(BaseModel):
     model_identity_source: str = Field(default="")
     model_identity_confidence: str = Field(default="unverified")
     model_substitution: dict[str, Any] | None = Field(default=None)
+    alias_resolution: dict[str, Any] | None = Field(default=None)
+    model_route_disposition: str = Field(default="direct_route")
     caller_id: str = Field(default="")
     caller_type: str = Field(default="")
     caller_metadata: dict[str, Any] | None = Field(default=None)
@@ -352,6 +361,10 @@ class ChatJobOutput(BaseModel):
     session_name: str = Field(default="", description="Normalized MCP session name.")
     conversation_id: str = Field(default="", description="Conversation id associated with the job.")
     model: str = Field(default="", description="Requested model for the job.")
+    requested_model: str = Field(default="", description="Logical model alias requested for the job.")
+    resolved_model: str = Field(default="", description="Concrete Notion route resolved for the job.")
+    alias_resolution: dict[str, Any] | None = Field(default=None, description="Configured alias resolution for the job.")
+    model_route_disposition: str = Field(default="direct_route", description="Requested-to-route classification.")
     endpoint: str = Field(default="", description="Backend endpoint used by the job.")
     created_at: int = Field(default=0, description="Unix epoch milliseconds when the job was created.")
     updated_at: int = Field(default=0, description="Unix epoch milliseconds when the job was last updated.")
@@ -1089,11 +1102,39 @@ def _model_identity_trace(
         else {}
     )
     requested = str(metadata.get("requested_model") or requested_model or "").strip()
+    route_resolution = get_model_route_resolution(requested)
     resolved = str(
         metadata.get("notion_requested_model")
         or metadata.get("resolved_model")
+        or route_resolution.get("resolved_model")
         or requested
     ).strip()
+    alias_resolution = None
+    supplied_alias = metadata.get("alias_resolution")
+    if (
+        isinstance(supplied_alias, dict)
+        and str(supplied_alias.get("resolved_model") or "").strip() == resolved
+    ):
+        alias_resolution = dict(supplied_alias)
+    elif (
+        route_resolution.get("resolution_kind") == "configured_alias"
+        and resolved == str(route_resolution.get("resolved_model") or "")
+    ):
+        alias_resolution = {
+            key: route_resolution[key]
+            for key in (
+                "requested_model",
+                "canonical_model",
+                "resolved_model",
+                "public_model",
+                "display_name",
+                "resolution_kind",
+            )
+        }
+    route_disposition = str(metadata.get("model_route_disposition") or "").strip()
+    if not route_disposition:
+        route_disposition = "alias_resolution" if alias_resolution else "direct_route"
+
     observed = _extract_actual_model(data)
     verified = bool(metadata.get("actual_model_verified") is True and observed)
     source = str(
@@ -1121,6 +1162,9 @@ def _model_identity_trace(
             "responding_model": comparison_model,
             "verified": verified,
         }
+        route_disposition = (
+            "verified_substitution" if verified else "unverified_route_mismatch"
+        )
     return {
         "requested_model": requested,
         "resolved_model": resolved,
@@ -1129,6 +1173,8 @@ def _model_identity_trace(
         "model_identity_source": source,
         "model_identity_confidence": confidence,
         "model_substitution": substitution,
+        "alias_resolution": alias_resolution,
+        "model_route_disposition": route_disposition,
     }
 
 
@@ -2976,6 +3022,30 @@ async def _submit_or_resume_chat_job(
     if task is None:
         baseline_message_id = _conversation_message_checkpoint(conversation_id)
         now = _now_ms()
+        route_resolution = get_model_route_resolution(model)
+        resolved_model = str(route_resolution.get("resolved_model") or model)
+        alias_resolution = None
+        route_disposition = "direct_route"
+        if route_resolution.get("resolution_kind") == "configured_alias":
+            alias_resolution = {
+                key: route_resolution[key]
+                for key in (
+                    "requested_model",
+                    "canonical_model",
+                    "resolved_model",
+                    "public_model",
+                    "display_name",
+                    "resolution_kind",
+                )
+            }
+            route_disposition = "alias_resolution"
+        prompt_text = _prompt_text_from_messages(
+            payload.get("messages") if isinstance(payload.get("messages"), list) else []
+        )
+        if not prompt_text:
+            prompt_text = str(payload.get("prompt") or payload.get("input") or "")
+        if len(prompt_text) > MAX_CHAT_JOB_PROMPT_CHARS:
+            prompt_text = prompt_text[:MAX_CHAT_JOB_PROMPT_CHARS]
         job = {
             "request_id": normalized_id,
             "job_id": normalized_id,
@@ -2983,7 +3053,10 @@ async def _submit_or_resume_chat_job(
             "endpoint": path,
             "model": model,
             "requested_model": model,
-            "resolved_model": model,
+            "resolved_model": resolved_model,
+            "alias_resolution": alias_resolution,
+            "model_route_disposition": route_disposition,
+            "prompt": prompt_text,
             "caller": caller,
             "session_name": session_key,
             "conversation_id": conversation_id,
@@ -3275,6 +3348,39 @@ def _chat_job_output(
             },
         }
 
+    requested_model = str(job.get("requested_model") or job.get("model") or "")
+    resolved_model = str(job.get("resolved_model") or "")
+    alias_resolution = (
+        dict(job["alias_resolution"])
+        if isinstance(job.get("alias_resolution"), dict)
+        else None
+    )
+    route_disposition = str(job.get("model_route_disposition") or "").strip()
+    if not resolved_model or not route_disposition:
+        identity = _model_identity_trace(
+            {
+                "model_metadata": (
+                    dict(job["model_metadata"])
+                    if isinstance(job.get("model_metadata"), dict)
+                    else {}
+                )
+            },
+            requested_model,
+        )
+        resolved_model = resolved_model or str(identity.get("resolved_model") or "")
+        alias_resolution = alias_resolution or (
+            dict(identity["alias_resolution"])
+            if isinstance(identity.get("alias_resolution"), dict)
+            else None
+        )
+        route_disposition = route_disposition or str(
+            identity.get("model_route_disposition") or "direct_route"
+        )
+    if alias_resolution and not route_disposition:
+        route_disposition = "alias_resolution"
+    if not route_disposition:
+        route_disposition = "direct_route"
+
     return ChatJobOutput(
         ok=True,
         found=True,
@@ -3284,6 +3390,10 @@ def _chat_job_output(
         session_name=str(job.get("session_name") or ""),
         conversation_id=str(job.get("conversation_id") or ""),
         model=str(job.get("model") or ""),
+        requested_model=requested_model,
+        resolved_model=resolved_model,
+        alias_resolution=alias_resolution,
+        model_route_disposition=route_disposition,
         endpoint=str(job.get("endpoint") or ""),
         created_at=int(job.get("created_at") or 0),
         updated_at=int(job.get("updated_at") or 0),
@@ -4710,7 +4820,7 @@ def create_server(
         workspace_id: str,
         user_id: str,
         work_units: list[dict[str, Any]] | None = None,
-        authority_ceiling: str = "A3",
+        authority_ceiling: str = "A2",
         parent_context_id: str = "",
         mission_id: str | None = None,
         idempotency_key: str | None = None,
@@ -4719,6 +4829,7 @@ def create_server(
         profile_name: str = "",
         account_profile: str = "",
         account_selector: str = "",
+        project_contract: dict[str, Any] | None = None,
     ) -> HiveMissionSnapshot:
         try:
             from app.conversation import ConversationManager
@@ -4741,6 +4852,11 @@ def create_server(
                 profile_name=profile_name,
                 account_profile=account_profile,
                 account_selector=account_selector,
+                project_contract=(
+                    HiveProjectContract.model_validate(project_contract)
+                    if project_contract is not None
+                    else None
+                ),
             )
             ensure_mission_lane_conversation_scopes(
                 ConversationManager(),
@@ -4794,6 +4910,72 @@ def create_server(
                 context_version=context_version,
                 expected_mission_revision=expected_mission_revision,
                 work_unit_status=work_unit_status,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id)
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_delegate_tasks"),
+        description=_tool_description(
+            "Create a validated, lane-local delegated-task DAG with bounded authority, "
+            "sources, writable domains, and durable task events."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_delegate_tasks(
+        mission_id: str,
+        tasks: list[dict[str, Any]],
+        actor: str = "notion2api",
+        expected_mission_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveMissionSnapshot:
+        try:
+            return get_hive_runtime_store().delegate_tasks(
+                mission_id=mission_id,
+                tasks=[HiveDelegatedTaskSpec.model_validate(item) for item in tasks],
+                actor=actor,
+                expected_mission_revision=expected_mission_revision,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id)
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_transition_task"),
+        description=_tool_description(
+            "Accept, lease, execute, block, hand off, or terminalize one delegated "
+            "task with dependency and writable-domain enforcement."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_transition_task(
+        mission_id: str,
+        task_id: str,
+        status: str,
+        actor: str,
+        worker_binding: str = "",
+        lease_seconds: int = 900,
+        evidence: list[dict[str, Any]] | None = None,
+        handoff_receipt: dict[str, Any] | None = None,
+        expected_mission_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveMissionSnapshot:
+        try:
+            return get_hive_runtime_store().transition_delegated_task(
+                mission_id=mission_id,
+                task_id=task_id,
+                status=status,
+                actor=actor,
+                worker_binding=worker_binding,
+                lease_seconds=lease_seconds,
+                evidence=evidence,
+                handoff_receipt=(
+                    HiveHandoffReceipt.model_validate(handoff_receipt)
+                    if handoff_receipt is not None
+                    else None
+                ),
+                expected_mission_revision=expected_mission_revision,
                 idempotency_key=idempotency_key,
             )
         except (HiveRuntimeError, ValueError) as exc:

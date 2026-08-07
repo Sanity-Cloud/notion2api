@@ -78,3 +78,95 @@ def test_workspace_library_reports_unknown_branch_dependency():
         accountable_human="Mathias",
     )
     assert any("unknown dependencies" in gap for gap in projection.evidence_gaps)
+
+
+def test_workspace_library_projects_governed_project_contract_and_graph_receipt():
+    projection = build_workspace_library(
+        {
+            "mission_id": "mission-3",
+            "title": "Cross-domain launch",
+            "objective": "Deliver one governed SanityCloud initiative.",
+            "status": "ACTIVE",
+            "authority_ceiling": "A2",
+            "parent_context_id": "sanitycloud-governance",
+            "project_contract": {
+                "project_kind": "hybrid",
+                "scope": "Coding, business planning, and creative production.",
+                "exclusions": ["Unapproved publication"],
+                "accountable_human": "SanityCloud Founder",
+                "source_boundary": ["Approved project sources"],
+                "risks": [{"risk": "scope drift"}],
+                "acceptance_criteria": ["Outcome passes independent review"],
+                "decision_gates": ["Human publication approval"],
+                "fan_in_owner": "AIgentBee leader",
+                "closure_condition": "Decision and evidence receipts recorded",
+            },
+            "graph_receipt": {
+                "validated": True,
+                "dependency_waves": [["plan"], ["build"]],
+            },
+        }
+    )
+
+    project = projection.records[0]
+    assert project.scope.startswith("Coding")
+    assert project.accountable_human == "SanityCloud Founder"
+    assert project.acceptance_criteria == ["Outcome passes independent review"]
+    assert project.metadata["project_kind"] == "hybrid"
+    assert project.metadata["graph_receipt"]["validated"] is True
+    assert not projection.evidence_gaps
+
+
+def test_workspace_library_projects_delegated_tasks_under_parent_lane():
+    projection = build_workspace_library(
+        {
+            "mission_id": "mission-delegated",
+            "title": "Delegated project",
+            "status": "ACTIVE",
+            "authority_ceiling": "A2",
+            "work_units": [
+                {
+                    "work_unit_id": "build",
+                    "title": "Build lane",
+                    "role": "developer",
+                    "status": "ACTIVE",
+                    "writable_domain": "repo:project",
+                    "authority_ceiling": "A2",
+                }
+            ],
+            "delegated_tasks": [
+                {
+                    "task_id": "build-api",
+                    "parent_lane_id": "build",
+                    "objective": "Build the API",
+                    "scope": "API implementation",
+                    "exclusions": ["Deployment"],
+                    "source_boundary": ["Approved repository"],
+                    "writable_domains": ["repo:project/api"],
+                    "authority_ceiling": "A2",
+                    "dependencies": [],
+                    "acceptance_criteria": ["Tests pass"],
+                    "deliverables": ["API patch"],
+                    "evidence_requirements": ["pytest receipt"],
+                    "fan_in_owner": "lane-captain",
+                    "closure_condition": "Handoff accepted",
+                    "status": "ACTIVE",
+                }
+            ],
+            "events": [
+                {
+                    "event_id": "task-event",
+                    "work_unit_id": "build",
+                    "event_type": "TASK_ACCEPTED",
+                    "sender": "worker",
+                    "payload": {"task_id": "build-api", "status": "ACCEPTED"},
+                }
+            ],
+        }
+    )
+
+    records = {record.record_id: record for record in projection.records}
+    task = records["task:build-api"]
+    assert task.parent_record_id == "branch:build"
+    assert task.metadata["authority_level"] == "Execute bounded work (A2)"
+    assert records["event:task-event"].parent_record_id == "task:build-api"

@@ -35,10 +35,33 @@ _INTERNAL_TOOL_SYNTAX_RE = re.compile(
     r")"
 )
 _HEADING_RE = re.compile(r"(?m)^\s*#{1,6}\s+([^\n]{1,240})\s*$")
+_GLUED_CAMEL_TOKEN_RE = re.compile(r"[a-z]{2,}[A-Z][a-zA-Z]+")
+_TRAILING_ORPHAN_MARKDOWN_RE = re.compile(r"(?s)[\s#]*#+\s*$")
+_SENTENCE_TERMINATOR_RE = re.compile(r"[.!?…]")
+_MIN_KEYWORD_DUMP_CHARS = 40
+_MAX_KEYWORD_DUMP_CHARS = 2_000
 
 
 def _normalize_text(value: Any) -> str:
     return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _is_nonsentence_keyword_dump(text: str) -> bool:
+    """Detect thin keyword/title soup that should not pass as validated prose."""
+
+    compact = re.sub(r"\s+", " ", text).strip()
+    if not (_MIN_KEYWORD_DUMP_CHARS <= len(compact) <= _MAX_KEYWORD_DUMP_CHARS):
+        return False
+    if compact.count("\n") > 2:
+        return False
+    if _SENTENCE_TERMINATOR_RE.search(compact):
+        return False
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9_-]*", compact)
+    if len(tokens) < 8:
+        return False
+    has_glue = bool(_GLUED_CAMEL_TOKEN_RE.search(compact))
+    has_orphan_markdown = bool(_TRAILING_ORPHAN_MARKDOWN_RE.search(compact))
+    return has_glue or has_orphan_markdown
 
 
 def _normalized_headings(text: str) -> list[str]:
@@ -105,6 +128,7 @@ def assess_output_integrity(
     malformed_citations = bool(_MALFORMED_NOTION_CITATION_RE.search(normalized))
     internal_tool_syntax = bool(_INTERNAL_TOOL_SYNTAX_RE.search(normalized))
     geometric_growth = _geometric_growth_detected(event_lengths)
+    keyword_dump = _is_nonsentence_keyword_dump(normalized)
 
     if response_chars > MAX_VISIBLE_RESPONSE_CHARS:
         reasons.append("response_size_limit_exceeded")
@@ -120,6 +144,8 @@ def assess_output_integrity(
         reasons.append("internal_tool_syntax_exposed")
     if geometric_growth:
         reasons.append("geometric_event_growth")
+    if keyword_dump:
+        reasons.append("nonsentence_keyword_dump")
 
     reasons = list(dict.fromkeys(reasons))
     contaminated = bool(reasons)
@@ -137,6 +163,7 @@ def assess_output_integrity(
         "max_repeated_heading_occurrences": max_heading_occurrences,
         "malformed_notion_citation_detected": malformed_citations,
         "geometric_event_growth_detected": geometric_growth,
+        "nonsentence_keyword_dump_detected": keyword_dump,
     }
 
 

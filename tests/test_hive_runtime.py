@@ -6,7 +6,10 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from app.hive_runtime import (
+    HiveDelegatedTaskSpec,
+    HiveHandoffReceipt,
     HiveIdempotencyConflict,
+    HiveProjectContract,
     HiveRuntimeStore,
     HiveSchemaVersionError,
     HiveTransitionError,
@@ -49,11 +52,40 @@ def _create(store: HiveRuntimeStore, mission_id: str = "m1"):
 )
 
 
+def _task(
+    task_id: str,
+    *,
+    lane_id: str = "m1-builder",
+    dependencies: list[str] | None = None,
+    writable_domains: list[str] | None = None,
+):
+    return HiveDelegatedTaskSpec(
+        task_id=task_id,
+        parent_lane_id=lane_id,
+        objective=f"Complete {task_id}",
+        scope=f"Bounded scope for {task_id}",
+        exclusions=["External publication"],
+        required_context=["Mission contract"],
+        source_boundary=["Approved project sources"],
+        writable_domains=writable_domains or ["app/hive_runtime.py"],
+        authority_ceiling="A2",
+        dependencies=dependencies or [],
+        acceptance_criteria=["Evidence is attached"],
+        deliverables=[f"{task_id} result"],
+        evidence_requirements=["Test receipt"],
+        checkpoint="Lane captain review",
+        fan_in_owner="lane-captain",
+        closure_condition="Handoff accepted",
+    )
+
+
 def test_mission_round_trip_includes_actions_and_bindings(tmp_path):
     store = _store(tmp_path)
     created = _create(store)
 
     assert created.status == "ACTIVE"
+    assert created.authority_ceiling == "A2"
+    assert {item.authority_ceiling for item in created.work_units} == {"A2"}
     assert created.revision == 1
     assert created.work_unit_count == 2
     assert created.event_count == 1
@@ -65,6 +97,123 @@ def test_mission_round_trip_includes_actions_and_bindings(tmp_path):
 
     loaded = store.get_mission("m1")
     assert loaded.model_dump() == created.model_dump()
+
+
+def test_governed_project_contract_produces_graph_receipt(tmp_path):
+    store = _store(tmp_path)
+    created = store.create_mission(
+        title="Create a SanityCloud campaign system",
+        objective="Coordinate coding, business, and creative delivery",
+        lifecycle_stage="Plan",
+        parent_context_id="sanitycloud-governance",
+        mission_id="hybrid-project",
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        authority_ceiling="A2",
+        project_contract=HiveProjectContract(
+            project_kind="hybrid",
+            scope="Plan, build, create, review, and close one governed project.",
+            exclusions=["Production publication without a decision receipt"],
+            accountable_human="SanityCloud Founder",
+            source_boundary=["Approved project sources", "Repository evidence"],
+            risks=[{"risk": "cross-branch mutation", "mitigation": "domain locks"}],
+            acceptance_criteria=["Every artifact has evidence lineage"],
+            decision_gates=["Human publication approval"],
+            fan_in_owner="AIgentBee leader",
+            closure_condition="Accepted outcome and terminal receipts recorded",
+        ),
+        work_units=[
+            HiveWorkUnitSpec(
+                work_unit_id="strategy",
+                title="Define strategy",
+                role="business strategist",
+                writable_domain="notion:project",
+                authority_ceiling="A2",
+            ),
+            HiveWorkUnitSpec(
+                work_unit_id="prototype",
+                title="Build prototype",
+                role="developer",
+                writable_domain="repo:prototype",
+                authority_ceiling="A2",
+            ),
+            HiveWorkUnitSpec(
+                work_unit_id="review",
+                title="Review integrated outcome",
+                role="independent reviewer",
+                dependencies=["strategy", "prototype"],
+                writable_domain="notion:review",
+                authority_ceiling="A2",
+            ),
+        ],
+    )
+    assert created.project_contract.project_kind.value == "hybrid"
+    assert created.graph_receipt.validated is True
+    assert created.graph_receipt.dependency_waves == [
+        ["prototype", "strategy"],
+        ["review"],
+    ]
+    assert created.graph_receipt.max_parallel_width == 2
+    assert created.graph_receipt.authority_level == "Execute bounded work (A2)"
+    assert created.events[0].payload["graph_receipt"]["dependency_edge_count"] == 2
+    assert store.get_mission("hybrid-project").model_dump() == created.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("work_units", "message"),
+    [
+        (
+            [HiveWorkUnitSpec(work_unit_id="a", title="A", role="worker", dependencies=["missing"], authority_ceiling="A2")],
+            "unknown dependencies",
+        ),
+        (
+            [
+                HiveWorkUnitSpec(work_unit_id="a", title="A", role="worker", dependencies=["b"], authority_ceiling="A2"),
+                HiveWorkUnitSpec(work_unit_id="b", title="B", role="worker", dependencies=["a"], authority_ceiling="A2"),
+            ],
+            "contains a cycle",
+        ),
+        (
+            [HiveWorkUnitSpec(work_unit_id="a", title="A", role="worker", authority_ceiling="A3")],
+            "exceeds mission ceiling",
+        ),
+    ],
+)
+def test_invalid_work_graph_is_rejected_before_mutation(tmp_path, work_units, message):
+    store = _store(tmp_path)
+    with pytest.raises(ValueError, match=message):
+        store.create_mission(
+            title="Invalid graph",
+            objective="Must fail closed",
+            lifecycle_stage="Plan",
+            mission_id="invalid",
+            workspace_id="ws-test",
+            user_id="user-test",
+            account_key="ws-test:user-test",
+            authority_ceiling="A2",
+            work_units=work_units,
+        )
+
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM hive_missions").fetchone()[0] == 0
+
+
+def test_work_unit_without_explicit_authority_inherits_mission_ceiling(tmp_path):
+    store = _store(tmp_path)
+    created = store.create_mission(
+        title="Bounded project",
+        objective="Keep child authority monotonic",
+        lifecycle_stage="Plan",
+        mission_id="bounded",
+        workspace_id="ws-test",
+        user_id="user-test",
+        account_key="ws-test:user-test",
+        authority_ceiling="A1",
+        work_units=[HiveWorkUnitSpec(work_unit_id="a", title="A", role="worker")],
+    )
+
+    assert created.work_units[0].authority_ceiling == "A1"
 
 
 def test_create_idempotency_dedupes_and_conflicting_reuse_fails(tmp_path):
@@ -254,3 +403,255 @@ def test_snapshot_limits_bound_payload_but_preserve_counts(tmp_path):
     assert len(bounded.events) == 2
     assert len(bounded.actions) == 3
     assert [item.payload["index"] for item in bounded.events] == [3, 4]
+
+
+def test_delegated_task_graph_is_durable_idempotent_and_lane_local(tmp_path):
+    store = _store(tmp_path)
+    created = _create(store)
+    delegated = store.delegate_tasks(
+        mission_id="m1",
+        tasks=[
+            _task("inspect"),
+            _task("change", dependencies=["inspect"]),
+        ],
+        expected_mission_revision=created.revision,
+        idempotency_key="delegate-1",
+    )
+
+    assert delegated.delegated_task_count == 2
+    assert delegated.revision == 2
+    assert {item.task_id for item in delegated.delegated_tasks} == {
+        "inspect",
+        "change",
+    }
+    receipt = delegated.task_graph_receipts[0]
+    assert receipt.parent_lane_id == "m1-builder"
+    assert receipt.dependency_waves == [["inspect"], ["change"]]
+    assert receipt.ready_task_ids == ["inspect"]
+    assert receipt.fan_in_ready is False
+    assert delegated.events[-2].event_type == "TASK_DELEGATED"
+
+    replay = store.delegate_tasks(
+        mission_id="m1",
+        tasks=[
+            _task("inspect"),
+            _task("change", dependencies=["inspect"]),
+        ],
+        expected_mission_revision=created.revision,
+        idempotency_key="delegate-1",
+    )
+    assert replay.revision == delegated.revision
+    assert replay.delegated_task_count == 2
+
+def test_blocked_task_is_not_reported_ready_until_explicit_reactivation(tmp_path):
+    store = _store(tmp_path)
+    _create(store)
+    store.delegate_tasks(mission_id="m1", tasks=[_task("blocked")])
+    store.transition_delegated_task(
+        mission_id="m1",
+        task_id="blocked",
+        status="ACCEPTED",
+        actor="worker-a",
+    )
+    blocked = store.transition_delegated_task(
+        mission_id="m1",
+        task_id="blocked",
+        status="BLOCKED",
+        actor="worker-a",
+    )
+
+    receipt = blocked.task_graph_receipts[0]
+    assert receipt.blocked_task_ids == ["blocked"]
+    assert receipt.ready_task_ids == []
+
+    reactivated = store.transition_delegated_task(
+        mission_id="m1",
+        task_id="blocked",
+        status="ACTIVE",
+        actor="worker-a",
+    )
+    assert reactivated.task_graph_receipts[0].blocked_task_ids == []
+
+
+def test_lane_local_writable_conflicts_are_scheduled_and_locked(tmp_path):
+    store = _store(tmp_path)
+    _create(store)
+    delegated = store.delegate_tasks(
+        mission_id="m1",
+        tasks=[_task("left"), _task("right")],
+    )
+
+    receipt = delegated.task_graph_receipts[0]
+    assert receipt.mutation_conflicts == [["left", "right"]]
+    assert receipt.execution_waves == [["left"], ["right"]]
+    for task_id in ("left", "right"):
+        store.transition_delegated_task(
+            mission_id="m1",
+            task_id=task_id,
+            status="ACCEPTED",
+            actor=task_id,
+        )
+    store.transition_delegated_task(
+        mission_id="m1", task_id="left", status="ACTIVE", actor="left"
+    )
+    with pytest.raises(HiveTransitionError, match="writable-domain conflicts"):
+        store.transition_delegated_task(
+            mission_id="m1", task_id="right", status="ACTIVE", actor="right"
+        )
+
+
+@pytest.mark.parametrize(
+    ("task", "message"),
+    [
+        (
+            _task("too-powerful").model_copy(
+                update={"authority_ceiling": "A4"}
+            ),
+            "authority must not exceed",
+        ),
+        (
+            _task("outside-domain").model_copy(
+                update={"writable_domains": ["app/mcp_server.py"]}
+            ),
+            "writable domain exceeds lane",
+        ),
+    ],
+)
+def test_delegated_task_inheritance_violations_fail_before_mutation(
+    tmp_path, task, message
+):
+    store = _store(tmp_path)
+    _create(store)
+
+    with pytest.raises(ValueError, match=message):
+        store.delegate_tasks(mission_id="m1", tasks=[task])
+
+    assert store.get_mission("m1").delegated_task_count == 0
+
+
+def test_task_dependencies_leases_handoffs_and_lane_fan_in(tmp_path):
+    store = _store(tmp_path)
+    created = _create(store)
+    store.delegate_tasks(
+        mission_id="m1",
+        tasks=[_task("first"), _task("second", dependencies=["first"])],
+        expected_mission_revision=created.revision,
+    )
+
+    with pytest.raises(HiveTransitionError, match="incomplete dependencies"):
+        store.transition_delegated_task(
+            mission_id="m1",
+            task_id="second",
+            status="ACCEPTED",
+            actor="worker-b",
+        )
+
+    accepted = store.transition_delegated_task(
+        mission_id="m1",
+        task_id="first",
+        status="ACCEPTED",
+        actor="worker-a",
+        worker_binding="worker-a",
+        lease_seconds=60,
+    )
+    leased = next(item for item in accepted.delegated_tasks if item.task_id == "first")
+    assert leased.execution_lease_owner == "worker-a"
+    assert leased.execution_lease_expires_at > leased.updated_at
+
+    with pytest.raises(HiveTransitionError, match="lease is held"):
+        store.transition_delegated_task(
+            mission_id="m1",
+            task_id="first",
+            status="ACTIVE",
+            actor="worker-b",
+            worker_binding="worker-b",
+        )
+
+    store.transition_delegated_task(
+        mission_id="m1",
+        task_id="first",
+        status="ACTIVE",
+        actor="worker-a",
+    )
+    handoff = HiveHandoffReceipt(
+        summary="First task is verified",
+        deliverables=[{"artifact": "patch"}],
+        evidence=[{"check": "pytest", "result": "passed"}],
+        next_owner="lane-captain",
+    )
+    store.transition_delegated_task(
+        mission_id="m1",
+        task_id="first",
+        status="HANDOFF_READY",
+        actor="worker-a",
+        evidence=[{"check": "pytest", "result": "passed"}],
+        handoff_receipt=handoff,
+    )
+    first_done = store.transition_delegated_task(
+        mission_id="m1",
+        task_id="first",
+        status="COMPLETED",
+        actor="lane-captain",
+    )
+    assert first_done.task_graph_receipts[0].ready_task_ids == ["second"]
+
+    for status, actor in (
+        ("ACCEPTED", "worker-b"),
+        ("ACTIVE", "worker-b"),
+    ):
+        store.transition_delegated_task(
+            mission_id="m1", task_id="second", status=status, actor=actor
+        )
+    store.transition_delegated_task(
+        mission_id="m1",
+        task_id="second",
+        status="HANDOFF_READY",
+        actor="worker-b",
+        evidence=[{"check": "review", "result": "accepted"}],
+        handoff_receipt=handoff,
+    )
+    completed = store.transition_delegated_task(
+        mission_id="m1",
+        task_id="second",
+        status="COMPLETED",
+        actor="lane-captain",
+    )
+
+    assert completed.task_graph_receipts[0].fan_in_ready is True
+    assert {item.event_type for item in completed.events} >= {
+        "TASK_ACCEPTED",
+        "HANDOFF_READY",
+        "HANDOFF_ACCEPTED",
+        "LANE_FAN_IN_READY",
+    }
+
+
+def test_lane_completion_waits_for_delegated_task_fan_in(tmp_path):
+    store = _store(tmp_path)
+    _create(store)
+    store.delegate_tasks(mission_id="m1", tasks=[_task("pending")])
+
+    with pytest.raises(HiveTransitionError, match="fan-in is ready"):
+        store.append_event(
+            mission_id="m1",
+            event_type="LANE_COMPLETED",
+            sender="lane-captain",
+            work_unit_id="m1-builder",
+            work_unit_status="COMPLETED",
+        )
+
+
+def test_schema_v2_migrates_to_delegated_task_table(tmp_path):
+    store = _store(tmp_path)
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("DROP TABLE hive_delegated_tasks")
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+
+    migrated = HiveRuntimeStore(store.path)
+    with sqlite3.connect(migrated.path) as conn:
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 3
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'hive_delegated_tasks'"
+        ).fetchone()

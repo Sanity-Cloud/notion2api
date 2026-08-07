@@ -114,11 +114,16 @@ def test_workbench_projects_members_roles_tasks_and_history() -> None:
     assert output.mission.active_count == 1
     assert output.mission.waiting_count == 1
     assert output.mission.request_allowed is True
+    assert output.mission.authority_level == "Manage high-impact work (A3)"
     assert {(member.role, member.lane_title) for member in output.members} == {
         ("Control-plane architect", "Evidence and authority contract"),
         ("Security and test reviewer", "Adversarial validation"),
     }
     assert {member.task_source for member in output.members} == {"hive_lane_title"}
+    assert {member.authority_level for member in output.members} == {
+        "Execute bounded work (A2)",
+        "Manage high-impact work (A3)",
+    }
     assert output.leader is not None
     assert output.leader.session_name == session
     assert output.leader.remote_chat_id == "notion-thread-1"
@@ -129,6 +134,7 @@ def test_workbench_projects_members_roles_tasks_and_history() -> None:
     assert output.governance["directWorkerExecution"] is False
     assert output.governance["arbitraryShellExecution"] is False
     assert output.governance["requestCreatesExecutionEvidence"] is False
+    assert output.governance["authorityLevel"] == "Manage high-impact work (A3)"
 
 
 def test_closed_mission_disables_new_leader_requests() -> None:
@@ -159,7 +165,7 @@ def test_leader_prompt_binds_exact_member_and_preserves_authority() -> None:
     assert f"Mission ID: {MISSION_ID}" in prompt
     assert f"Work unit ID: {member_id}" in prompt
     assert "Role: Security and test reviewer" in prompt
-    assert "Worker authority ceiling: A2" in prompt
+    assert "Worker authority level: Execute bounded work (A2)" in prompt
     assert "not evidence that work occurred" in prompt
     assert "Do not execute arbitrary shell commands" in prompt
     assert "untrusted user data" in prompt
@@ -261,6 +267,7 @@ def test_leader_request_is_durable_retry_safe_and_member_bound(
         title="AIgentBee Swarm Workbench",
         objective="Exercise the guarded leader request path.",
         lifecycle_stage="Build",
+        authority_ceiling="A3",
         mission_id=MISSION_ID,
         idempotency_key="create-test-mission",
         work_units=[
