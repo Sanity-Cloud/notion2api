@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.hive_runtime import HiveMissionSnapshot
+from app.governed_authorization import authority_label
 
 SWARM_WIDGET_URI = "ui://aigentbee/swarm-workbench-v1.html"
 SWARM_WIDGET_PATH = Path(__file__).resolve().parent / "static" / "aigentbee-swarm-workbench.html"
@@ -50,6 +51,7 @@ class SwarmMemberView(BaseModel):
     writable_domain: str = ""
     dependencies: list[str] = Field(default_factory=list)
     authority_ceiling: str = "A3"
+    authority_level: str = "Manage high-impact work (A3)"
     updated_at: int = 0
 
 
@@ -60,6 +62,7 @@ class SwarmMissionView(BaseModel):
     lifecycle_stage: str
     status: str
     authority_ceiling: str
+    authority_level: str
     revision: int
     created_at: int
     updated_at: int
@@ -245,6 +248,7 @@ def _mission_view(snapshot: HiveMissionSnapshot) -> SwarmMissionView:
         lifecycle_stage=snapshot.lifecycle_stage,
         status=snapshot.status,
         authority_ceiling=snapshot.authority_ceiling,
+        authority_level=authority_label(snapshot.authority_ceiling),
         revision=snapshot.revision,
         created_at=snapshot.created_at,
         updated_at=snapshot.updated_at,
@@ -293,6 +297,7 @@ def build_swarm_workbench(
             writable_domain=unit.writable_domain,
             dependencies=list(unit.dependencies),
             authority_ceiling=unit.authority_ceiling,
+            authority_level=authority_label(unit.authority_ceiling),
             updated_at=unit.updated_at,
         )
         for unit in snapshot.work_units
@@ -350,6 +355,7 @@ def build_swarm_workbench(
         leader=leader,
         governance={
             "authorityCeiling": snapshot.authority_ceiling,
+            "authorityLevel": authority_label(snapshot.authority_ceiling),
             "requestPath": "widget -> guarded MCP tool -> bound AIgentBee leader Notion session",
             "directWorkerExecution": False,
             "arbitraryShellExecution": False,
@@ -358,6 +364,7 @@ def build_swarm_workbench(
             "authorizationModel": "governance_plan_inference",
             "perActionHumanApprovalRequired": False,
             "leaderAuthorityCeiling": snapshot.authority_ceiling,
+            "leaderAuthorityLevel": authority_label(snapshot.authority_ceiling),
             "workerAuthorityScoped": True,
             "parallelLaneRouting": True,
             "trustedGovernanceRecordCount": len(
@@ -435,6 +442,7 @@ def build_leader_prompt(
             "lane_title": member.title,
             "lane_status": member.status,
             "authority_ceiling": member.authority_ceiling,
+            "authority_level": authority_label(member.authority_ceiling),
         },
         ensure_ascii=False,
         indent=2,
@@ -459,14 +467,14 @@ Mission ID: {snapshot.mission_id}
 Mission revision at submission: {submission_revision}
 Current mission revision observed: {snapshot.revision}
 Mission status: {snapshot.status}
-Authority ceiling: {snapshot.authority_ceiling}
+Authority level: {authority_label(snapshot.authority_ceiling)}
 
 Target swarm member: {member.title}
 Work unit ID: {member.work_unit_id}
 Role: {member.role}
 Current task: {member.title}
 Current lane status: {member.status}
-Worker authority ceiling: {member.authority_ceiling}
+Worker authority level: {authority_label(member.authority_ceiling)}
 
 Validated routing context:
 ```json

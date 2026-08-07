@@ -67,8 +67,10 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 53
+    assert len(names) == 55
     assert "aigentbee_hive_create_mission" in names
+    assert "aigentbee_hive_delegate_tasks" in names
+    assert "aigentbee_hive_transition_task" in names
     assert "aigentbee_chat" in names
     assert "aigentbee_health" in names
     assert "aigentbee_get_chat_job" in names
@@ -128,8 +130,14 @@ def test_primary_profile_exposes_bare_machine_methods(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 50
+    assert len(names) == 52
     assert "hive_create_mission" in names
+    assert "hive_delegate_tasks" in names
+    assert "hive_transition_task" in names
+    create_mission_tool = next(tool for tool in tools if tool.name == "hive_create_mission")
+    create_schema = create_mission_tool.model_dump()["inputSchema"]
+    assert create_schema["properties"]["authority_ceiling"]["default"] == "A2"
+    assert {"workspace_id", "user_id"}.issubset(set(create_schema["required"]))
     assert "chat" in names
     assert "health" in names
     assert "get_chat_job" in names
@@ -676,6 +684,31 @@ def test_mcp_schema_exposes_continuation_and_cancellation(monkeypatch):
         assert "google-drive" in properties["sources"]["description"]
         assert "web search" in properties["web_access"]["description"]
         assert properties["persona"]["anyOf"][0]["enum"] == ["sidekick", "minimalist", "analyst"]
+
+
+def test_mcp_schema_exposes_delegated_task_contract(monkeypatch):
+    monkeypatch.setenv("MCP_SERVER_NAME", "notion2api")
+    monkeypatch.setenv("MCP_TOOL_PREFIX", "")
+    server = create_server(
+        base_url="http://127.0.0.1:8120",
+        api_key="test-key",
+        timeout=30,
+        host="127.0.0.1",
+        port=8130,
+        mcp_path="/mcp",
+    )
+    by_name = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+
+    delegate = by_name["hive_delegate_tasks"].inputSchema["properties"]
+    transition = by_name["hive_transition_task"].inputSchema["properties"]
+    assert {"mission_id", "tasks", "expected_mission_revision"} <= delegate.keys()
+    assert {
+        "mission_id",
+        "task_id",
+        "status",
+        "lease_seconds",
+        "handoff_receipt",
+    } <= transition.keys()
 
 
 def test_omitted_session_name_is_descriptive_and_not_shared_op():

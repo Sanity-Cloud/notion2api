@@ -163,7 +163,7 @@ def test_schema_is_additive_and_builtin_adapters_start_disabled(tmp_path):
         }
         after_version = conn.execute("PRAGMA user_version").fetchone()[0]
         mission_count = conn.execute("SELECT COUNT(*) FROM hive_missions").fetchone()[0]
-    assert before_version == after_version == 2
+    assert before_version == after_version == 3
     assert mission_count == 1
     assert {
         "hive_execution_adapters",
