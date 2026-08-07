@@ -40,7 +40,10 @@ from app.aigentbee_workbench import (
 from app.output_hygiene import detect_visible_output_contamination
 from app.output_integrity import assess_output_integrity
 from app.hive_runtime import (
+    HiveDelegatedTaskSpec,
+    HiveHandoffReceipt,
     HiveMissionSnapshot,
+    HiveProjectContract,
     HiveRuntimeError,
     HiveWorkUnitSpec,
     default_hive_runtime_db_path,
@@ -4812,7 +4815,7 @@ def create_server(
         workspace_id: str,
         user_id: str,
         work_units: list[dict[str, Any]] | None = None,
-        authority_ceiling: str = "A3",
+        authority_ceiling: str = "A2",
         parent_context_id: str = "",
         mission_id: str | None = None,
         idempotency_key: str | None = None,
@@ -4821,6 +4824,7 @@ def create_server(
         profile_name: str = "",
         account_profile: str = "",
         account_selector: str = "",
+        project_contract: dict[str, Any] | None = None,
     ) -> HiveMissionSnapshot:
         try:
             from app.conversation import ConversationManager
@@ -4843,6 +4847,11 @@ def create_server(
                 profile_name=profile_name,
                 account_profile=account_profile,
                 account_selector=account_selector,
+                project_contract=(
+                    HiveProjectContract.model_validate(project_contract)
+                    if project_contract is not None
+                    else None
+                ),
             )
             ensure_mission_lane_conversation_scopes(
                 ConversationManager(),
@@ -4896,6 +4905,72 @@ def create_server(
                 context_version=context_version,
                 expected_mission_revision=expected_mission_revision,
                 work_unit_status=work_unit_status,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id)
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_delegate_tasks"),
+        description=_tool_description(
+            "Create a validated, lane-local delegated-task DAG with bounded authority, "
+            "sources, writable domains, and durable task events."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_delegate_tasks(
+        mission_id: str,
+        tasks: list[dict[str, Any]],
+        actor: str = "notion2api",
+        expected_mission_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveMissionSnapshot:
+        try:
+            return get_hive_runtime_store().delegate_tasks(
+                mission_id=mission_id,
+                tasks=[HiveDelegatedTaskSpec.model_validate(item) for item in tasks],
+                actor=actor,
+                expected_mission_revision=expected_mission_revision,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _hive_error_snapshot(exc, mission_id)
+
+    @server.tool(
+        name=_tool_name("notion2api_hive_transition_task"),
+        description=_tool_description(
+            "Accept, lease, execute, block, hand off, or terminalize one delegated "
+            "task with dependency and writable-domain enforcement."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_hive_transition_task(
+        mission_id: str,
+        task_id: str,
+        status: str,
+        actor: str,
+        worker_binding: str = "",
+        lease_seconds: int = 900,
+        evidence: list[dict[str, Any]] | None = None,
+        handoff_receipt: dict[str, Any] | None = None,
+        expected_mission_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> HiveMissionSnapshot:
+        try:
+            return get_hive_runtime_store().transition_delegated_task(
+                mission_id=mission_id,
+                task_id=task_id,
+                status=status,
+                actor=actor,
+                worker_binding=worker_binding,
+                lease_seconds=lease_seconds,
+                evidence=evidence,
+                handoff_receipt=(
+                    HiveHandoffReceipt.model_validate(handoff_receipt)
+                    if handoff_receipt is not None
+                    else None
+                ),
+                expected_mission_revision=expected_mission_revision,
                 idempotency_key=idempotency_key,
             )
         except (HiveRuntimeError, ValueError) as exc:

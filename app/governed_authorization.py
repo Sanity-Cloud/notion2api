@@ -18,6 +18,13 @@ class GovernedAuthorizationError(PermissionError):
 
 AUTHORITY_RANK = {"A0": 0, "A1": 1, "A2": 2, "A3": 3, "A4": 4}
 RISK_RANK = {"low": 0, "moderate": 1, "high": 2, "critical": 3}
+AUTHORITY_NAMES = {
+    "A0": "Observe only",
+    "A1": "Prepare and recommend",
+    "A2": "Execute bounded work",
+    "A3": "Manage high-impact work",
+    "A4": "Critical authority",
+}
 AUTHORITY_RISK_CEILING = {
     "A0": "low",
     "A1": "low",
@@ -25,6 +32,14 @@ AUTHORITY_RISK_CEILING = {
     "A3": "high",
     "A4": "critical",
 }
+
+
+def authority_label(value: Any) -> str:
+    """Return a human name while retaining the stable compatibility code."""
+    code = str(value or "A0").strip().upper()
+    if code not in AUTHORITY_RANK:
+        code = "A0"
+    return f"{AUTHORITY_NAMES[code]} ({code})"
 
 
 class GovernedAuthorization(BaseModel):
@@ -136,6 +151,8 @@ class GovernedAuthorization(BaseModel):
             "authorized": True,
             "governance_aligned": True,
             "authority_ceiling": self.authority_ceiling,
+            "authority_level": authority_label(self.authority_ceiling),
+            "required_authority_level": authority_label(required),
             "inferred_risk": self.inferred_risk,
             "confidence": self.confidence,
             "evidence_count": self.evidence_count,
@@ -176,6 +193,7 @@ def require_governed_authorization(
             "authorization_basis": "legacy_human_approval_compatibility",
             "authorized": True,
             "authority_ceiling": required_authority,
+            "authority_level": authority_label(required_authority),
             "per_action_human_approval_required": False,
             "deprecated_input_used": True,
         }

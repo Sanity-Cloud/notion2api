@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.governance import DEFAULT_AUTHORITY_PAGE_ID, DEFAULT_CONTRACT_VERSION
+from app.governed_authorization import authority_label
 
 
 class WorkspaceLibraryRecord(BaseModel):
@@ -20,6 +21,7 @@ class WorkspaceLibraryRecord(BaseModel):
     source_record_id: str = ""
     mission_id: str = ""
     work_unit_id: str = ""
+    task_id: str = ""
     title: str
     status: str = ""
     purpose: str = ""
@@ -103,6 +105,11 @@ def build_workspace_library(
     records: list[WorkspaceLibraryRecord] = []
     gaps: list[str] = []
     authority_ceiling = str(data.get("authority_ceiling") or "").strip()
+    project_contract = _as_dict(data.get("project_contract"))
+    graph_receipt = _as_dict(data.get("graph_receipt"))
+    accountable_human = str(
+        project_contract.get("accountable_human") or accountable_human
+    ).strip()
     receipt = dict(authority_receipt or data.get("authority_receipt") or {})
     receipt.setdefault("authorization_basis", authorization_basis)
     receipt.setdefault("governance_contract", governance_contract)
@@ -123,12 +130,22 @@ def build_workspace_library(
             title=str(data.get("title") or mission_id),
             status=str(data.get("status") or ""),
             purpose=str(data.get("objective") or ""),
+            scope=str(project_contract.get("scope") or ""),
+            exclusions=list(project_contract.get("exclusions") or []),
             accountable_human=accountable_human,
             authority_basis=authorization_basis,
             authority_owner=authority_owner,
             governance_contract=governance_contract,
             authority_receipt=receipt,
             authority_ceiling=authority_ceiling,
+            source_boundary=list(project_contract.get("source_boundary") or []),
+            risks=list(project_contract.get("risks") or []),
+            acceptance_criteria=list(
+                project_contract.get("acceptance_criteria") or []
+            ),
+            decision_gates=list(project_contract.get("decision_gates") or []),
+            fan_in_owner=str(project_contract.get("fan_in_owner") or ""),
+            closure_condition=str(project_contract.get("closure_condition") or ""),
             metadata={
                 "ultimate_accountability_only": bool(accountable_human),
                 "per_action_human_approval_required": False,
@@ -136,6 +153,9 @@ def build_workspace_library(
                 "revision": int(data.get("revision") or 0),
                 "created_at": int(data.get("created_at") or 0),
                 "updated_at": int(data.get("updated_at") or 0),
+                "project_kind": str(project_contract.get("project_kind") or ""),
+                "authority_level": authority_label(authority_ceiling),
+                "graph_receipt": graph_receipt,
             },
         )
     )
@@ -154,7 +174,7 @@ def build_workspace_library(
         "fan_in_owner",
         "closure_condition",
     ):
-        if not data.get(field_name):
+        if not getattr(records[0], field_name):
             gaps.append(f"{mission_record_id}: {field_name} is not recorded")
 
     work_units = (
@@ -210,6 +230,73 @@ def build_workspace_library(
             )
         )
 
+    delegated_tasks = (
+        data.get("delegated_tasks")
+        if isinstance(data.get("delegated_tasks"), list)
+        else []
+    )
+    for raw in delegated_tasks:
+        task = _as_dict(raw)
+        task_id = str(task.get("task_id") or "").strip()
+        lane_id = str(task.get("parent_lane_id") or "").strip()
+        if not task_id or not lane_id:
+            gaps.append(f"{mission_record_id}: delegated task lacks stable lineage")
+            continue
+        if lane_id not in known_work_units:
+            gaps.append(f"task:{task_id}: unknown parent lane {lane_id}")
+        task_authority = str(task.get("authority_ceiling") or "")
+        records.append(
+            WorkspaceLibraryRecord(
+                record_id=f"task:{task_id}",
+                record_type="task",
+                parent_record_id=f"branch:{lane_id}",
+                source_record_id=task_id,
+                mission_id=mission_id,
+                work_unit_id=lane_id,
+                task_id=task_id,
+                title=str(task.get("objective") or task_id),
+                status=str(task.get("status") or ""),
+                purpose=str(task.get("objective") or ""),
+                scope=str(task.get("scope") or ""),
+                exclusions=list(task.get("exclusions") or []),
+                authority_basis=authorization_basis,
+                authority_owner=str(task.get("fan_in_owner") or authority_owner),
+                governance_contract=governance_contract,
+                authority_receipt={
+                    **receipt,
+                    "work_unit_id": lane_id,
+                    "task_id": task_id,
+                    "authority_ceiling": task_authority,
+                },
+                authority_ceiling=task_authority,
+                source_boundary=list(task.get("source_boundary") or []),
+                dependencies=list(task.get("dependencies") or []),
+                acceptance_criteria=list(task.get("acceptance_criteria") or []),
+                fan_in_owner=str(task.get("fan_in_owner") or ""),
+                closure_condition=str(task.get("closure_condition") or ""),
+                evidence=list(task.get("evidence") or []),
+                metadata={
+                    "authority_level": authority_label(task_authority),
+                    "required_context": list(task.get("required_context") or []),
+                    "writable_domains": list(task.get("writable_domains") or []),
+                    "deliverables": list(task.get("deliverables") or []),
+                    "evidence_requirements": list(
+                        task.get("evidence_requirements") or []
+                    ),
+                    "checkpoint": str(task.get("checkpoint") or ""),
+                    "worker_binding": str(task.get("worker_binding") or ""),
+                    "handoff_receipt": task.get("handoff_receipt"),
+                    "execution_lease_owner": str(
+                        task.get("execution_lease_owner") or ""
+                    ),
+                    "execution_lease_expires_at": int(
+                        task.get("execution_lease_expires_at") or 0
+                    ),
+                    "revision": int(task.get("revision") or 0),
+                },
+            )
+        )
+
     events = data.get("events") if isinstance(data.get("events"), list) else []
     for raw in events:
         event = _as_dict(raw)
@@ -217,8 +304,15 @@ def build_workspace_library(
         if not event_id:
             continue
         work_unit_id = str(event.get("work_unit_id") or "").strip()
-        parent_id = f"branch:{work_unit_id}" if work_unit_id else mission_record_id
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        task_id = str(payload.get("task_id") or "").strip()
+        parent_id = (
+            f"task:{task_id}"
+            if task_id
+            else f"branch:{work_unit_id}"
+            if work_unit_id
+            else mission_record_id
+        )
         records.append(
             WorkspaceLibraryRecord(
                 record_id=f"event:{event_id}",
@@ -227,6 +321,7 @@ def build_workspace_library(
                 source_record_id=event_id,
                 mission_id=mission_id,
                 work_unit_id=work_unit_id,
+                task_id=task_id,
                 title=str(event.get("event_type") or "EVENT"),
                 status=str(payload.get("status") or ""),
                 purpose=str(payload.get("summary") or payload.get("note") or ""),
