@@ -67,12 +67,15 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 53
+    assert len(names) == 56
     assert "aigentbee_hive_create_mission" in names
     assert "aigentbee_chat" in names
     assert "aigentbee_health" in names
     assert "aigentbee_get_chat_job" in names
     assert "aigentbee_list_accounts" in names
+    assert "aigentbee_list_cursor_agents" in names
+    assert "aigentbee_select_cursor_agent" in names
+    assert "aigentbee_upsert_cursor_agent" in names
     assert "aigentbee_switch_workspace" in names
     assert "aigentbee_switch_account" in names
     assert "aigentbee_rollback_account_switch" in names
@@ -128,12 +131,15 @@ def test_primary_profile_exposes_bare_machine_methods(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 50
+    assert len(names) == 53
     assert "hive_create_mission" in names
     assert "chat" in names
     assert "health" in names
     assert "get_chat_job" in names
     assert "list_accounts" in names
+    assert "list_cursor_agents" in names
+    assert "select_cursor_agent" in names
+    assert "upsert_cursor_agent" in names
     assert "switch_workspace" in names
     assert "switch_account" in names
     assert "rollback_account_switch" in names
