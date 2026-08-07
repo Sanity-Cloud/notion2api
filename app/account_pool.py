@@ -7,6 +7,15 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+from app.account_capacity import (
+    CapacityRole,
+    WorkloadMetadata,
+    capacity_alias,
+    resolve_capacity_role,
+    role_matches_selector,
+)
+from app.account_health import AccountHealthSignal, score_account_health
+from app.account_scheduler import RoutingDecision, select_account_index, selection_mode_label
 from app.governance import governance_receipt_from_client
 from app.logger import logger
 from app.notion_client import NotionOpusAPI
@@ -14,10 +23,11 @@ from app.workspace_routing import resolve_workspace_definition, workspace_descri
 
 
 class AccountPool:
-    """Workspace-pinned Notion account pool with per-workspace account rotation.
+    """Workspace-pinned Notion account pool with health/load-aware selection.
 
     Workspace selection is explicit and never rotates automatically. New chats and
-    requests receive an account from the selected workspace; persistent chats must
+    requests receive an account from the selected workspace using capacity roles
+    (Alpha/Beta/Canary/Dev) and observed health signals. Persistent chats must
     later reacquire their exact ``workspace_id + user_id`` binding.
     """
 
@@ -51,6 +61,7 @@ class AccountPool:
             self._current_index,
         )
         self._lock = threading.Lock()
+        self._last_routing_decision: dict[str, Any] = {}
         raw_state_path = os.getenv("NOTION_ACCOUNT_SELECTION_STATE", "").strip()
         self._selection_state_path = Path(raw_state_path) if raw_state_path else None
         self._restore_selection_state()
@@ -58,11 +69,51 @@ class AccountPool:
     def _new_client(self, account_index: int) -> NotionOpusAPI:
         client = NotionOpusAPI(dict(self.account_configs[account_index]))
         setattr(client, "_account_pool_index", account_index)
+        role = self._capacity_role_unlocked(account_index)
+        setattr(client, "capacity_role", role.value)
+        setattr(client, "account_alias", capacity_alias(role))
         return client
 
     def _profile_name(self, index: int) -> str:
         configured = str(self.account_configs[index].get("profile_name") or "").strip()
         return configured or f"account-{index + 1}"
+
+    def _capacity_role_unlocked(self, index: int) -> CapacityRole:
+        workspace_key = self._workspace_key_for_index(index)
+        workspace_indices = self._workspace_indices_for_key(workspace_key)
+        account_number = workspace_indices.index(index) + 1
+        return resolve_capacity_role(self.account_configs[index], account_number=account_number)
+
+    def _admission_snapshot(self) -> dict[str, Any]:
+        try:
+            from app.notion_admission import get_notion_admission_controller
+
+            snapshot = get_notion_admission_controller().snapshot()
+            return snapshot if isinstance(snapshot, dict) else {}
+        except Exception as exc:
+            return {"healthy": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def _health_for_index_unlocked(
+        self, index: int, *, now: float | None = None
+    ) -> AccountHealthSignal:
+        observed = float(now if now is not None else time.time())
+        account = self.account_configs[index]
+        role = self._capacity_role_unlocked(index)
+        cooldown = max(0.0, self.cooldown_until[index] - observed)
+        return score_account_health(
+            account_key=str(
+                account.get("chat_scope_key")
+                or f"{account.get('space_id')}:{account.get('user_id')}"
+            ),
+            profile_name=self._profile_name(index),
+            capacity_role=role.value,
+            account_alias=capacity_alias(role),
+            workspace_id=str(account.get("space_id") or ""),
+            user_id=str(account.get("user_id") or ""),
+            cooldown_remaining_seconds=cooldown,
+            admission_snapshot=self._admission_snapshot(),
+            now=observed,
+        )
 
     def _workspace_key_for_index(self, index: int) -> str:
         account = self.account_configs[index]
@@ -249,6 +300,7 @@ class AccountPool:
         matches: list[int] = []
         for index in workspace_indices:
             account = self.account_configs[index]
+            role = self._capacity_role_unlocked(index)
             values = {
                 self._profile_name(index),
                 str(account.get("base_profile_name") or "").strip(),
@@ -256,8 +308,12 @@ class AccountPool:
                 str(account.get("user_email") or "").strip(),
                 str(account.get("user_id") or "").strip(),
                 str(account.get("user_name") or "").strip(),
+                capacity_alias(role),
+                role.value,
             }
             if normalized in {value.casefold() for value in values if value}:
+                matches.append(index)
+            elif role_matches_selector(role, selector):
                 matches.append(index)
 
         if not matches and normalized.isdigit():
@@ -340,9 +396,13 @@ class AccountPool:
             return self._new_client(index)
 
     def get_client_for_workspace(
-        self, selector: str, wait_if_cooling: bool = True
+        self,
+        selector: str,
+        wait_if_cooling: bool = True,
+        *,
+        workload: dict[str, Any] | None = None,
     ) -> NotionOpusAPI:
-        """Rotate accounts inside one request-scoped workspace without selecting it globally."""
+        """Select a healthy account inside one request-scoped workspace without selecting it globally."""
         with self._lock:
             workspace_key = self._resolve_workspace_key_unlocked(selector)
 
@@ -351,30 +411,32 @@ class AccountPool:
             wait_seconds: float | None = None
             with self._lock:
                 workspace_indices = self._workspace_indices_for_key(workspace_key)
-                cursor = self._workspace_cursors.get(workspace_key, workspace_indices[0])
-                if cursor not in workspace_indices:
-                    cursor = workspace_indices[0]
-                start_position = workspace_indices.index(cursor)
-                for offset in range(len(workspace_indices)):
-                    position = (start_position + offset) % len(workspace_indices)
-                    index = workspace_indices[position]
-                    next_index = workspace_indices[
-                        (position + 1) % len(workspace_indices)
-                    ]
-                    self._workspace_cursors[workspace_key] = next_index
+                decision = self._select_auto_index_unlocked(
+                    workspace_indices,
+                    workload=workload,
+                    now=now,
+                )
+                index = decision.selected_index
+                health = self._health_for_index_unlocked(index, now=now)
+                if health.available and self.cooldown_until[index] <= now:
                     if workspace_key == self._workspace_key and self._selection_mode == "auto":
-                        self._current_index = next_index
-                    if self.cooldown_until[index] <= now:
-                        return self._new_client(index)
+                        self._current_index = index
+                    self._last_routing_decision = decision.as_dict()
+                    return self._new_client(index)
                 wait_seconds = max(
                     0.5,
-                    min(self.cooldown_until[index] for index in workspace_indices) - now,
+                    max(
+                        self.cooldown_until[candidate] - now
+                        for candidate in workspace_indices
+                    ),
+                    health.retry_after_seconds,
+                    health.cooldown_remaining_seconds,
                 )
 
             if not wait_if_cooling or wait_seconds > 15:
                 raise RuntimeError(
                     f"All accounts in workspace {workspace_key} cooling for about "
-                    f"{max(1, int(wait_seconds))} seconds"
+                    f"{max(1, int(wait_seconds or 1))} seconds"
                 )
             logger.info(
                 "Request-scoped workspace pool waiting for cooldown",
@@ -382,13 +444,54 @@ class AccountPool:
                     "request_info": {
                         "event": "workspace_account_pool_wait_cooling",
                         "workspace_key": workspace_key,
-                        "wait_seconds": round(wait_seconds, 1),
+                        "wait_seconds": round(wait_seconds or 0.0, 1),
                     }
                 },
             )
             time.sleep(wait_seconds)
 
-    def get_client(self, wait_if_cooling: bool = True) -> NotionOpusAPI:
+    def _select_auto_index_unlocked(
+        self,
+        workspace_indices: list[int],
+        *,
+        workload: dict[str, Any] | None = None,
+        now: float | None = None,
+    ) -> RoutingDecision:
+        observed = float(now if now is not None else time.time())
+        roles = {
+            index: self._capacity_role_unlocked(index) for index in workspace_indices
+        }
+        health = {
+            index: self._health_for_index_unlocked(index, now=observed)
+            for index in workspace_indices
+        }
+        metadata = WorkloadMetadata.from_mapping(workload)
+        fairness_cursor = self._workspace_cursors.get(
+            self._workspace_key_for_index(workspace_indices[0]),
+            workspace_indices[0],
+        )
+        decision = select_account_index(
+            workspace_indices=workspace_indices,
+            roles_by_index=roles,
+            health_by_index=health,
+            workload=metadata.as_dict() if workload is None else dict(workload),
+            fairness_cursor=fairness_cursor,
+            route_seed=str((workload or {}).get("route_seed") or ""),
+        )
+        # Advance fairness cursor past the chosen peer for the next equal-health draw.
+        if decision.selected_index in workspace_indices:
+            position = workspace_indices.index(decision.selected_index)
+            next_index = workspace_indices[(position + 1) % len(workspace_indices)]
+            workspace_key = self._workspace_key_for_index(decision.selected_index)
+            self._workspace_cursors[workspace_key] = next_index
+        return decision
+
+    def get_client(
+        self,
+        wait_if_cooling: bool = True,
+        *,
+        workload: dict[str, Any] | None = None,
+    ) -> NotionOpusAPI:
         """Return a fresh client from the explicitly selected workspace."""
         while True:
             now = time.time()
@@ -399,30 +502,40 @@ class AccountPool:
                     index = self._selected_index
                     if index not in workspace_indices:
                         raise RuntimeError("Pinned account is outside the selected workspace")
-                    if self.cooldown_until[index] <= now:
+                    health = self._health_for_index_unlocked(index, now=now)
+                    if health.available and self.cooldown_until[index] <= now:
+                        self._last_routing_decision = {
+                            "selected_index": index,
+                            "reason": "pinned_selection",
+                            "candidates": [],
+                            "workload_class": str(
+                                (workload or {}).get("workload_class") or "production"
+                            ),
+                            "canary_included": False,
+                        }
                         return self._new_client(index)
-                    wait_seconds = max(0.5, self.cooldown_until[index] - now)
-                else:
-                    cursor = self._workspace_cursors.get(
-                        self._workspace_key, workspace_indices[0]
-                    )
-                    if cursor not in workspace_indices:
-                        cursor = workspace_indices[0]
-                    start_position = workspace_indices.index(cursor)
-                    for offset in range(len(workspace_indices)):
-                        position = (start_position + offset) % len(workspace_indices)
-                        index = workspace_indices[position]
-                        next_index = workspace_indices[
-                            (position + 1) % len(workspace_indices)
-                        ]
-                        self._current_index = next_index
-                        self._workspace_cursors[self._workspace_key] = next_index
-                        if self.cooldown_until[index] <= now:
-                            return self._new_client(index)
                     wait_seconds = max(
                         0.5,
-                        min(self.cooldown_until[index] for index in workspace_indices)
+                        self.cooldown_until[index] - now,
+                        health.retry_after_seconds,
+                    )
+                else:
+                    decision = self._select_auto_index_unlocked(
+                        workspace_indices,
+                        workload=workload,
+                        now=now,
+                    )
+                    index = decision.selected_index
+                    health = self._health_for_index_unlocked(index, now=now)
+                    if health.available and self.cooldown_until[index] <= now:
+                        self._current_index = index
+                        self._last_routing_decision = decision.as_dict()
+                        return self._new_client(index)
+                    wait_seconds = max(
+                        0.5,
+                        min(self.cooldown_until[candidate] for candidate in workspace_indices)
                         - now,
+                        health.retry_after_seconds,
                     )
 
             if wait_seconds is None:
@@ -453,11 +566,15 @@ class AccountPool:
         account = self.account_configs[index]
         workspace_key = self._workspace_key_for_index(index)
         workspace_indices = self._workspace_indices_for_key(workspace_key)
+        role = self._capacity_role_unlocked(index)
+        health = self._health_for_index_unlocked(index, now=now)
         cooldown_remaining = max(0.0, self.cooldown_until[index] - now)
         return {
             "account_number": workspace_indices.index(index) + 1,
             "profile_name": self._profile_name(index),
             "base_profile_name": str(account.get("base_profile_name") or "").strip(),
+            "capacity_role": role.value,
+            "account_alias": capacity_alias(role),
             "workspace_key": workspace_key,
             "workspace_name": str(account.get("workspace_name") or "").strip(),
             "teamspace_name": str(account.get("teamspace_name") or "").strip(),
@@ -470,8 +587,14 @@ class AccountPool:
             "next_in_rotation": self._selection_mode == "auto"
             and workspace_key == self._workspace_key
             and index == self._current_index,
-            "available": cooldown_remaining <= 0,
+            "available": health.available and cooldown_remaining <= 0,
             "cooldown_remaining_seconds": round(cooldown_remaining, 3),
+            "health_score": health.health_score,
+            "health_reason": health.health_reason,
+            "inflight": health.inflight,
+            "queue_depth": health.queue_depth,
+            "retry_after_seconds": health.retry_after_seconds,
+            "recent_failures": health.recent_failures,
             "governance_aligned": bool(
                 governance_receipt_from_client(self.clients[index]).get("aligned")
             ),
@@ -494,6 +617,7 @@ class AccountPool:
                 **selected,
                 **workspace,
                 "workspace_mode": "pinned",
+                "selection_policy": selection_mode_label(),
                 "selected_account_number": selected["account_number"],
                 "selected_profile_name": selected["profile_name"],
                 "next_account_number": (
@@ -504,12 +628,42 @@ class AccountPool:
                 "previous_selection": previous_descriptor,
                 "effective_for_new_requests": True,
                 "persistence_enabled": self._selection_state_path is not None,
+                "routing_decision": dict(self._last_routing_decision),
                 "workspaces": self._workspace_summaries_unlocked(),
                 "accounts": [
                     self._account_summary_unlocked(index, now)
                     for index in active_indices
                 ],
             }
+
+    def get_last_routing_decision(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._last_routing_decision)
+
+    def mark_quota_signal(
+        self,
+        client: NotionOpusAPI,
+        *,
+        retry_after_seconds: float = 0.0,
+        reason: str = "retry_after",
+    ) -> None:
+        """Apply observed retry-after/cooldown without inventing quota ceilings."""
+        delay = max(0.0, float(retry_after_seconds or 0.0))
+        if delay <= 0:
+            return
+        self.mark_failed(client, cooldown_seconds=max(1, int(delay)))
+        logger.info(
+            "Account quota signal observed",
+            extra={
+                "request_info": {
+                    "event": "account_quota_signal",
+                    "account": getattr(client, "account_key", ""),
+                    "space_id": getattr(client, "space_id", ""),
+                    "retry_after_seconds": round(delay, 3),
+                    "reason": str(reason or "retry_after")[:96],
+                }
+            },
+        )
 
     def switch_workspace(self, selector: str) -> dict[str, Any]:
         """Pin new requests to one workspace and restore account auto-rotation there."""

@@ -156,6 +156,8 @@ class AccountSummaryResponse(BaseModel):
     account_number: int
     profile_name: str
     base_profile_name: str = ""
+    capacity_role: str = ""
+    account_alias: str = ""
     workspace_key: str = ""
     workspace_name: str = ""
     teamspace_name: str = ""
@@ -167,6 +169,12 @@ class AccountSummaryResponse(BaseModel):
     next_in_rotation: bool
     available: bool
     cooldown_remaining_seconds: float
+    health_score: float = 1.0
+    health_reason: str = "healthy"
+    inflight: int = 0
+    queue_depth: int = 0
+    retry_after_seconds: float = 0.0
+    recent_failures: int = 0
     governance_aligned: bool
 
 
@@ -189,12 +197,14 @@ class AccountSelectionResponse(BaseModel):
     workspace_id: str = ""
     teamspace_name: str = ""
     teamspace_id: str = ""
+    selection_policy: str = "health_aware"
     selected_account_number: int | None = None
     selected_profile_name: str | None = None
     next_account_number: int | None = None
     previous_selection: dict[str, Any] = Field(default_factory=dict)
     effective_for_new_requests: bool = True
     persistence_enabled: bool = False
+    routing_decision: dict[str, Any] = Field(default_factory=dict)
     workspaces: list[WorkspaceSummaryResponse] = Field(default_factory=list)
     accounts: list[AccountSummaryResponse] = Field(default_factory=list)
     governance: dict[str, Any] = Field(default_factory=dict)
@@ -571,6 +581,8 @@ def _account_selection_response(pool: Any) -> AccountSelectionResponse:
             summary.get("effective_for_new_requests", True)
         ),
         persistence_enabled=bool(summary.get("persistence_enabled", False)),
+        selection_policy=str(summary.get("selection_policy") or "health_aware"),
+        routing_decision=dict(summary.get("routing_decision") or {}),
         workspaces=[
             WorkspaceSummaryResponse(**item)
             for item in summary.get("workspaces", [])
