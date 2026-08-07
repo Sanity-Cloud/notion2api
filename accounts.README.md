@@ -52,11 +52,28 @@ sources should be supplied as supporting sources, not as a replacement source of
 
 When more than one account is configured, the backend supports two selection modes:
 
-- `auto`: round-robin rotation with cooldown failover.
-- `pinned`: all new requests use one named profile until changed.
+- `auto`: health/load/quota-aware selection among capacity roles (Alpha/Beta production peers, bounded Canary fraction, Dev excluded unless a development/test workload requests it).
+- `pinned`: all new requests use one named profile or capacity alias (Alpha/Beta/Canary/Dev) until changed.
 
-Use `GET /v1/notion/accounts` to list safe account metadata, `POST /v1/notion/accounts/switch` to change modes, and `POST /v1/notion/accounts/rollback` to restore the immediately preceding selection. MCP profiles expose equivalent `list_accounts`, `switch_account`, and `rollback_account_switch` tools using their configured tool prefix.
+Use `GET /v1/notion/accounts` to list safe account metadata (including alias, role, health score/reason, inflight/queue pressure, and routing evidence), `POST /v1/notion/accounts/switch` to change modes, and `POST /v1/notion/accounts/rollback` to restore the immediately preceding selection. MCP profiles expose equivalent `list_accounts`, `switch_account`, and `rollback_account_switch` tools using their configured tool prefix.
 
 Set `NOTION_ACCOUNT_SELECTION_STATE` to persist the Auto/Pinned choice across restarts. The state file contains only the mode and profile name; credentials remain in the protected account configuration.
 
-Account selection affects new requests. Start a new persistent Notion chat after switching profiles because an existing remote thread remains bound to the account that created it.
+Optional `NOTION_CANARY_ROUTE_FRACTION` (default `0.1`) controls the bounded fraction of ordinary eligible new work that may land on Canary.
+
+Account selection affects new requests. Persistent Notion chats remain sticky to the original `workspace_id + user_id` binding and are not migrated when selection changes.
+
+## Capacity roles
+
+Operational aliases (not credential renames):
+
+- Account 1 → Alpha
+- Account 2 → Beta
+- Account 3 → Canary
+- Account 4 → Dev
+
+City, NotebookLM, governance-domain, and task-domain labels are workload metadata only and never permanently own an account.
+
+## Cursor custom agents
+
+Cursor agents are scoped by `(account_key, workspace_id)` and store Bitwarden secret references only (`cursor_api_key_secret_id`). Raw Cursor API keys must never appear in `accounts.json`, registry rows, logs, or MCP outputs.
