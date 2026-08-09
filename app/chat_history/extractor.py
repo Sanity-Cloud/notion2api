@@ -35,6 +35,17 @@ HIDDEN_MESSAGE_TYPES = {
     "thinking",
     "title",
 }
+# Step types observed in Notion server/desktop evidence. Unknown types are retained as-is.
+KNOWN_STEP_TYPES = HIDDEN_MESSAGE_TYPES | {
+    "agent-inference",
+    "user",
+    "context",
+    "computer-file",
+    "config",
+    "updated-config",
+    "workflow",
+}
+VERSION_FIELDS = ("version", "last_version", "lastVersion")
 HYDRATION_SCAN_FIELDS = (
     "recordMap",
     "body",
@@ -176,6 +187,212 @@ def visible_message_role(value: dict[str, Any]) -> str | None:
     if role in HIDDEN_MESSAGE_TYPES:
         return None
     return role
+
+
+def step_payload(value: dict[str, Any]) -> dict[str, Any]:
+    """Return the semantic step object (unwrap nested step when present)."""
+    if not isinstance(value, dict):
+        return {}
+    step = value.get("step")
+    return step if isinstance(step, dict) else value
+
+
+def message_step_type(value: dict[str, Any]) -> str:
+    step = step_payload(value)
+    step_type = str(step.get("type") or value.get("type") or "").strip()
+    return step_type or "unknown"
+
+
+def _coerce_version(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None
+
+
+def record_versions(raw: Any, value: dict[str, Any] | None = None) -> tuple[int | None, int | None]:
+    """Extract (version, last_version) from a Notion record wrapper or value."""
+    containers: list[dict[str, Any]] = []
+    if isinstance(raw, dict):
+        containers.append(raw)
+        nested_value = raw.get("value")
+        if isinstance(nested_value, dict):
+            containers.append(nested_value)
+    if isinstance(value, dict):
+        containers.append(value)
+        step = value.get("step")
+        if isinstance(step, dict):
+            containers.append(step)
+    version: int | None = None
+    last_version: int | None = None
+    for container in containers:
+        if version is None:
+            version = _coerce_version(container.get("version"))
+        if last_version is None:
+            last_version = _coerce_version(container.get("last_version"))
+            if last_version is None:
+                last_version = _coerce_version(container.get("lastVersion"))
+    return version, last_version
+
+
+def extract_message_parts(value: dict[str, Any]) -> list[dict[str, Any]]:
+    """Preserve ordinal + part_type + raw/text for agent-inference.value[] (and similar)."""
+    step = step_payload(value)
+    values = step.get("value") if isinstance(step.get("value"), list) else None
+    if values is None and isinstance(value.get("value"), list):
+        values = value.get("value")
+    if not isinstance(values, list):
+        return []
+    parts: list[dict[str, Any]] = []
+    for index, part in enumerate(values):
+        if not isinstance(part, dict):
+            parts.append(
+                {
+                    "ordinal": index,
+                    "part_type": "unknown",
+                    "text": str(part) if part is not None else None,
+                    "content": part,
+                    "raw": {"value": part},
+                }
+            )
+            continue
+        part_type = str(part.get("type") or "").strip() or "unknown"
+        content = part.get("content")
+        text = None
+        if isinstance(content, str):
+            text = content
+        elif content is not None and not isinstance(content, (dict, list)):
+            text = str(content)
+        parts.append(
+            {
+                "ordinal": index,
+                "part_type": part_type,
+                "text": text,
+                "content": content,
+                "raw": part,
+            }
+        )
+    return parts
+
+
+def _semantic_role(step_type: str, visible_role: str | None) -> str | None:
+    if visible_role:
+        return visible_role
+    if step_type == "user":
+        return "user"
+    if step_type == "agent-inference":
+        return "assistant"
+    if step_type in HIDDEN_MESSAGE_TYPES:
+        return None
+    return step_type if step_type and step_type != "unknown" else None
+
+
+def normalize_thread_message_record(
+    message_id: str | None,
+    raw: dict[str, Any],
+    fallback_thread_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Normalize a thread_message into a durable semantic record.
+
+    Hidden and unknown step types are retained. Visibility is a projection flag and
+    never gates whether the record exists.
+    """
+    value = record_value(raw)
+    if not value and not isinstance(raw, dict):
+        return None
+    step = step_payload(value)
+    resolved_id = (
+        message_id
+        or _first_str(value, MESSAGE_ID_FIELDS)
+        or _first_str(step, MESSAGE_ID_FIELDS)
+    )
+    step_type = message_step_type(value)
+    if step_type not in KNOWN_STEP_TYPES and step_type != "unknown":
+        # Retain unknown types losslessly under their observed name.
+        pass
+    text = visible_message_text(value)
+    if not text:
+        for key in MESSAGE_TEXT_NESTED_FIELDS:
+            nested = value.get(key)
+            if isinstance(nested, dict):
+                text = visible_message_text(nested)
+                if text:
+                    break
+    role = visible_message_role(value)
+    visible = bool(text and role is not None)
+    if not resolved_id:
+        if not (text or step_type != "unknown"):
+            return None
+        resolved_id = _synthetic_message_id(fallback_thread_id, text or step_type)
+    thread_id = (
+        _first_str(value, THREAD_ID_FIELDS)
+        or _first_str(step, THREAD_ID_FIELDS)
+        or fallback_thread_id
+    )
+    created_at = _first_scalar_text(value, THREAD_CREATED_FIELDS) or _first_scalar_text(
+        step, THREAD_CREATED_FIELDS
+    )
+    version, last_version = record_versions(raw, value)
+    model_metadata = message_model_metadata(value)
+    data_value = value.get("data") if isinstance(value.get("data"), dict) else {}
+    inference_id = ""
+    if isinstance(data_value, dict):
+        inference_id = str(data_value.get("inference_id") or "")
+    inference_id = inference_id or str(model_metadata.get("inference_id") or "")
+    trace_id = str(model_metadata.get("trace_id") or "") or (
+        _first_scalar_text(step, ("traceId", "trace_id")) or ""
+    )
+    return {
+        "id": str(resolved_id),
+        "thread_id": thread_id,
+        "step_type": step_type,
+        "visible": visible,
+        "role": role,
+        "semantic_role": _semantic_role(step_type, role),
+        "text": text or "",
+        "created_time": created_at or value.get("created_time") or value.get("createdTime"),
+        "version": version,
+        "last_version": last_version,
+        "parts": extract_message_parts(value),
+        "actual_model": model_metadata.get("actual_model"),
+        "model_provider": model_metadata.get("model_provider"),
+        "notion_model_name": model_metadata.get("notion_model_name"),
+        "model_metadata": model_metadata,
+        "inference_id": inference_id or None,
+        "trace_id": trace_id or None,
+        "raw": value,
+        "raw_wrapper": raw if isinstance(raw, dict) else {"value": value},
+    }
+
+
+def visible_transcript_message(record: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Project a semantic record into the legacy visible chat_messages shape."""
+    if not isinstance(record, dict) or not record.get("visible"):
+        return None
+    role = record.get("role")
+    text = str(record.get("text") or "")
+    if not role or not text:
+        return None
+    return {
+        "id": record["id"],
+        "thread_id": record.get("thread_id"),
+        "role": role,
+        "text": text,
+        "created_time": record.get("created_time"),
+        "actual_model": record.get("actual_model"),
+        "model_provider": record.get("model_provider"),
+        "notion_model_name": record.get("notion_model_name"),
+        "model_metadata": record.get("model_metadata") or {},
+        "raw": record.get("raw") or {},
+        "version": record.get("version"),
+        "last_version": record.get("last_version"),
+        "step_type": record.get("step_type"),
+    }
 
 
 def _collect_text(value: Any, out: list[str], depth: int = 0) -> None:
@@ -329,38 +546,12 @@ def normalize_thread(thread_id: str | None, raw: dict[str, Any]) -> dict[str, An
 
 
 def normalize_message(message_id: str | None, raw: dict[str, Any], fallback_thread_id: str | None = None) -> dict[str, Any] | None:
-    value = record_value(raw)
-    resolved_id = message_id or _first_str(value, MESSAGE_ID_FIELDS)
-    text = visible_message_text(value)
-    if not text:
-        for key in MESSAGE_TEXT_NESTED_FIELDS:
-            nested = value.get(key)
-            if isinstance(nested, dict):
-                text = visible_message_text(nested)
-                if text:
-                    break
-    if not resolved_id and not text:
-        return None
-    if not text:
-        return None
-    thread_id = _first_str(value, THREAD_ID_FIELDS) or fallback_thread_id
-    role = visible_message_role(value)
-    if role is None:
-        return None
-    created_at = _first_scalar_text(value, THREAD_CREATED_FIELDS)
-    model_metadata = message_model_metadata(value)
-    return {
-        "id": str(resolved_id or _synthetic_message_id(thread_id, text)),
-        "thread_id": thread_id,
-        "role": role,
-        "text": text,
-        "created_time": created_at or value.get("created_time") or value.get("createdTime"),
-        "actual_model": model_metadata.get("actual_model"),
-        "model_provider": model_metadata.get("model_provider"),
-        "notion_model_name": model_metadata.get("notion_model_name"),
-        "model_metadata": model_metadata,
-        "raw": value,
-    }
+    """Visible-transcript projection. Hidden/unknown steps are excluded here by design.
+
+    Prefer normalize_thread_message_record() for lossless durable storage.
+    """
+    record = normalize_thread_message_record(message_id, raw, fallback_thread_id=fallback_thread_id)
+    return visible_transcript_message(record)
 
 
 def _iter_collection(obj: Any, names: tuple[str, ...]):
@@ -382,13 +573,75 @@ def _iter_collection(obj: Any, names: tuple[str, ...]):
             yield from _iter_collection(nested, names)
 
 
+def _ensure_bundle_collections(bundle: dict[str, Any]) -> None:
+    bundle.setdefault("threads", {})
+    bundle.setdefault("messages", {})
+    bundle.setdefault("thread_messages", {})
+    bundle.setdefault("raw_records", [])
+
+
+def _append_raw_record(
+    bundle: dict[str, Any],
+    *,
+    table_name: str,
+    record_id: str,
+    raw: Any,
+    source_kind: str = "notion_payload",
+) -> None:
+    value = record_value(raw) if isinstance(raw, dict) else {}
+    version, last_version = record_versions(raw, value if isinstance(value, dict) else None)
+    space_id = None
+    if isinstance(raw, dict):
+        space_id = raw.get("spaceId") or raw.get("space_id")
+        if space_id is None and isinstance(raw.get("pointer"), dict):
+            space_id = raw["pointer"].get("spaceId") or raw["pointer"].get("space_id")
+    if space_id is None and isinstance(value, dict):
+        space_id = value.get("spaceId") or value.get("space_id")
+    bundle.setdefault("raw_records", []).append(
+        {
+            "table_name": table_name,
+            "record_id": str(record_id),
+            "version": version,
+            "last_version": last_version,
+            "workspace_id": str(space_id).strip() if space_id not in (None, "") else None,
+            "raw": raw if isinstance(raw, dict) else {"value": raw},
+            "source_kind": source_kind,
+        }
+    )
+
+
+def _ingest_thread_message(
+    bundle: dict[str, Any],
+    message_id: str | None,
+    raw: dict[str, Any],
+    *,
+    fallback_thread_id: str | None = None,
+) -> dict[str, Any] | None:
+    record = normalize_thread_message_record(message_id, raw, fallback_thread_id=fallback_thread_id)
+    if not record:
+        return None
+    bundle.setdefault("thread_messages", {})[record["id"]] = record
+    _append_raw_record(
+        bundle,
+        table_name="thread_message",
+        record_id=record["id"],
+        raw=raw if isinstance(raw, dict) else record.get("raw_wrapper") or {"value": record.get("raw")},
+    )
+    visible = visible_transcript_message(record)
+    if visible:
+        bundle["messages"][visible["id"]] = visible
+    return record
+
+
 def _merge_thread_candidate(bundle: dict[str, Any], fallback_id: str | None, candidate: dict[str, Any]) -> None:
+    _ensure_bundle_collections(bundle)
     thread = normalize_thread(fallback_id, candidate)
     if not thread:
         return
     thread_id = thread["id"]
     direct_message_ids = list(thread.get("message_ids") or [])
     value = record_value(candidate)
+    _append_raw_record(bundle, table_name="thread", record_id=thread_id, raw=candidate)
     for field in THREAD_MESSAGE_FIELDS:
         items = value.get(field)
         if not isinstance(items, list):
@@ -396,10 +649,9 @@ def _merge_thread_candidate(bundle: dict[str, Any], fallback_id: str | None, can
         for item in items:
             if not isinstance(item, dict):
                 continue
-            message = normalize_message(None, item, fallback_thread_id=thread_id)
-            if message:
-                bundle["messages"][message["id"]] = message
-                direct_message_ids.append(message["id"])
+            record = _ingest_thread_message(bundle, None, item, fallback_thread_id=thread_id)
+            if record:
+                direct_message_ids.append(record["id"])
     thread["message_ids"] = _dedupe(direct_message_ids)
     bundle["threads"][thread_id] = thread
 
@@ -409,7 +661,9 @@ def _has_thread_shape(value: dict[str, Any]) -> bool:
 
 
 def _has_message_shape(value: dict[str, Any]) -> bool:
-    return any(field in value for field in MESSAGE_TEXT_FIELDS + MESSAGE_ROLE_FIELDS + THREAD_ID_FIELDS)
+    return any(field in value for field in MESSAGE_TEXT_FIELDS + MESSAGE_ROLE_FIELDS + THREAD_ID_FIELDS) or (
+        message_step_type(value) != "unknown"
+    )
 
 
 def merge_records_into_bundle(bundle: dict[str, Any], obj: Any) -> None:
@@ -418,30 +672,48 @@ def merge_records_into_bundle(bundle: dict[str, Any], obj: Any) -> None:
     Prefer structured `recordMap` / transcript collections. Skip the deep tree walk
     when those hit, because Notion hydrate payloads embed huge encrypted blobs that
     make full walks dominate CPU for no additional records.
+
+    Bundle keys:
+      - threads / messages: visible-transcript projection (legacy compatible)
+      - thread_messages: lossless semantic thread_message records (incl. hidden/unknown)
+      - raw_records: version-aware raw Notion record mirrors
     """
+    _ensure_bundle_collections(bundle)
     structured_hits = 0
     for record_map in record_maps(obj):
         for thread_id, record in (record_map.get("thread") or {}).items():
             thread = normalize_thread(str(thread_id), record_value(record))
             if thread:
                 bundle["threads"][thread["id"]] = thread
+                _append_raw_record(bundle, table_name="thread", record_id=thread["id"], raw=record)
                 structured_hits += 1
         for message_id, record in (record_map.get("thread_message") or {}).items():
-            message = normalize_message(str(message_id), record_value(record))
-            if message:
-                bundle["messages"][message["id"]] = message
+            raw_record = record if isinstance(record, dict) else {"value": record}
+            if _ingest_thread_message(bundle, str(message_id), raw_record):
+                # Count semantic hits even when the step is hidden from the visible transcript.
+                structured_hits += 1
+            else:
+                # Still mirror raw when normalization cannot resolve an id.
+                _append_raw_record(bundle, table_name="thread_message", record_id=str(message_id), raw=raw_record)
                 structured_hits += 1
 
     if isinstance(obj, dict):
         for fallback_id, candidate in _iter_collection(obj, ("transcripts", "threads")):
-            before = len(bundle["threads"]) + len(bundle["messages"])
+            before = (
+                len(bundle["threads"])
+                + len(bundle["messages"])
+                + len(bundle.get("thread_messages", {}))
+            )
             _merge_thread_candidate(bundle, fallback_id, candidate)
-            if len(bundle["threads"]) + len(bundle["messages"]) > before:
+            after = (
+                len(bundle["threads"])
+                + len(bundle["messages"])
+                + len(bundle.get("thread_messages", {}))
+            )
+            if after > before:
                 structured_hits += 1
         for fallback_id, candidate in _iter_collection(obj, ("messages", "thread_messages", "threadMessages")):
-            message = normalize_message(fallback_id, candidate)
-            if message:
-                bundle["messages"][message["id"]] = message
+            if _ingest_thread_message(bundle, fallback_id, candidate):
                 structured_hits += 1
 
     if structured_hits > 0:
@@ -456,9 +728,7 @@ def merge_records_into_bundle(bundle: dict[str, Any], obj: Any) -> None:
                     _merge_thread_candidate(bundle, thread["id"], value)
                     next_thread_id = thread["id"]
             elif _has_message_shape(value):
-                message = normalize_message(None, value, fallback_thread_id=fallback_thread_id)
-                if message:
-                    bundle["messages"][message["id"]] = message
+                if _ingest_thread_message(bundle, None, value, fallback_thread_id=fallback_thread_id):
                     return
 
             for nested in value.values():
@@ -472,7 +742,7 @@ def merge_records_into_bundle(bundle: dict[str, Any], obj: Any) -> None:
 
 
 def extract_chat_bundle(obj: Any) -> dict[str, Any]:
-    bundle: dict[str, Any] = {"threads": {}, "messages": {}}
+    bundle: dict[str, Any] = {"threads": {}, "messages": {}, "thread_messages": {}, "raw_records": []}
     merge_records_into_bundle(bundle, obj)
     return bundle
 

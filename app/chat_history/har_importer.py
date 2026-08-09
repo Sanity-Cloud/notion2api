@@ -45,13 +45,25 @@ def _response_json(entry: dict[str, Any]) -> Any:
 
 
 def import_chat_object(obj: Any) -> dict[str, Any]:
-    bundle = {"threads": {}, "messages": {}, "endpoint_counts": {}}
+    bundle = {
+        "threads": {},
+        "messages": {},
+        "thread_messages": {},
+        "raw_records": [],
+        "endpoint_counts": {},
+    }
     merge_records_into_bundle(bundle, obj)
     return bundle
 
 
 def import_har_object(har: dict[str, Any]) -> dict[str, Any]:
-    bundle = {"threads": {}, "messages": {}, "endpoint_counts": {}}
+    bundle = {
+        "threads": {},
+        "messages": {},
+        "thread_messages": {},
+        "raw_records": [],
+        "endpoint_counts": {},
+    }
     counts: Counter[str] = Counter()
     entries = har.get("log", {}).get("entries", [])
     if not isinstance(entries, list):
