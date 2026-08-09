@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.hive_multithread import (
+    BeeNotionCallEnvelope,
     CrossThreadEnvelope,
     CrossThreadMessageKind,
     HiveMissionBus,
@@ -72,6 +73,36 @@ def test_worker_cannot_reuse_leader_conversation():
             notion_user_id="user-1",
             workspace_id="workspace-1",
         )
+
+
+def test_leader_conversation_can_coordinate_a_named_worker_lane():
+    mission_id = "mission-1"
+    leader_id = leader_conversation_id(mission_id)
+    binding = ThreadBinding(
+        mission_id=mission_id,
+        thread_kind=ThreadKind.LEADER,
+        conversation_id=leader_id,
+        leader_conversation_id=leader_id,
+        profile_id="profile-1",
+        notion_user_id="user-1",
+        workspace_id="workspace-1",
+    )
+    envelope = BeeNotionCallEnvelope(
+        account_key="workspace-1:user-1",
+        conversation_id=leader_id,
+        mission_id=mission_id,
+        work_unit_id="lane-a",
+        worker_id="worker-a",
+        idempotency_key="leader-request-1",
+        profile_id="profile-1",
+        workspace_id="workspace-1",
+        user_id="user-1",
+    )
+
+    envelope.validate_lane(
+        binding,
+        mission_conversation_ids=[worker_conversation_id("plan-1", "worker-a")],
+    )
 
 
 def test_dependency_planner_maximizes_parallel_first_wave():

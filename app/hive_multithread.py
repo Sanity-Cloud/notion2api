@@ -243,17 +243,15 @@ class BeeNotionCallEnvelope(BaseModel):
         lane_thread_ids: Mapping[str, str] | None = None,
     ) -> None:
         """Reject account/lane/thread borrowing across bees."""
-        if binding.thread_kind == ThreadKind.LEADER and self.work_unit_id:
-            # Leaders may coordinate, but chat must still target a declared lane conversation.
-            pass
         if self.mission_id != binding.mission_id:
             raise MultithreadContractError("bee call mission_id does not match lane binding")
         if self.conversation_id != binding.conversation_id:
             raise MultithreadContractError("bee call conversation_id does not match lane binding")
-        if self.work_unit_id and self.work_unit_id != binding.work_unit_id:
-            raise MultithreadContractError("bee call work_unit_id does not match lane binding")
-        if self.worker_id and binding.worker_id and self.worker_id != binding.worker_id:
-            raise MultithreadContractError("bee call worker_id does not match lane binding")
+        if binding.thread_kind != ThreadKind.LEADER:
+            if self.work_unit_id and self.work_unit_id != binding.work_unit_id:
+                raise MultithreadContractError("bee call work_unit_id does not match lane binding")
+            if self.worker_id and binding.worker_id and self.worker_id != binding.worker_id:
+                raise MultithreadContractError("bee call worker_id does not match lane binding")
         if not account_key_matches(
             self.account_key,
             workspace_id=binding.workspace_id,

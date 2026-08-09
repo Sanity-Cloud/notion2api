@@ -149,13 +149,15 @@ def validate_bee_notion_call(
             "mission account workspace_id/user_id are required for bee chat calls"
         )
 
+    mission_leader_conversation_id = leader_conversation_id(envelope.mission_id)
+    is_leader_conversation = envelope.conversation_id == mission_leader_conversation_id
     binding = ThreadBinding(
         mission_id=envelope.mission_id,
-        work_unit_id=envelope.work_unit_id,
-        worker_id=envelope.worker_id or lane.role or "worker",
-        thread_kind=ThreadKind.WORKER,
+        work_unit_id="" if is_leader_conversation else envelope.work_unit_id,
+        worker_id="" if is_leader_conversation else (envelope.worker_id or lane.role or "worker"),
+        thread_kind=ThreadKind.LEADER if is_leader_conversation else ThreadKind.WORKER,
         conversation_id=envelope.conversation_id,
-        leader_conversation_id=leader_conversation_id(envelope.mission_id),
+        leader_conversation_id=mission_leader_conversation_id,
         profile_id=envelope.profile_id or snapshot.profile_name or "hive",
         notion_user_id=user,
         workspace_id=workspace,
