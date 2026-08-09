@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, Field
 
+from app.diagnostics import emit_diagnostic_event
 from app.file_discovery_routing import enforce_dispatch_file_route
 from app.governed_authorization import (
     GovernedAuthorizationError,
@@ -1615,6 +1616,24 @@ class HiveExecutionDispatcherStore:
                 },
             )
         except Exception as exc:
+            emit_diagnostic_event(
+                code="HIVE_ACKNOWLEDGEMENT_FAILED",
+                message="AIgentBee could not persist the Phase 2 acknowledgement for a claimed execution.",
+                operation="phase2_acknowledgement",
+                category="agent_or_hive_lane",
+                severity="error",
+                kind="coordination_failure",
+                retryable=True,
+                component_id="aigentbee",
+                source="aigentbee_runtime",
+                parent_record_id=execution_key,
+                project_id=str(request.get("plan_id") or "") or None,
+                lane_id=str(request.get("work_unit_id") or "") or None,
+                details={
+                    "execution_id": execution_key,
+                    "exception_type": type(exc).__name__,
+                },
+            )
             with self._write() as conn:
                 self._update_execution(
                     conn,
@@ -1799,6 +1818,41 @@ class HiveExecutionDispatcherStore:
         error_message: str,
         duration_ms: int,
     ) -> HiveExecutionSnapshot:
+        diagnostic_code = {
+            "CANCELLED": "HIVE_EXECUTION_CANCELLED",
+            "TIMEOUT": "HIVE_EXECUTION_TIMEOUT",
+            "ADAPTER_FAILED": "HIVE_ADAPTER_FAILED",
+        }.get(error_code, f"HIVE_EXECUTION_{error_code or 'FAILED'}")
+        emit_diagnostic_event(
+            code=diagnostic_code,
+            message=f"AIgentBee execution reached terminal status {status}.",
+            operation="hive_execution",
+            category="agent_or_hive_lane",
+            severity=(
+                "info"
+                if error_code == "CANCELLED"
+                else "warning"
+                if error_code == "TIMEOUT"
+                else "error"
+            ),
+            kind=(
+                "cancellation"
+                if error_code == "CANCELLED"
+                else "timeout"
+                if error_code == "TIMEOUT"
+                else "adapter_failure"
+            ),
+            retryable=error_code in {"TIMEOUT", "ADAPTER_FAILED"},
+            component_id="aigentbee",
+            source="aigentbee_runtime",
+            parent_record_id=execution_id,
+            details={
+                "execution_id": execution_id,
+                "status": status,
+                "error_code": error_code,
+                "duration_ms": duration_ms,
+            },
+        )
         evidence = {
             "duration_ms": duration_ms,
             "performed_external_effect": False,

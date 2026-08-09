@@ -54,6 +54,10 @@ def emit_diagnostic_event(
     evidence: list[Any] | None = None,
     component_id: str = "notion2api",
     source: str = "notion2api_runtime",
+    parent_record_id: str | None = None,
+    project_id: str | None = None,
+    lane_id: str | None = None,
+    decision_id: str | None = None,
 ) -> bool:
     """Emit one supervisor-consumable diagnostic event; never raise."""
 
@@ -69,6 +73,10 @@ def emit_diagnostic_event(
         "kind": str(kind or "error")[:120],
         "retryable": bool(retryable),
         "source": str(source or "notion2api_runtime")[:160],
+        "parent_record_id": parent_record_id,
+        "project_id": project_id,
+        "lane_id": lane_id,
+        "decision_id": decision_id,
         "details": _safe_details(dict(details or {})),
         "evidence": _safe_details(list(evidence or [])),
     }
