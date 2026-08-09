@@ -165,7 +165,50 @@ class ConversationManager:
             self._ensure_column(conn, "conversations", "profile_name TEXT")
             self._ensure_column(conn, "conversations", "publication_parent_page_id TEXT")
             self._ensure_column(conn, "conversations", "governance_contract_version TEXT")
+            # Additive ownership columns observed on some runtime DBs; keep code/schema aligned.
+            self._ensure_column(conn, "conversations", "account_key TEXT")
+            self._ensure_column(conn, "conversations", "notion_user_id TEXT")
+            self._ensure_column(conn, "conversations", "notion_space_id TEXT")
+            self._ensure_column(conn, "conversations", "notion_thread_id TEXT")
+            self._ensure_column(conn, "conversations", "account_scope TEXT")
+            self._ensure_column(conn, "conversations", "account_binding_status TEXT")
             self._ensure_column(conn, "messages", "thinking TEXT")
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_bindings (
+                    binding_id TEXT PRIMARY KEY,
+                    bee_id TEXT,
+                    hive_id TEXT,
+                    lane_id TEXT,
+                    assignment_id TEXT,
+                    conversation_id TEXT NOT NULL,
+                    account_key TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    notion_user_id TEXT,
+                    remote_thread_id TEXT NOT NULL,
+                    binding_generation INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    predecessor_binding_id TEXT,
+                    successor_binding_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    retired_at INTEGER,
+                    UNIQUE(account_key, workspace_id, conversation_id, binding_generation),
+                    UNIQUE(account_key, workspace_id, remote_thread_id, binding_generation)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_conversation_bindings_active
+                ON conversation_bindings(account_key, workspace_id, conversation_id, status, binding_generation DESC)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_conversation_bindings_remote
+                ON conversation_bindings(account_key, workspace_id, remote_thread_id, status)
+                """
+            )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_conversations_chat_scope
@@ -835,6 +878,142 @@ class ConversationManager:
                     }
                 },
             )
+
+    def create_conversation_binding(
+        self,
+        *,
+        conversation_id: str,
+        account_key: str,
+        workspace_id: str,
+        remote_thread_id: str,
+        bee_id: str | None = None,
+        hive_id: str | None = None,
+        lane_id: str | None = None,
+        assignment_id: str | None = None,
+        notion_user_id: str | None = None,
+        predecessor_binding_id: str | None = None,
+        binding_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create an immutable-generation Bee/conversation -> Notion thread binding.
+
+        Ownership is (account_key, workspace_id, conversation/remote_thread) + generation.
+        A bare remote_thread_id is never treated as a unique ownership key.
+        """
+        account = str(account_key or "").strip()
+        workspace = str(workspace_id or "").strip()
+        conversation = str(conversation_id or "").strip()
+        remote_thread = str(remote_thread_id or "").strip()
+        if not account or not workspace or not conversation or not remote_thread:
+            raise ValueError(
+                "account_key, workspace_id, conversation_id, and remote_thread_id are required"
+            )
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(MAX(binding_generation), 0) AS max_gen
+                FROM conversation_bindings
+                WHERE account_key=? AND workspace_id=? AND conversation_id=?
+                """,
+                (account, workspace, conversation),
+            ).fetchone()
+            generation = int(row["max_gen"] or 0) + 1
+            active = conn.execute(
+                """
+                SELECT binding_id FROM conversation_bindings
+                WHERE account_key=? AND workspace_id=? AND conversation_id=? AND status='active'
+                """,
+                (account, workspace, conversation),
+            ).fetchone()
+            if active is not None:
+                raise ValueError(
+                    "conversation already has an active binding; retire it before creating a successor"
+                )
+            resolved_binding_id = str(binding_id or uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO conversation_bindings(
+                  binding_id, bee_id, hive_id, lane_id, assignment_id, conversation_id,
+                  account_key, workspace_id, notion_user_id, remote_thread_id,
+                  binding_generation, status, predecessor_binding_id, successor_binding_id,
+                  created_at, retired_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,NULL,?,NULL)
+                """,
+                (
+                    resolved_binding_id,
+                    bee_id,
+                    hive_id,
+                    lane_id,
+                    assignment_id,
+                    conversation,
+                    account,
+                    workspace,
+                    notion_user_id,
+                    remote_thread,
+                    generation,
+                    predecessor_binding_id,
+                    now,
+                ),
+            )
+            if predecessor_binding_id:
+                conn.execute(
+                    """
+                    UPDATE conversation_bindings
+                    SET successor_binding_id=?
+                    WHERE binding_id=? AND account_key=? AND workspace_id=?
+                    """,
+                    (resolved_binding_id, predecessor_binding_id, account, workspace),
+                )
+            conn.commit()
+            created = conn.execute(
+                "SELECT * FROM conversation_bindings WHERE binding_id=?",
+                (resolved_binding_id,),
+            ).fetchone()
+            return dict(created) if created else {"binding_id": resolved_binding_id}
+
+    def get_active_conversation_binding(
+        self,
+        *,
+        conversation_id: str,
+        account_key: str,
+        workspace_id: str,
+    ) -> dict[str, Any] | None:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM conversation_bindings
+                WHERE account_key=? AND workspace_id=? AND conversation_id=? AND status='active'
+                ORDER BY binding_generation DESC
+                LIMIT 1
+                """,
+                (str(account_key), str(workspace_id), str(conversation_id)),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def retire_conversation_binding(
+        self,
+        binding_id: str,
+        *,
+        account_key: str,
+        workspace_id: str,
+        successor_binding_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        with self._get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE conversation_bindings
+                SET status='retired', retired_at=?, successor_binding_id=COALESCE(?, successor_binding_id)
+                WHERE binding_id=? AND account_key=? AND workspace_id=? AND status='active'
+                """,
+                (now, successor_binding_id, binding_id, account_key, workspace_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM conversation_bindings WHERE binding_id=?",
+                (binding_id,),
+            ).fetchone()
+            return dict(row) if row else None
 
     def conversation_exists(self, conversation_id: str) -> bool:
         if not conversation_id:
