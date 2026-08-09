@@ -27,7 +27,7 @@ function Set-StandardWindowsEnvironment {
 
 function Test-DockerEngine {
     try {
-        $version = (& docker version --format '{{.Server.Version}}' 2>$null).Trim()
+        $version = ([string](& docker version --format '{{.Server.Version}}' 2>$null)).Trim()
         return [bool]$version
     } catch {
         return $false
@@ -58,7 +58,9 @@ function Assert-PortFree([int]$Port) {
 }
 
 function Get-ContainerName([string]$Name) {
-    return (& docker ps -a --filter "name=^/${Name}$" --format '{{.Names}}').Trim()
+    $value = @(& docker ps -a --filter "name=^/${Name}$" --format '{{.Names}}') | Select-Object -First 1
+    if ($null -eq $value) { return '' }
+    return ([string]$value).Trim()
 }
 
 function Remove-PilotContainer([string]$Name) {

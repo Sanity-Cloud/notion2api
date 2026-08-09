@@ -10,17 +10,17 @@ $containers = @(
 )
 
 foreach ($container in $containers) {
-    $exists = (& docker ps -a --filter "name=^/${container}$" --format '{{.Names}}').Trim()
+    $exists = @(& docker ps -a --filter "name=^/${container}$" --format '{{.Names}}') | Select-Object -First 1
     if ($exists) { & docker rm -f $container | Out-Null }
 }
 
 if ($Purge) {
     foreach ($volume in 'sanitycloud-sc-amf-r1-hub-data', 'sanitycloud-sc-amf-r1-core-data') {
-        if ((& docker volume ls --filter "name=^${volume}$" --format '{{.Name}}').Trim()) {
+        if (@(& docker volume ls --filter "name=^${volume}$" --format '{{.Name}}') | Select-Object -First 1) {
             & docker volume rm $volume | Out-Null
         }
     }
-    if ((& docker network ls --filter 'name=^sanitycloud-sc-amf-r1$' --format '{{.Name}}').Trim()) {
+    if (@(& docker network ls --filter 'name=^sanitycloud-sc-amf-r1$' --format '{{.Name}}') | Select-Object -First 1) {
         & docker network rm 'sanitycloud-sc-amf-r1' | Out-Null
     }
 }
