@@ -720,8 +720,8 @@ MCPNotionMode = Annotated[
     Field(description="Notion AI mode: default can search and edit; ask is read-only; research enables deeper research."),
 ]
 MCPNotionTask = Annotated[
-    Literal["visualize", "create_slides", "spreadsheet", "deep_research"] | None,
-    Field(description="Optional Notion AI task preset for visualizations, slide decks, spreadsheets, or deep research."),
+    Literal["visualize", "generate_image", "create_slides", "spreadsheet", "deep_research"] | None,
+    Field(description="Optional Notion AI task preset for data/HTML visualizations, image generation, slide decks, spreadsheets, or deep research."),
 ]
 MCPNotionSources = Annotated[
     list[str] | None,

@@ -85,6 +85,7 @@ class NotionAttachmentUploader:
                 raise NotionAttachmentUploadError("Upload descriptor missing attachment URL", reason="missing_attachment_url")
 
             task_id = ""
+            task_data: Dict[str, Any] = {}
             if not _is_zip_attachment(loaded.name, loaded.content_type):
                 task_id = self.enqueue_attachment_processing(
                     attachment_url=attachment_url,
@@ -97,6 +98,8 @@ class NotionAttachmentUploader:
                         f"Attachment processing failed for task {task_id}",
                         reason="task_failed",
                     )
+                if isinstance(result.get("data"), dict):
+                    task_data = dict(result["data"])
 
             signed_url = self.get_signed_attachment_url(attachment_url=attachment_url, thread_id=current_thread_id, download_name=loaded.name)
             effective_content_type = (
@@ -104,14 +107,17 @@ class NotionAttachmentUploader:
                 if _is_zip_attachment(loaded.name, loaded.content_type)
                 else loaded.content_type
             )
-            metadata = self.build_attachment_step_metadata(uploaded={
-                "fileSizeBytes": loaded.size_bytes,
-                "contentType": effective_content_type,
-                "source": loaded.source,
-                "taskId": task_id,
-                "fileId": file_id,
-                "attachmentUrl": attachment_url,
-            })
+            metadata = self.build_attachment_step_metadata(
+                uploaded={
+                    "fileSizeBytes": loaded.size_bytes,
+                    "contentType": effective_content_type,
+                    "source": loaded.source,
+                    "taskId": task_id,
+                    "fileId": file_id,
+                    "attachmentUrl": attachment_url,
+                },
+                task_data=task_data,
+            )
 
             uploaded.append(
                 UploadedAttachment(
@@ -221,7 +227,17 @@ class NotionAttachmentUploader:
 
             state = status.get("status")
             if state in {"completed", "failed"}:
-                return {"success": bool(status.get("success", state == "completed")), "status": state}
+                result = {
+                    "success": bool(status.get("success", state == "completed")),
+                    "status": state,
+                }
+                if isinstance(status.get("data"), dict):
+                    result["data"] = dict(status["data"])
+                if status.get("error_code") is not None:
+                    result["error_code"] = status.get("error_code")
+                if status.get("message") is not None:
+                    result["message"] = status.get("message")
+                return result
 
             if time.time() - start > self.poll_timeout:
                 raise NotionAttachmentUploadError("Attachment task polling timed out", reason="timeout")
@@ -233,7 +249,34 @@ class NotionAttachmentUploader:
             return ""
         return self.notion.get_signed_read_url(attachment_url, thread_id=thread_id, download_name=download_name)
 
-    def build_attachment_step_metadata(self, uploaded: Dict[str, Any]) -> Dict[str, Any]:
-        # Only include safe, non-sensitive metadata
-        allowed_keys = {"fileSizeBytes", "contentType", "source", "taskId", "fileId", "attachmentUrl"}
-        return {k: v for k, v in uploaded.items() if k in allowed_keys}
+    def build_attachment_step_metadata(
+        self,
+        uploaded: Dict[str, Any],
+        task_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build native-compatible attachment metadata for inference transcripts.
+
+        Notion's processAgentAttachment task returns a stepMetadata object that
+        image-generation tools use for reference images. Preserve only the
+        non-sensitive fields observed in the native web client and add the
+        canonical user-upload marker.
+        """
+        task_data = task_data if isinstance(task_data, dict) else {}
+        step_metadata = task_data.get("stepMetadata") if isinstance(task_data.get("stepMetadata"), dict) else {}
+        allowed_step_keys = {
+            "width",
+            "height",
+            "moderation",
+            "guardrail",
+            "fileSizeBytes",
+            "aiTraceId",
+            "estimatedTokens",
+        }
+        metadata = {k: v for k, v in step_metadata.items() if k in allowed_step_keys}
+        if not metadata:
+            # Non-image/legacy fallback: retain only bounded, non-sensitive values.
+            allowed_fallback_keys = {"fileSizeBytes", "contentType"}
+            metadata.update({k: v for k, v in uploaded.items() if k in allowed_fallback_keys})
+        metadata.setdefault("fileSizeBytes", uploaded.get("fileSizeBytes"))
+        metadata["attachmentSource"] = "user_upload"
+        return {k: v for k, v in metadata.items() if v is not None}

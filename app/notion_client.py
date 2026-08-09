@@ -1964,13 +1964,22 @@ class NotionOpusAPI:
         notion_transcript = self._to_notion_transcript(transcript)
         if str(thread_id or "").strip():
             validate_bound_thread_transcript(notion_transcript)
+        image_generation_mode = any(
+            step.get("type") == "agent-prebuilt-prompt"
+            and (
+                step.get("promptType") == "image_generation_mode"
+                or (isinstance(step.get("args"), dict) and step["args"].get("type") == "image_generation_mode")
+            )
+            for step in notion_transcript
+        )
         thread_type = self._resolve_thread_type(notion_transcript)
         if computer_use_review:
             notion_transcript = self._with_computer_use_capabilities(notion_transcript)
             thread_type = "workflow"
-        if attachments and not computer_use_review:
-            # Native uploads belong to an ordinary Notion AI chat. Attachment
-            # transport must not silently reclassify the persisted thread as a workflow.
+        if attachments and not computer_use_review and not image_generation_mode:
+            # Ordinary native uploads belong to a markdown-chat thread. Image
+            # generation is different: Notion's native image_generation_mode is
+            # a workflow and reference-image uploads must not downgrade it.
             thread_type = "markdown-chat"
             notion_transcript = self._with_thread_type(notion_transcript, thread_type)
         request_profile = self._resolve_request_profile(thread_type)
@@ -2072,7 +2081,26 @@ class NotionOpusAPI:
                     request_profile["is_partial_transcript"] = True
                     request_profile["precreate_thread"] = False
                 else:
-                    notion_transcript = notion_transcript + attachment_steps
+                    if image_generation_mode:
+                        # Keep Notion's native image_generation_mode prompt as
+                        # the terminal actionable step. Reference-image uploads
+                        # precede it in the transcript.
+                        prompt_index = next(
+                            (
+                                index
+                                for index in range(len(notion_transcript) - 1, -1, -1)
+                                if notion_transcript[index].get("type") == "agent-prebuilt-prompt"
+                                and notion_transcript[index].get("promptType") == "image_generation_mode"
+                            ),
+                            len(notion_transcript),
+                        )
+                        notion_transcript = (
+                            notion_transcript[:prompt_index]
+                            + attachment_steps
+                            + notion_transcript[prompt_index:]
+                        )
+                    else:
+                        notion_transcript = notion_transcript + attachment_steps
                     should_create_thread = False
                     request_profile["create_thread"] = False
 

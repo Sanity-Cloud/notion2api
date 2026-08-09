@@ -56,9 +56,9 @@ class ChatCompletionRequest(BaseModel):
         default="default",
         description="Notion AI execution mode.",
     )
-    notion_task: Optional[Literal["visualize", "create_slides", "spreadsheet", "deep_research"]] = Field(
+    notion_task: Optional[Literal["visualize", "generate_image", "create_slides", "spreadsheet", "deep_research"]] = Field(
         default=None,
-        description="Notion AI full-page prompt category.",
+        description="Notion AI task category; image generation is distinct from data/HTML visualization.",
     )
     notion_sources: Optional[List[NotionSource]] = Field(
         default=None,

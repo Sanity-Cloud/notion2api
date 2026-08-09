@@ -680,7 +680,7 @@ def test_mcp_schema_exposes_continuation_and_cancellation(monkeypatch):
         assert "ignored" in properties["wait_seconds"]["description"]
         assert properties["mode"]["enum"] == ["default", "ask", "research"]
         assert "read-only" in properties["mode"]["description"]
-        assert properties["task"]["anyOf"][0]["enum"] == ["visualize", "create_slides", "spreadsheet", "deep_research"]
+        assert properties["task"]["anyOf"][0]["enum"] == ["visualize", "generate_image", "create_slides", "spreadsheet", "deep_research"]
         assert "google-drive" in properties["sources"]["description"]
         assert "web search" in properties["web_access"]["description"]
         assert properties["persona"]["anyOf"][0]["enum"] == ["sidekick", "minimalist", "analyst"]

@@ -704,3 +704,73 @@ def test_wait_for_thread_file_mount_fails_closed(monkeypatch):
         client._wait_for_thread_file_mount("thread-1", ["file-1"])
 
     assert "attachment_thread_not_ready" in exc_info.value.response_excerpt
+
+
+def test_image_generation_reference_attachment_preserves_workflow_and_prompt_order():
+    client = NotionOpusAPI({"token_v2": "tok", "space_id": "space", "user_id": "user"})
+    response = Mock(status_code=200, text="")
+    response.close = Mock()
+    scraper = Mock()
+    scraper.cookies.clear = Mock()
+    scraper.post.return_value = response
+    transcript = [
+        {"id": "cfg", "type": "config", "value": {"type": "workflow", "model": "orchid-muffin", "enableAgentGenerateImage": True}},
+        {"id": "ctx", "type": "context", "value": {"surface": "ai_module"}},
+        {"id": "prompt", "type": "agent-prebuilt-prompt", "args": {"type": "image_generation_mode"}, "promptType": "image_generation_mode", "value": [["Use this reference image."]]},
+    ]
+    attachments = [InputAttachment(name="lock.png", content_type="image/png", source="inline_data", data="aW1hZ2U=")]
+    uploaded = [UploadedAttachment(name="lock.png", content_type="image/png", size_bytes=5, source="inline_data", file_id="file-1", thread_mounted=True, attachment_url="attachment:file-1:lock.png")]
+    uploader_instance = Mock()
+    uploader_instance.upload_attachments.side_effect = lambda **kwargs: (uploaded, kwargs["thread_id"])
+    with patch.object(client, "_create_thread", return_value=True) as create_thread, patch("app.notion_client.NotionAttachmentUploader", return_value=uploader_instance), patch("app.notion_client._create_notion_http_session", return_value=scraper), patch("app.notion_client.parse_stream", return_value=[{"type": "chunk", "value": "ok"}, {"type": "stream_complete"}]), patch("app.notion_client._resolve_thread_persistence", return_value={"persist": False, "generate_title": False, "save_all_thread_operations": False, "set_unread_state": False, "delete_after_stream": True}):
+        list(client.stream_response(transcript, attachments=attachments, persist_remote_chat=False))
+    created_thread_id, created_thread_type = create_thread.call_args.args
+    assert created_thread_type == "workflow"
+    payload = scraper.post.call_args.kwargs["json"]
+    assert payload["threadType"] == "workflow"
+    step_types = [step.get("type") for step in payload["transcript"]]
+    assert step_types[-2:] == ["attachment", "agent-prebuilt-prompt"]
+    assert payload["transcript"][-1]["promptType"] == "image_generation_mode"
+
+
+def test_attachment_task_metadata_matches_native_image_reference_shape():
+    from app.attachments.notion_upload import NotionAttachmentUploader
+
+    notion = Mock()
+    notion.get_task_status.return_value = {
+        "status": "completed",
+        "success": True,
+        "data": {
+            "fileSizeBytes": 247825,
+            "contentType": "image/png",
+            "width": 640,
+            "height": 360,
+            "stepMetadata": {
+                "width": 640,
+                "height": 360,
+                "moderation": {"status": "passed"},
+                "guardrail": {"attachmentRisk": "skipped", "inferenceId": "inf-1"},
+                "fileSizeBytes": 247825,
+                "aiTraceId": "trace-1",
+                "estimatedTokens": {"openai": 1105, "anthropic": 307.2},
+            },
+        },
+    }
+    uploader = NotionAttachmentUploader(notion, poll_interval=0, poll_timeout=1)
+    result = uploader.wait_attachment_task("task-1")
+    metadata = uploader.build_attachment_step_metadata(
+        {"fileSizeBytes": 247825, "contentType": "image/png"},
+        task_data=result["data"],
+    )
+
+    assert result["data"]["stepMetadata"]["width"] == 640
+    assert metadata == {
+        "width": 640,
+        "height": 360,
+        "moderation": {"status": "passed"},
+        "guardrail": {"attachmentRisk": "skipped", "inferenceId": "inf-1"},
+        "fileSizeBytes": 247825,
+        "aiTraceId": "trace-1",
+        "estimatedTokens": {"openai": 1105, "anthropic": 307.2},
+        "attachmentSource": "user_upload",
+    }

@@ -1,4 +1,4 @@
-﻿# Notion2API MCP server
+# Notion2API MCP server
 
 This repo includes a thin MCP wrapper around the existing Notion2API HTTP API. The wrapper does not replace the OpenAI-compatible `/v1` API; it runs as a separate MCP server and forwards tool calls to a local Notion2API backend.
 
@@ -81,7 +81,7 @@ Chat requests return `pending` immediately. Poll `notion2api_get_chat_job` for t
 | Argument | Values | Behavior |
 | --- | --- | --- |
 | `mode` | `default`, `ask`, `research` | `default` can search and edit; `ask` is read-only; `research` enables deeper research and web search by default. |
-| `task` | `visualize`, `create_slides`, `spreadsheet`, `deep_research` | Selects the matching Notion task preset and enables its artifact capabilities. |
+| `task` | `visualize`, `generate_image`, `create_slides`, `spreadsheet`, `deep_research` | Selects the matching Notion task preset. `visualize` is for interactive/data visualizations; `generate_image` enables Notion Agent image generation/editing. |
 | `sources` | list of source-scope strings | Restricts retrieval to selected sources. Common values are `all`, `notion`, `web`, `notion-help-center`, `github`, `gmail`, `google-calendar`, and `google-drive`. |
 | `web_access` | `true`, `false`, or omitted | Explicitly enables/disables web search; omitted uses the selected mode/source default. |
 | `persona` | `sidekick`, `minimalist`, `analyst` | Applies Notion's warm, concise, or structured response style for the request. |

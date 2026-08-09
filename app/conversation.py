@@ -2223,7 +2223,8 @@ def build_lite_transcript(user_prompt: str, model_name: str) -> list[dict[str, A
 
 
 _NOTION_TASK_INSTRUCTIONS = {
-    "visualize": "Create the requested interactive HTML visualization or visual artifact.",
+    "visualize": "Create the requested interactive HTML or data visualization; do not treat this as image generation.",
+    "generate_image": "Create or edit the requested image using Notion Agent image-generation capabilities.",
     "create_slides": "Create the requested presentation or slide deck artifact.",
     "spreadsheet": "Use spreadsheet and data-analysis capabilities for this request.",
     "deep_research": "Conduct broad, thorough research across the selected sources and produce a sourced result.",
@@ -2271,10 +2272,10 @@ def apply_notion_ai_options(
         value["isAgentResearchRequest"] = research
         if research:
             value["enableScriptAgent"] = True
-        if task in {"visualize", "create_slides", "spreadsheet"}:
+        if task in {"visualize", "generate_image", "create_slides", "spreadsheet"}:
             value["enableScriptAgent"] = True
             value["enableComputer"] = True
-        if task == "create_slides":
+        if task in {"generate_image", "create_slides"}:
             value["enableAgentGenerateImage"] = True
         if task == "spreadsheet":
             value["enableCsvAttachmentSupport"] = True
@@ -2291,6 +2292,21 @@ def apply_notion_ai_options(
         if instruction_parts:
             existing = str(value.get("ephemeralInstructions") or "").strip()
             value["ephemeralInstructions"] = "\n".join(([existing] if existing else []) + instruction_parts)
+
+    if task == "generate_image":
+        # Notion's native image-generation UI sends the latest prompt as an
+        # agent-prebuilt-prompt in image_generation_mode, not as a generic
+        # user step. Preserve the prompt value and identity fields while
+        # matching that native transcript contract.
+        for block in reversed(transcript):
+            if block.get("type") != "user":
+                continue
+            block["type"] = "agent-prebuilt-prompt"
+            block["args"] = {"type": "image_generation_mode"}
+            block["promptType"] = "image_generation_mode"
+            block["locale"] = "en-US"
+            block["isEdited"] = False
+            break
     return transcript
 
 
