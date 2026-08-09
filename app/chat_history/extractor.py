@@ -67,8 +67,31 @@ HYDRATION_SCAN_FIELDS = (
 def record_value(record: Any) -> dict[str, Any]:
     if not isinstance(record, dict):
         return {}
-    value = record.get("value")
-    return value if isinstance(value, dict) else record
+    # Current Notion recordMap hydration can wrap a record more than once, for
+    # example: {spaceId, value: {role, value: {id, version, step, ...}}}.
+    # Older captures and fixtures commonly have only one wrapper.  Descend
+    # through envelope dictionaries until the actual semantic record is reached,
+    # but never descend into a semantic record's own ``value`` payload.
+    current = record
+    semantic_keys = {
+        "id",
+        "version",
+        "last_version",
+        "lastVersion",
+        "step",
+        "type",
+        "parent_id",
+        "parent_table",
+        "messages",
+    }
+    for _depth in range(8):
+        if any(key in current for key in semantic_keys):
+            return current
+        nested = current.get("value")
+        if not isinstance(nested, dict):
+            return current
+        current = nested
+    return current
 
 
 def record_maps(obj: Any):
@@ -219,10 +242,13 @@ def record_versions(raw: Any, value: dict[str, Any] | None = None) -> tuple[int 
     """Extract (version, last_version) from a Notion record wrapper or value."""
     containers: list[dict[str, Any]] = []
     if isinstance(raw, dict):
-        containers.append(raw)
-        nested_value = raw.get("value")
-        if isinstance(nested_value, dict):
-            containers.append(nested_value)
+        current = raw
+        for _depth in range(8):
+            containers.append(current)
+            nested_value = current.get("value")
+            if not isinstance(nested_value, dict) or nested_value is current:
+                break
+            current = nested_value
     if isinstance(value, dict):
         containers.append(value)
         step = value.get("step")
