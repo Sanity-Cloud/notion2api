@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+from app.diagnostics import emit_diagnostic_event
 from app.governance import governance_receipt_from_client
 from app.logger import logger
 from app.notion_client import NotionOpusAPI
@@ -137,6 +138,19 @@ class AccountPool:
                 self._selected_index,
             )
         except Exception as exc:
+            emit_diagnostic_event(
+                code="ACCOUNT_SELECTION_RESTORE_FAILED",
+                message="Notion2API could not restore persisted account-selection state and fell back to automatic mode.",
+                operation="restore_account_selection_state",
+                category="state_persistence",
+                severity="warning",
+                kind="state_restore_failure",
+                retryable=False,
+                details={
+                    "exception_type": type(exc).__name__,
+                    "fallback_mode": "auto",
+                },
+            )
             logger.warning(
                 "Account selection state could not be restored; using automatic mode",
                 extra={
@@ -182,6 +196,16 @@ class AccountPool:
             )
             temporary.replace(path)
         except Exception as exc:
+            emit_diagnostic_event(
+                code="ACCOUNT_SELECTION_PERSIST_FAILED",
+                message="Notion2API could not persist account-selection state.",
+                operation="persist_account_selection_state",
+                category="state_persistence",
+                severity="warning",
+                kind="persistence_failure",
+                retryable=True,
+                details={"exception_type": type(exc).__name__},
+            )
             logger.warning(
                 "Account selection state could not be persisted",
                 extra={

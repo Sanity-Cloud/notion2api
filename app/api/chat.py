@@ -27,6 +27,7 @@ from app.conversation import (
 )
 from app.config import is_lite_mode
 from app.logger import logger
+from app.diagnostics import emit_diagnostic_event
 from app.model_registry import (
     get_model_route_resolution,
     is_supported_model,
@@ -62,6 +63,69 @@ from app.hive_bee_call import validate_bee_notion_call
 from app.hive_multithread import MultithreadContractError
 
 router = APIRouter()
+
+
+def _record_notion_upstream_diagnostic(
+    *,
+    mode: str,
+    exc: NotionUpstreamError,
+    attempt: int,
+    max_retries: int,
+) -> None:
+    excerpt = str(getattr(exc, "response_excerpt", "") or "")
+    missing_finished_at = "missing_finishedAt" in excerpt
+    emit_diagnostic_event(
+        code="NOTION_MISSING_FINISHED_AT" if missing_finished_at else "NOTION_UPSTREAM_ERROR",
+        message=(
+            "Notion stream ended without recognized completion metadata."
+            if missing_finished_at
+            else "Notion upstream request failed."
+        ),
+        operation=f"chat_{mode}_upstream",
+        category="upstream_provider",
+        severity="error",
+        kind="protocol_completion_failure" if missing_finished_at else "upstream_error",
+        retryable=bool(getattr(exc, "retriable", False)),
+        details={
+            "mode": mode,
+            "attempt": attempt,
+            "max_retries": max_retries,
+            "status_code": getattr(exc, "status_code", None),
+            "retriable": bool(getattr(exc, "retriable", False)),
+            "diagnostic_marker": "missing_finishedAt" if missing_finished_at else "",
+        },
+    )
+
+
+def _record_chat_runtime_diagnostic(
+    *,
+    mode: str,
+    code: str,
+    operation: str,
+    attempt: int | None = None,
+    max_retries: int | None = None,
+    exception: BaseException | None = None,
+    retryable: bool = False,
+    severity: str = "error",
+    kind: str = "runtime_error",
+) -> None:
+    details: dict[str, Any] = {"mode": mode}
+    if attempt is not None:
+        details["attempt"] = attempt
+    if max_retries is not None:
+        details["max_retries"] = max_retries
+    if exception is not None:
+        details["exception_type"] = type(exception).__name__
+    emit_diagnostic_event(
+        code=code,
+        message=f"Notion2API {mode} workflow encountered {code.lower().replace('_', ' ')}.",
+        operation=operation,
+        category="application_runtime",
+        severity=severity,
+        kind=kind,
+        retryable=retryable,
+        details=details,
+    )
 
 
 def _enforce_bee_notion_call_contract(
@@ -1843,6 +1907,14 @@ def _create_lite_stream_generator(
                 extra={"request_info": {"event": "lite_stream_client_disconnected"}},
             )
             return
+        _record_chat_runtime_diagnostic(
+            mode="lite_stream",
+            code="STREAM_INTERRUPTED",
+            operation="chat_lite_stream",
+            exception=exc,
+            retryable=True,
+            kind="stream_failure",
+        )
         logger.error(
             "Lite streaming interrupted",
             exc_info=True,
@@ -2005,6 +2077,14 @@ def _create_standard_stream_generator(
                 },
             )
             return
+        _record_chat_runtime_diagnostic(
+            mode="standard_stream",
+            code="STREAM_INTERRUPTED",
+            operation="chat_standard_stream",
+            exception=exc,
+            retryable=True,
+            kind="stream_failure",
+        )
         logger.error(
             "Standard streaming interrupted",
             exc_info=True,
@@ -2363,6 +2443,9 @@ def _handle_lite_request(
             return response_obj
 
         except NotionUpstreamError as exc:
+            _record_notion_upstream_diagnostic(
+                mode="lite", exc=exc, attempt=attempt, max_retries=max_retries
+            )
             if client is not None and exc.retriable:
                 pool.mark_failed(client)
             logger.warning(
@@ -2381,6 +2464,16 @@ def _handle_lite_request(
             if attempt == max_retries or not exc.retriable:
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
+            _record_chat_runtime_diagnostic(
+                mode="lite",
+                code="ACCOUNT_POOL_UNAVAILABLE",
+                operation="chat_lite_account_selection",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                retryable=True,
+                kind="capacity_or_cooling",
+            )
             logger.error(
                 "Lite mode: No available client in account pool",
                 extra={
@@ -2398,6 +2491,16 @@ def _handle_lite_request(
                 suggestion="Retry later.",
             )
         except AttachmentError as exc:
+            _record_chat_runtime_diagnostic(
+                mode="lite",
+                code="ATTACHMENT_VALIDATION_FAILED",
+                operation="chat_lite_attachment_validation",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                severity="warning",
+                kind="input_validation",
+            )
             logger.warning(
                 "Lite mode: Invalid attachment input",
                 extra={
@@ -2411,7 +2514,17 @@ def _handle_lite_request(
             return _attachment_error_response(exc)
         except HTTPException:
             raise
-        except Exception:
+        except Exception as exc:
+            _record_chat_runtime_diagnostic(
+                mode="lite",
+                code="UNHANDLED_CHAT_EXCEPTION",
+                operation="chat_lite_completion",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                retryable=attempt < max_retries,
+                kind="exception",
+            )
             if client is not None:
                 pool.mark_failed(client)
             logger.error(
@@ -2746,6 +2859,9 @@ def _handle_standard_request(
             return response_obj
 
         except NotionUpstreamError as exc:
+            _record_notion_upstream_diagnostic(
+                mode="standard", exc=exc, attempt=attempt, max_retries=max_retries
+            )
             if client is not None and exc.retriable:
                 pool.mark_failed(client)
             logger.warning(
@@ -2764,6 +2880,16 @@ def _handle_standard_request(
             if attempt == max_retries or not exc.retriable:
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
+            _record_chat_runtime_diagnostic(
+                mode="standard",
+                code="ACCOUNT_POOL_UNAVAILABLE",
+                operation="chat_standard_account_selection",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                retryable=True,
+                kind="capacity_or_cooling",
+            )
             logger.error(
                 "Standard mode: No available client in account pool",
                 extra={
@@ -2781,6 +2907,16 @@ def _handle_standard_request(
                 suggestion="Retry later.",
             )
         except AttachmentError as exc:
+            _record_chat_runtime_diagnostic(
+                mode="standard",
+                code="ATTACHMENT_VALIDATION_FAILED",
+                operation="chat_standard_attachment_validation",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                severity="warning",
+                kind="input_validation",
+            )
             logger.warning(
                 "Standard mode: Invalid attachment input",
                 extra={
@@ -2794,7 +2930,17 @@ def _handle_standard_request(
             return _attachment_error_response(exc)
         except HTTPException:
             raise
-        except Exception:
+        except Exception as exc:
+            _record_chat_runtime_diagnostic(
+                mode="standard",
+                code="UNHANDLED_CHAT_EXCEPTION",
+                operation="chat_standard_completion",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                retryable=attempt < max_retries,
+                kind="exception",
+            )
             if client is not None:
                 pool.mark_failed(client)
             logger.error(
@@ -3514,6 +3660,20 @@ async def create_chat_completion(
                     )
                     quarantined = _output_requires_quarantine(hygiene_meta)
                     if quarantined:
+                        emit_diagnostic_event(
+                            code="OUTPUT_CONTAMINATED",
+                            message="Notion2API quarantined a contaminated streaming response.",
+                            operation="chat_stream_output_integrity",
+                            category="output_integrity",
+                            severity="error",
+                            kind="quarantined_output",
+                            retryable=False,
+                            details={
+                                "mode": "full_stream",
+                                "normal_persistence_blocked": True,
+                                "output_integrity": hygiene_meta.get("output_integrity"),
+                            },
+                        )
                         logger.error(
                             "Quarantined contaminated streaming response",
                             extra={
@@ -3538,7 +3698,15 @@ async def create_chat_completion(
                                 final_reply,
                                 persisted_thinking,
                             )
-                        except Exception:
+                        except Exception as exc:
+                            _record_chat_runtime_diagnostic(
+                                mode="full_stream",
+                                code="CONVERSATION_PERSIST_FAILED",
+                                operation="persist_conversation_round",
+                                exception=exc,
+                                retryable=True,
+                                kind="persistence_failure",
+                            )
                             logger.error(
                                 "Failed to persist conversation round",
                                 exc_info=True,
@@ -3708,6 +3876,9 @@ async def create_chat_completion(
             _attach_response_hygiene(response_obj, hygiene_meta)
             return response_obj
         except NotionUpstreamError as exc:
+            _record_notion_upstream_diagnostic(
+                mode="full", exc=exc, attempt=attempt, max_retries=max_retries
+            )
             if client is not None and exc.retriable:
                 pool.mark_failed(client)
             logger.warning(
@@ -3727,6 +3898,16 @@ async def create_chat_completion(
             if attempt == max_retries or not exc.retriable:
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
+            _record_chat_runtime_diagnostic(
+                mode="full",
+                code="ACCOUNT_POOL_UNAVAILABLE",
+                operation="chat_full_account_selection",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                retryable=True,
+                kind="capacity_or_cooling",
+            )
             logger.error(
                 "No available client in account pool",
                 extra={
@@ -3744,6 +3925,16 @@ async def create_chat_completion(
                 suggestion="Retry later.",
             )
         except AttachmentError as exc:
+            _record_chat_runtime_diagnostic(
+                mode="full",
+                code="ATTACHMENT_VALIDATION_FAILED",
+                operation="chat_full_attachment_validation",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                severity="warning",
+                kind="input_validation",
+            )
             logger.warning(
                 "Invalid attachment input",
                 extra={
@@ -3757,7 +3948,17 @@ async def create_chat_completion(
             return _attachment_error_response(exc)
         except HTTPException:
             raise
-        except Exception:
+        except Exception as exc:
+            _record_chat_runtime_diagnostic(
+                mode="full",
+                code="UNHANDLED_CHAT_EXCEPTION",
+                operation="chat_full_completion",
+                attempt=attempt,
+                max_retries=max_retries,
+                exception=exc,
+                retryable=attempt < max_retries,
+                kind="exception",
+            )
             if client is not None:
                 pool.mark_failed(client)
             logger.error(
