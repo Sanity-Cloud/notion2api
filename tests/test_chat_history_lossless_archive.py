@@ -658,6 +658,91 @@ def test_sync_hydrates_metadata_threads_before_messages_and_parses_live_wrappers
     ] == [{"thread"}, {"thread_message"}]
 
 
+def test_sync_uses_bound_store_account_key_over_noncanonical_client_key(monkeypatch, tmp_path):
+    class FakeClient:
+        space_id = "ws-live"
+        user_id = "user-live"
+        # Reproduces the live client behavior that exposed only user_id here.
+        account_key = "user-live"
+
+    responses = iter(
+        [
+            {
+                "transcripts": [{"id": "thread-1", "title": "Thread"}],
+                "nextCursor": "cursor-next",
+                "hasMore": True,
+            },
+            {
+                "recordMap": {
+                    "thread": {
+                        "thread-1": {
+                            "value": {
+                                "value": {
+                                    "id": "thread-1",
+                                    "version": 1,
+                                    "space_id": "ws-live",
+                                    "messages": ["message-1"],
+                                    "data": {"title": "Thread"},
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "recordMap": {
+                    "thread_message": {
+                        "message-1": {
+                            "value": {
+                                "value": {
+                                    "id": "message-1",
+                                    "version": 1,
+                                    "space_id": "ws-live",
+                                    "parent_id": "thread-1",
+                                    "parent_table": "thread",
+                                    "step": {
+                                        "id": "message-1",
+                                        "type": "agent-inference",
+                                        "value": [{"type": "text", "content": "answer"}],
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        "app.chat_history.notion_sync._post_json",
+        lambda _client, _url, _payload: next(responses),
+    )
+    store = ChatHistoryStore(
+        str(tmp_path / "history.db"),
+        account_key="ws-live:user-live",
+    )
+
+    bundle = sync_chat_history_from_notion(
+        FakeClient(),
+        max_pages=1,
+        hydrate=True,
+        store=store,
+        persist=True,
+    )
+
+    assert bundle["sync_summary"]["checkpoint_advanced"] is True
+    conn = sqlite3.connect(store.db_path)
+    cursor_rows = conn.execute(
+        "SELECT account_key,workspace_id,cursor_value FROM sync_cursors"
+    ).fetchall()
+    run_rows = conn.execute(
+        "SELECT DISTINCT account_key,workspace_id FROM sync_runs"
+    ).fetchall()
+    conn.close()
+    assert cursor_rows == [("ws-live:user-live", "ws-live", "cursor-next")]
+    assert run_rows == [("ws-live:user-live", "ws-live")]
+
+
 def test_sync_does_not_advance_checkpoint_when_thread_graph_cannot_be_resolved(monkeypatch, tmp_path):
     class FakeClient:
         space_id = "ws"

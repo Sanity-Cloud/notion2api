@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from app.account_scope import canonical_account_key
 from app.chat_history.extractor import collect_hydration_message_ids, record_versions
 from app.chat_history.har_importer import import_chat_object
 from app.notion_client import NotionOpusAPI, NotionUpstreamError
@@ -489,7 +490,15 @@ def sync_chat_history_from_notion(
     }
     workspace_id = str(getattr(client, "space_id", "") or "").strip() or "unknown"
     notion_user_id = str(getattr(client, "user_id", "") or getattr(client, "notion_user_id", "") or "").strip() or None
-    account_key = str(getattr(client, "account_key", "") or "").strip() or None
+    # The account-scoped archive is the authority for sync identity. Some live
+    # clients expose ``account_key`` as only the Notion user id, which would split
+    # durable cursors/sync runs away from the shard's canonical workspace:user
+    # namespace. Prefer the bound store key, otherwise derive the canonical key.
+    account_key = str(getattr(store, "account_key", "") or "").strip() or None
+    if not account_key and workspace_id != "unknown" and notion_user_id:
+        account_key = canonical_account_key(workspace_id, notion_user_id)
+    if not account_key:
+        account_key = str(getattr(client, "account_key", "") or "").strip() or None
 
     bundle: dict[str, Any] = {
         "threads": {},
