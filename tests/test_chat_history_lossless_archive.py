@@ -221,6 +221,56 @@ def test_malformed_unknown_negative_version_semantic_row_is_not_fresh(tmp_path):
     ) == set()
 
 
+def test_visible_projection_does_not_suppress_missing_semantic_message_once_archive_exists(tmp_path):
+    store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
+    # Seed one valid semantic record so this account/workspace is no longer a
+    # pre-lossless shard.
+    store.upsert_bundle(
+        {
+            "threads": {},
+            "messages": {},
+            "thread_messages": {
+                "semantic-existing": _semantic_record(
+                    "semantic-existing",
+                    version=1,
+                    thread_id="thread-1",
+                )
+            },
+        },
+        workspace_id="ws",
+        notion_user_id="user",
+        account_key="alpha",
+    )
+    # Simulate a live flattened assistant projection whose authoritative
+    # thread_message has not yet been hydrated.
+    store.record_live_turn(
+        {
+            "threads": {
+                "thread-1": {
+                    "id": "thread-1",
+                    "title": "Thread",
+                    "message_ids": ["assistant-flat"],
+                    "raw": {"type": "live_chat"},
+                }
+            },
+            "messages": {
+                "assistant-flat": {
+                    "id": "assistant-flat",
+                    "thread_id": "thread-1",
+                    "role": "assistant",
+                    "text": "flattened answer",
+                    "raw": {"role": "assistant", "text": "flattened answer"},
+                }
+            },
+        }
+    )
+
+    assert store.existing_message_ids(["assistant-flat"]) == {"assistant-flat"}
+    assert store.fresh_message_ids(
+        {"assistant-flat": None}, workspace_id="ws", account_key="alpha"
+    ) == set()
+
+
 def test_partial_sync_does_not_advance_existing_checkpoint(tmp_path):
     store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
     assert store.advance_sync_cursor(
