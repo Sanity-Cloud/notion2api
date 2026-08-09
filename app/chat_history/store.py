@@ -978,15 +978,28 @@ class ChatHistoryStore:
                 workspace_id=workspace,
                 candidates=versioned,
             )
-            # Fall back to visible archive presence when lossless rows are absent
-            # (pre-migration shards) and no authoritative server version was given.
-            presence_only_ids = [
-                message_id
-                for message_id, version in versioned.items()
-                if message_id not in fresh and version in (None, -1)
-            ]
-            if presence_only_ids:
-                fresh |= self.existing_message_ids(presence_only_ids)
+            # Fall back to visible archive presence only for a genuinely
+            # pre-lossless account/workspace. Once any semantic server records
+            # exist in this scope, flattened chat_messages rows are projections,
+            # not authoritative evidence, and must never suppress hydration of a
+            # missing agent-inference/thread_message.
+            has_semantic_archive = conn.execute(
+                """
+                SELECT 1
+                FROM notion_thread_messages
+                WHERE account_key=? AND workspace_id=?
+                LIMIT 1
+                """,
+                (account, workspace),
+            ).fetchone() is not None
+            if not has_semantic_archive:
+                presence_only_ids = [
+                    message_id
+                    for message_id, version in versioned.items()
+                    if message_id not in fresh and version in (None, -1)
+                ]
+                if presence_only_ids:
+                    fresh |= self.existing_message_ids(presence_only_ids)
             return fresh
 
     def message_ids_needing_hydration(
