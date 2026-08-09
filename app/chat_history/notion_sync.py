@@ -282,6 +282,76 @@ def hydrate_message_ids_from_notion(
     return bundle
 
 
+def hydrate_thread_ids_from_notion(
+    client: NotionOpusAPI,
+    thread_ids: list[str] | set[str],
+    *,
+    hydrate_batch_size: int = 50,
+) -> dict[str, Any]:
+    """Hydrate transcript metadata IDs into authoritative Notion thread records.
+
+    Current getInferenceTranscriptsForUser responses can omit thread.messages,
+    so full message discovery requires a thread-record hydration stage first.
+    """
+    clean_ids = sorted(
+        {
+            str(thread_id).strip()
+            for thread_id in thread_ids
+            if str(thread_id or "").strip()
+        }
+    )
+    bundle: dict[str, Any] = {
+        "threads": {},
+        "messages": {},
+        "thread_messages": {},
+        "raw_records": [],
+        "endpoint_counts": defaultdict(int),
+    }
+    hydration_batches = 0
+    hydration_failed_ids = 0
+
+    for start_index in range(0, len(clean_ids), hydrate_batch_size):
+        batch = clean_ids[start_index : start_index + hydrate_batch_size]
+        payload = {
+            "requests": [
+                {
+                    "pointer": {
+                        "table": "thread",
+                        "id": thread_id,
+                        "spaceId": client.space_id,
+                    },
+                    "version": -1,
+                }
+                for thread_id in batch
+            ]
+        }
+        hydrate_obj = _post_json(client, HYDRATE_ENDPOINT, payload)
+        hydration_batches += 1
+        bundle["endpoint_counts"]["syncRecordValuesSpaceInitial"] += 1
+        hydrated = import_chat_object(hydrate_obj)
+        for raw_record in hydrated.get("raw_records") or []:
+            if isinstance(raw_record, dict):
+                raw_record.setdefault("source_kind", "notion_server_thread_hydrate")
+                raw_record.setdefault("source_endpoint", "syncRecordValuesSpaceInitial")
+                raw_record.setdefault("workspace_id", getattr(client, "space_id", None))
+        seen_threads = {
+            str(thread_id).strip()
+            for thread_id in (hydrated.get("threads") or {})
+            if str(thread_id or "").strip()
+        }
+        hydration_failed_ids += sum(1 for thread_id in batch if thread_id not in seen_threads)
+        _merge_bundle(bundle, hydrated)
+
+    bundle["endpoint_counts"] = dict(bundle["endpoint_counts"])
+    bundle["stats"] = {
+        "thread_hydration_candidate_ids": len(clean_ids),
+        "thread_hydration_batches": hydration_batches,
+        "thread_hydration_failed_ids": hydration_failed_ids,
+        "threads_hydrated": len(bundle.get("threads", {})),
+    }
+    return bundle
+
+
 def hydrate_thread_record_from_notion(client: NotionOpusAPI, thread_id: str) -> dict[str, Any]:
     payload = {
         "requests": [
@@ -442,6 +512,10 @@ def sync_chat_history_from_notion(
     hydrated_messages_seen = 0
     hydration_skipped_ids = 0
     hydrated_message_ids = 0
+    thread_hydration_failed_ids = 0
+    thread_hydration_batches = 0
+    threads_hydrated = 0
+    hydration_graph_incomplete = False
     message_ids: list[str] = []
     records_persisted = 0
     persisted = False
@@ -510,8 +584,53 @@ def sync_chat_history_from_notion(
         else:
             stopped_reason = "max_pages"
 
+        if hydrate:
+            # Transcript enumeration can return metadata-only rows. Resolve the
+            # listed transcript/thread IDs to authoritative thread records first
+            # so thread.messages can drive thread_message hydration.
+            thread_ids = sorted(
+                {
+                    str(thread_id).strip()
+                    for thread_id in (bundle.get("threads") or {})
+                    if str(thread_id or "").strip()
+                }
+            )
+            if thread_ids:
+                thread_bundle = hydrate_thread_ids_from_notion(
+                    client,
+                    thread_ids,
+                    hydrate_batch_size=hydrate_batch_size,
+                )
+                _merge_bundle(bundle, thread_bundle)
+                for key, value in thread_bundle.get("endpoint_counts", {}).items():
+                    bundle["endpoint_counts"][key] += value
+                thread_stats = thread_bundle.get("stats", {})
+                thread_hydration_failed_ids = int(
+                    thread_stats.get("thread_hydration_failed_ids") or 0
+                )
+                thread_hydration_batches = int(
+                    thread_stats.get("thread_hydration_batches") or 0
+                )
+                threads_hydrated = int(thread_stats.get("threads_hydrated") or 0)
+                resolved_ids = _collect_page_hydration_ids(thread_bundle)
+                seen_message_ids.update(resolved_ids)
+                candidate_versions.update(_collect_candidate_versions(thread_bundle))
+                for message_id in resolved_ids:
+                    candidate_versions.setdefault(message_id, None)
+
         message_ids = sorted(seen_message_ids)
         if hydrate:
+            # If enumeration returned threads but their authoritative graph could
+            # not produce any message references, treat the run as partial rather
+            # than moving the durable cursor past potentially unparsed history.
+            hydration_graph_incomplete = bool(
+                bundle.get("threads")
+                and (
+                    thread_hydration_failed_ids > 0
+                    or threads_hydrated == 0
+                    or not message_ids
+                )
+            )
             skip_ids = _resolve_skip_message_ids(
                 message_ids,
                 skip_message_ids=skip_message_ids,
@@ -550,8 +669,15 @@ def sync_chat_history_from_notion(
                 imported.get("semantic_messages_inserted", 0)
             ) + int(imported.get("raw_records_inserted", 0))
             persisted = True
-            # Partial hydration must not advance the durable checkpoint.
-            allow_advance = bool(advance_checkpoint) and hydration_failed_ids == 0 and sync_error is None
+            # Partial hydration or an unresolved thread->message graph must not
+            # advance the durable checkpoint.
+            allow_advance = (
+                bool(advance_checkpoint)
+                and hydration_failed_ids == 0
+                and thread_hydration_failed_ids == 0
+                and not hydration_graph_incomplete
+                and sync_error is None
+            )
             checkpoint_advanced = bool(
                 store.advance_sync_cursor(
                     cursor_name,
@@ -567,7 +693,11 @@ def sync_chat_history_from_notion(
         raise
     finally:
         if store is not None and persist and sync_run_started:
-            status = "error" if sync_error else ("partial" if hydration_failed_ids else "completed")
+            status = "error" if sync_error else (
+                "partial"
+                if hydration_failed_ids or thread_hydration_failed_ids or hydration_graph_incomplete
+                else "completed"
+            )
             if sync_error is None and persist and not persisted:
                 status = "partial"
             try:
@@ -576,8 +706,10 @@ def sync_chat_history_from_notion(
                     status=status,
                     pages_scanned=pages_scanned,
                     records_persisted=records_persisted if persist else 0,
-                    hydration_failed=hydration_failed_ids,
-                    hydration_partial=1 if hydration_failed_ids else 0,
+                    hydration_failed=hydration_failed_ids + thread_hydration_failed_ids,
+                    hydration_partial=1
+                    if hydration_failed_ids or thread_hydration_failed_ids or hydration_graph_incomplete
+                    else 0,
                     checkpoint_advanced=checkpoint_advanced,
                     metrics={
                         "stopped_reason": stopped_reason,
@@ -585,6 +717,8 @@ def sync_chat_history_from_notion(
                         "threads": len(bundle.get("threads", {})),
                         "messages": len(bundle.get("messages", {})),
                         "thread_messages": len(bundle.get("thread_messages", {})),
+                        "thread_hydration_failed_ids": thread_hydration_failed_ids,
+                        "hydration_graph_incomplete": hydration_graph_incomplete,
                     },
                     error_text=sync_error,
                 )
@@ -606,6 +740,10 @@ def sync_chat_history_from_notion(
         "hydration_batches": hydration_batches,
         "hydrated_messages_seen": hydrated_messages_seen,
         "hydration_failed_ids": hydration_failed_ids,
+        "thread_hydration_batches": thread_hydration_batches,
+        "threads_hydrated": threads_hydrated,
+        "thread_hydration_failed_ids": thread_hydration_failed_ids,
+        "hydration_graph_incomplete": hydration_graph_incomplete,
         "sync_run_id": sync_run_id,
         "checkpoint_advanced": checkpoint_advanced,
         "persisted": persisted,
@@ -624,6 +762,10 @@ def sync_chat_history_from_notion(
         "hydration_batches": hydration_batches,
         "hydrated_messages_seen": hydrated_messages_seen,
         "hydration_failed_ids": hydration_failed_ids,
+        "thread_hydration_batches": thread_hydration_batches,
+        "threads_hydrated": threads_hydrated,
+        "thread_hydration_failed_ids": thread_hydration_failed_ids,
+        "hydration_graph_incomplete": hydration_graph_incomplete,
         "threads_without_messages": summary["threads_without_messages"],
         "next_cursor": cursor,
         "stopped_reason": stopped_reason,

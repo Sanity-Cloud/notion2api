@@ -86,6 +86,42 @@ def test_agent_inference_parts_preserve_order_and_non_text_content():
     }
 
 
+def test_current_notion_double_wrapped_thread_message_is_unwrapped_and_versioned():
+    raw = {
+        "spaceId": "ws",
+        "value": {
+            "role": "editor",
+            "value": {
+                "id": "assistant-live",
+                "version": 7,
+                "space_id": "ws",
+                "parent_id": "thread-live",
+                "parent_table": "thread",
+                "created_time": 1786278235427,
+                "step": {
+                    "id": "assistant-live",
+                    "type": "agent-inference",
+                    "value": [
+                        {"type": "text", "content": "live answer"},
+                        {"type": "citation", "content": {"pageId": "page-1"}},
+                    ],
+                },
+            },
+        },
+    }
+
+    record = normalize_thread_message_record("assistant-live", raw)
+
+    assert record is not None
+    assert record["thread_id"] == "thread-live"
+    assert record["step_type"] == "agent-inference"
+    assert record["visible"] is True
+    assert record["role"] == "assistant"
+    assert record["text"] == "live answer"
+    assert record["version"] == 7
+    assert [part["part_type"] for part in record["parts"]] == ["text", "citation"]
+
+
 def test_same_record_ids_can_coexist_across_account_and_workspace_scopes():
     conn = sqlite3.connect(":memory:")
     ensure_archive_schema(conn)
@@ -154,6 +190,35 @@ def test_version_aware_freshness_requires_rehydrate_for_newer_server_version(tmp
     assert store.message_ids_needing_hydration(
         {"versioned-message": 2}, workspace_id="ws", account_key="alpha"
     ) == {"versioned-message"}
+
+
+def test_malformed_unknown_negative_version_semantic_row_is_not_fresh(tmp_path):
+    store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
+    malformed = {
+        "id": "message-unknown",
+        "thread_id": "thread-1",
+        "step_type": "unknown",
+        "visible": False,
+        "role": None,
+        "semantic_role": None,
+        "text": "",
+        "created_time": None,
+        "version": -1,
+        "last_version": None,
+        "parts": [],
+        "raw": {"value": {"id": "message-unknown", "version": 1}},
+        "raw_wrapper": {"value": {"id": "message-unknown", "version": 1}},
+    }
+    store.upsert_bundle(
+        {"threads": {}, "messages": {}, "thread_messages": {malformed["id"]: malformed}},
+        workspace_id="ws",
+        notion_user_id="user",
+        account_key="alpha",
+    )
+
+    assert store.fresh_message_ids(
+        {"message-unknown": None}, workspace_id="ws", account_key="alpha"
+    ) == set()
 
 
 def test_partial_sync_does_not_advance_existing_checkpoint(tmp_path):
@@ -286,6 +351,134 @@ def test_conversation_binding_generation_and_ownership(tmp_path):
     assert predecessor["successor_binding_id"] == second["binding_id"]
 
 
+def test_conversation_scope_aliases_and_remote_binding_are_stamped(tmp_path):
+    manager = ConversationManager(str(tmp_path / "conversations.db"))
+    conversation_id = manager.new_conversation()
+
+    manager.bind_conversation_scope(
+        conversation_id,
+        workspace_id="ws-live",
+        teamspace_id="team-live",
+        user_id="user-live",
+        profile_name="profile-live",
+    )
+    manager.set_conversation_thread_id(
+        conversation_id,
+        "thread-live",
+        model_name="terra",
+    )
+
+    with manager._get_conn() as conn:
+        row = conn.execute(
+            """SELECT workspace_id,user_id,thread_id,account_key,notion_user_id,
+                      notion_space_id,notion_thread_id,account_scope,account_binding_status
+               FROM conversations WHERE id=?""",
+            (conversation_id,),
+        ).fetchone()
+        binding = conn.execute(
+            """SELECT account_key,workspace_id,notion_user_id,remote_thread_id,
+                      binding_generation,status
+               FROM conversation_bindings WHERE conversation_id=?""",
+            (conversation_id,),
+        ).fetchone()
+
+    assert dict(row) == {
+        "workspace_id": "ws-live",
+        "user_id": "user-live",
+        "thread_id": "thread-live",
+        "account_key": "ws-live:user-live",
+        "notion_user_id": "user-live",
+        "notion_space_id": "ws-live",
+        "notion_thread_id": "thread-live",
+        "account_scope": "ws-live:user-live",
+        "account_binding_status": "thread_bound",
+    }
+    assert dict(binding) == {
+        "account_key": "ws-live:user-live",
+        "workspace_id": "ws-live",
+        "notion_user_id": "user-live",
+        "remote_thread_id": "thread-live",
+        "binding_generation": 1,
+        "status": "active",
+    }
+
+    manager.clear_conversation_thread(conversation_id)
+    with manager._get_conn() as conn:
+        cleared = conn.execute(
+            "SELECT thread_id,notion_thread_id,account_binding_status FROM conversations WHERE id=?",
+            (conversation_id,),
+        ).fetchone()
+        retired = conn.execute(
+            "SELECT status,retired_at FROM conversation_bindings WHERE conversation_id=?",
+            (conversation_id,),
+        ).fetchone()
+    assert cleared["thread_id"] is None
+    assert cleared["notion_thread_id"] is None
+    assert cleared["account_binding_status"] == "account_bound"
+    assert retired["status"] == "retired"
+    assert retired["retired_at"] is not None
+
+
+def test_live_turn_stamps_account_workspace_and_user_ownership(tmp_path):
+    store = ChatHistoryStore(
+        str(tmp_path / "history.db"),
+        account_key="ws-live:user-live",
+    )
+    bundle = {
+        "threads": {
+            "thread-live": {
+                "id": "thread-live",
+                "title": "Live",
+                "message_ids": ["user-live", "assistant-live"],
+                "raw": {"type": "live_chat"},
+            }
+        },
+        "messages": {
+            "user-live": {
+                "id": "user-live",
+                "thread_id": "thread-live",
+                "role": "user",
+                "text": "question",
+                "raw": {"role": "user", "text": "question"},
+            },
+            "assistant-live": {
+                "id": "assistant-live",
+                "thread_id": "thread-live",
+                "role": "assistant",
+                "text": "answer",
+                "raw": {"role": "assistant", "text": "answer"},
+            },
+        },
+    }
+
+    store.record_live_turn(bundle)
+
+    conn = sqlite3.connect(store.db_path)
+    conn.row_factory = sqlite3.Row
+    thread = conn.execute(
+        "SELECT account_key,workspace_id,notion_user_id FROM chat_threads WHERE id='thread-live'"
+    ).fetchone()
+    messages = conn.execute(
+        "SELECT account_key,workspace_id,notion_user_id FROM chat_messages ORDER BY id"
+    ).fetchall()
+    conn.close()
+
+    assert dict(thread) == {
+        "account_key": "ws-live:user-live",
+        "workspace_id": "ws-live",
+        "notion_user_id": "user-live",
+    }
+    assert all(
+        dict(row)
+        == {
+            "account_key": "ws-live:user-live",
+            "workspace_id": "ws-live",
+            "notion_user_id": "user-live",
+        }
+        for row in messages
+    )
+
+
 def test_sync_persist_path_advances_durable_checkpoint(monkeypatch, tmp_path):
     class FakeClient:
         space_id = "ws"
@@ -326,3 +519,177 @@ def test_sync_persist_path_advances_durable_checkpoint(monkeypatch, tmp_path):
         "inference_transcripts", workspace_id="ws", account_key="alpha"
     ) == "cursor-next"
     assert isinstance(bundle.get("persist_result"), dict)
+
+
+def test_sync_hydrates_metadata_threads_before_messages_and_parses_live_wrappers(monkeypatch, tmp_path):
+    class FakeClient:
+        space_id = "ws"
+        user_id = "user"
+        account_key = "alpha"
+
+    transcript_page = {
+        "transcripts": [
+            {
+                "id": "thread-live",
+                "title": "Live Thread",
+                "created_at": 100,
+                "updated_at": 200,
+                "type": "workflow",
+                "usage_summary": {"completion_count": 1, "agent_inference_count": 1},
+            }
+        ],
+        "nextCursor": "cursor-next",
+        "hasMore": True,
+    }
+    thread_record = {
+        "recordMap": {
+            "thread": {
+                "thread-live": {
+                    "spaceId": "ws",
+                    "value": {
+                        "role": "editor",
+                        "value": {
+                            "id": "thread-live",
+                            "version": 3,
+                            "space_id": "ws",
+                            "messages": ["user-live", "assistant-live"],
+                            "parent_id": "ws",
+                            "parent_table": "space",
+                            "created_time": 100,
+                            "updated_time": 200,
+                            "data": {"title": "Live Thread"},
+                            "alive": True,
+                            "type": "workflow",
+                        },
+                    },
+                }
+            }
+        }
+    }
+    message_records = {
+        "recordMap": {
+            "thread_message": {
+                "user-live": {
+                    "spaceId": "ws",
+                    "value": {
+                        "role": "editor",
+                        "value": {
+                            "id": "user-live",
+                            "version": 1,
+                            "space_id": "ws",
+                            "parent_id": "thread-live",
+                            "parent_table": "thread",
+                            "created_time": 110,
+                            "step": {
+                                "id": "user-live",
+                                "type": "user",
+                                "value": [{"type": "text", "content": "question"}],
+                            },
+                        },
+                    },
+                },
+                "assistant-live": {
+                    "spaceId": "ws",
+                    "value": {
+                        "role": "editor",
+                        "value": {
+                            "id": "assistant-live",
+                            "version": 2,
+                            "space_id": "ws",
+                            "parent_id": "thread-live",
+                            "parent_table": "thread",
+                            "created_time": 120,
+                            "step": {
+                                "id": "assistant-live",
+                                "type": "agent-inference",
+                                "value": [{"type": "text", "content": "answer"}],
+                            },
+                        },
+                    },
+                },
+            }
+        }
+    }
+
+    calls = []
+
+    def fake_post(_client, url, payload):
+        calls.append((url, payload))
+        if "getInferenceTranscriptsForUser" in url:
+            return transcript_page
+        tables = {request["pointer"]["table"] for request in payload.get("requests", [])}
+        if tables == {"thread"}:
+            return thread_record
+        if tables == {"thread_message"}:
+            return message_records
+        raise AssertionError(f"unexpected hydrate payload: {payload}")
+
+    monkeypatch.setattr("app.chat_history.notion_sync._post_json", fake_post)
+    store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
+
+    bundle = sync_chat_history_from_notion(
+        FakeClient(),
+        max_pages=1,
+        hydrate=True,
+        store=store,
+        persist=True,
+        fresh_message_ids_lookup=lambda candidates: store.fresh_message_ids(
+            candidates, workspace_id="ws", account_key="alpha"
+        ),
+    )
+
+    assert bundle["sync_summary"]["thread_hydration_batches"] == 1
+    assert bundle["sync_summary"]["hydration_candidate_ids"] == 2
+    assert bundle["sync_summary"]["hydration_failed_ids"] == 0
+    assert bundle["sync_summary"]["thread_hydration_failed_ids"] == 0
+    assert bundle["sync_summary"]["hydration_graph_incomplete"] is False
+    assert bundle["sync_summary"]["checkpoint_advanced"] is True
+    assert bundle["persist_result"]["semantic_messages_inserted"] == 2
+    assert bundle["persist_result"]["parts_written"] == 2
+    rows = store.list_thread_messages("thread-live", workspace_id="ws", account_key="alpha")
+    assert [(row["step_type"], row["version"], row["text"]) for row in rows] == [
+        ("user", 1, "question"),
+        ("agent-inference", 2, "answer"),
+    ]
+    assert [
+        {request["pointer"]["table"] for request in payload.get("requests", [])}
+        for url, payload in calls
+        if "syncRecordValuesSpaceInitial" in url
+    ] == [{"thread"}, {"thread_message"}]
+
+
+def test_sync_does_not_advance_checkpoint_when_thread_graph_cannot_be_resolved(monkeypatch, tmp_path):
+    class FakeClient:
+        space_id = "ws"
+        user_id = "user"
+        account_key = "alpha"
+
+    responses = iter(
+        [
+            {
+                "transcripts": [{"id": "thread-1", "title": "Thread"}],
+                "nextCursor": "cursor-next",
+                "hasMore": True,
+            },
+            {"recordMap": {"thread": {}}},
+        ]
+    )
+    monkeypatch.setattr(
+        "app.chat_history.notion_sync._post_json",
+        lambda _client, _url, _payload: next(responses),
+    )
+    store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
+
+    bundle = sync_chat_history_from_notion(
+        FakeClient(),
+        max_pages=1,
+        hydrate=True,
+        store=store,
+        persist=True,
+    )
+
+    assert bundle["sync_summary"]["hydration_graph_incomplete"] is True
+    assert bundle["sync_summary"]["checkpoint_advanced"] is False
+    assert store.get_sync_cursor(
+        "inference_transcripts", workspace_id="ws", account_key="alpha"
+    ) is None

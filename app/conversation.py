@@ -5,6 +5,7 @@ import sqlite3
 import uuid
 from typing import Any, Dict, List, Optional
 
+from app.account_scope import canonical_account_key
 from app.logger import logger
 from app.model_registry import get_thread_type, is_gemini_model
 
@@ -219,6 +220,48 @@ class ConversationManager:
                 """
                 CREATE INDEX IF NOT EXISTS idx_conversations_page_scope
                 ON conversations(workspace_id, teamspace_id, created_at DESC)
+                """
+            )
+
+            # Keep the older workspace/user/thread columns and the newer explicit
+            # ownership aliases coherent.  This is additive and never guesses an
+            # account when either workspace or user identity is absent.
+            conn.execute(
+                """
+                UPDATE conversations
+                SET account_key = COALESCE(
+                        NULLIF(account_key, ''),
+                        CASE
+                          WHEN TRIM(COALESCE(workspace_id,'')) != ''
+                           AND TRIM(COALESCE(user_id,'')) != ''
+                          THEN workspace_id || ':' || user_id
+                          ELSE NULL
+                        END
+                    ),
+                    notion_user_id = COALESCE(NULLIF(notion_user_id,''), NULLIF(user_id,'')),
+                    notion_space_id = COALESCE(NULLIF(notion_space_id,''), NULLIF(workspace_id,'')),
+                    notion_thread_id = COALESCE(NULLIF(notion_thread_id,''), NULLIF(thread_id,'')),
+                    account_scope = COALESCE(
+                        NULLIF(account_scope,''),
+                        CASE
+                          WHEN TRIM(COALESCE(workspace_id,'')) != ''
+                           AND TRIM(COALESCE(user_id,'')) != ''
+                          THEN workspace_id || ':' || user_id
+                          ELSE NULL
+                        END
+                    ),
+                    account_binding_status = CASE
+                        WHEN TRIM(COALESCE(workspace_id,'')) != ''
+                         AND TRIM(COALESCE(user_id,'')) != ''
+                         AND TRIM(COALESCE(thread_id,'')) != '' THEN 'thread_bound'
+                        WHEN TRIM(COALESCE(workspace_id,'')) != ''
+                         AND TRIM(COALESCE(user_id,'')) != ''
+                         AND TRIM(COALESCE(account_binding_status,'')) = '' THEN 'account_bound'
+                        ELSE account_binding_status
+                    END
+                WHERE TRIM(COALESCE(workspace_id,'')) != ''
+                   OR TRIM(COALESCE(user_id,'')) != ''
+                   OR TRIM(COALESCE(thread_id,'')) != ''
                 """
             )
 
@@ -662,26 +705,40 @@ class ConversationManager:
         conv_id = str(conversation_id or "").strip() or str(uuid.uuid4())
         created_at = int(datetime.datetime.now().timestamp())
         clean_title = " ".join(str(title or "").split()).strip() or "New Chat"
+        clean_workspace = str(workspace_id or "").strip()
+        clean_user = str(user_id or "").strip()
+        account_key = (
+            canonical_account_key(clean_workspace, clean_user)
+            if clean_workspace and clean_user
+            else ""
+        )
         with self._get_conn() as conn:
             conn.execute(
                 """
                 INSERT INTO conversations (
                     id, title, created_at, next_round_index,
                     workspace_id, teamspace_id, user_id, profile_name,
-                    publication_parent_page_id, governance_contract_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    publication_parent_page_id, governance_contract_version,
+                    account_key, notion_user_id, notion_space_id, account_scope,
+                    account_binding_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conv_id,
                     clean_title,
                     created_at,
                     0,
-                    str(workspace_id or "").strip(),
+                    clean_workspace,
                     str(teamspace_id or "").strip(),
-                    str(user_id or "").strip(),
+                    clean_user,
                     str(profile_name or "").strip(),
                     str(publication_parent_page_id or "").strip(),
                     str(governance_contract_version or "").strip(),
+                    account_key or None,
+                    clean_user or None,
+                    clean_workspace or None,
+                    account_key or None,
+                    "account_bound" if account_key else None,
                 ),
             )
             conn.commit()
@@ -792,11 +849,17 @@ class ConversationManager:
                     "Legacy persistent conversation has no workspace/account binding; "
                     "fork it into a new chat instead of guessing its identity"
                 )
+            account_key = canonical_account_key(workspace_id, user_id)
             conn.execute(
                 """
                 UPDATE conversations
                 SET workspace_id = ?, teamspace_id = ?, user_id = ?, profile_name = ?,
-                    publication_parent_page_id = ?, governance_contract_version = ?
+                    publication_parent_page_id = ?, governance_contract_version = ?,
+                    account_key = ?, notion_user_id = ?, notion_space_id = ?,
+                    account_scope = ?, account_binding_status = CASE
+                        WHEN TRIM(COALESCE(thread_id,'')) != '' THEN 'thread_bound'
+                        ELSE 'account_bound'
+                    END
                 WHERE id = ?
                 """,
                 (
@@ -806,6 +869,10 @@ class ConversationManager:
                     str(profile_name or "").strip(),
                     str(publication_parent_page_id or "").strip(),
                     str(governance_contract_version or "").strip(),
+                    account_key,
+                    user_id,
+                    workspace_id,
+                    account_key,
                     conversation_id,
                 ),
             )
@@ -833,8 +900,23 @@ class ConversationManager:
     def clear_conversation_thread(self, conversation_id: str) -> None:
         """text thread_id text thread_modeltext Notion threadtext"""
         with self._get_conn() as conn:
+            now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
             conn.execute(
-                "UPDATE conversations SET thread_id = NULL, thread_model = NULL WHERE id = ?",
+                """
+                UPDATE conversation_bindings
+                SET status='retired', retired_at=COALESCE(retired_at, ?)
+                WHERE conversation_id=? AND status='active'
+                """,
+                (now, conversation_id),
+            )
+            conn.execute(
+                """UPDATE conversations
+                   SET thread_id = NULL, thread_model = NULL, notion_thread_id = NULL,
+                       account_binding_status = CASE
+                         WHEN TRIM(COALESCE(account_key,'')) != '' THEN 'account_bound'
+                         ELSE NULL
+                       END
+                   WHERE id = ?""",
                 (conversation_id,),
             )
             conn.commit()
@@ -855,17 +937,84 @@ class ConversationManager:
         model_name: Optional[str] = None,
     ) -> None:
         """text Notion thread_id text"""
+        resolved_thread = str(thread_id or "").strip()
+        if not resolved_thread:
+            raise ValueError("thread_id is required")
         with self._get_conn() as conn:
+            scope = conn.execute(
+                """SELECT workspace_id, user_id, account_key
+                   FROM conversations WHERE id=?""",
+                (conversation_id,),
+            ).fetchone()
+            if scope is None:
+                raise ValueError(f"Conversation ID '{conversation_id}' does not exist.")
+            workspace_id = str(scope["workspace_id"] or "").strip()
+            user_id = str(scope["user_id"] or "").strip()
+            account_key = str(scope["account_key"] or "").strip()
+            if workspace_id and user_id and not account_key:
+                account_key = canonical_account_key(workspace_id, user_id)
             if model_name is not None:
                 conn.execute(
-                    "UPDATE conversations SET thread_id = ?, thread_model = ? WHERE id = ?",
-                    (thread_id, model_name, conversation_id),
+                    """UPDATE conversations
+                       SET thread_id=?, thread_model=?, notion_thread_id=?,
+                           account_key=COALESCE(NULLIF(account_key,''), ?),
+                           notion_user_id=COALESCE(NULLIF(notion_user_id,''), NULLIF(user_id,'')),
+                           notion_space_id=COALESCE(NULLIF(notion_space_id,''), NULLIF(workspace_id,'')),
+                           account_scope=COALESCE(NULLIF(account_scope,''), ?),
+                           account_binding_status='thread_bound'
+                       WHERE id=?""",
+                    (resolved_thread, model_name, resolved_thread, account_key or None, account_key or None, conversation_id),
                 )
             else:
                 conn.execute(
-                    "UPDATE conversations SET thread_id = ? WHERE id = ?",
-                    (thread_id, conversation_id),
+                    """UPDATE conversations
+                       SET thread_id=?, notion_thread_id=?,
+                           account_key=COALESCE(NULLIF(account_key,''), ?),
+                           notion_user_id=COALESCE(NULLIF(notion_user_id,''), NULLIF(user_id,'')),
+                           notion_space_id=COALESCE(NULLIF(notion_space_id,''), NULLIF(workspace_id,'')),
+                           account_scope=COALESCE(NULLIF(account_scope,''), ?),
+                           account_binding_status='thread_bound'
+                       WHERE id=?""",
+                    (resolved_thread, resolved_thread, account_key or None, account_key or None, conversation_id),
                 )
+            if account_key and workspace_id:
+                active = conn.execute(
+                    """SELECT binding_id, remote_thread_id
+                       FROM conversation_bindings
+                       WHERE account_key=? AND workspace_id=? AND conversation_id=? AND status='active'
+                       ORDER BY binding_generation DESC LIMIT 1""",
+                    (account_key, workspace_id, conversation_id),
+                ).fetchone()
+                if active is not None and str(active["remote_thread_id"] or "") != resolved_thread:
+                    raise ValueError(
+                        "Conversation already has a different active Notion thread binding; "
+                        "retire it before replacing the remote thread"
+                    )
+                if active is None:
+                    generation_row = conn.execute(
+                        """SELECT COALESCE(MAX(binding_generation),0)
+                           FROM conversation_bindings
+                           WHERE account_key=? AND workspace_id=? AND conversation_id=?""",
+                        (account_key, workspace_id, conversation_id),
+                    ).fetchone()
+                    generation = int(generation_row[0] or 0) + 1
+                    conn.execute(
+                        """INSERT INTO conversation_bindings(
+                             binding_id, conversation_id, account_key, workspace_id,
+                             notion_user_id, remote_thread_id, binding_generation,
+                             status, created_at
+                           ) VALUES(?,?,?,?,?,?,?,'active',?)""",
+                        (
+                            str(uuid.uuid4()),
+                            conversation_id,
+                            account_key,
+                            workspace_id,
+                            user_id or None,
+                            resolved_thread,
+                            generation,
+                            int(datetime.datetime.now(datetime.timezone.utc).timestamp()),
+                        ),
+                    )
             conn.commit()
             logger.info(
                 "Saved thread_id for conversation",
@@ -873,7 +1022,7 @@ class ConversationManager:
                     "request_info": {
                         "event": "thread_id_saved",
                         "conversation_id": conversation_id,
-                        "thread_id": thread_id,
+                        "thread_id": resolved_thread,
                         "thread_model": model_name,
                     }
                 },

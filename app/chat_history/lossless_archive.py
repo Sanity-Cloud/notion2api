@@ -211,14 +211,26 @@ def message_ids_fresh_at_versions(
         placeholders = ",".join("?" for _ in chunk)
         rows = conn.execute(
             f"""
-            SELECT message_id, MAX(version) AS max_version
+            SELECT message_id,
+                   MAX(
+                     CASE
+                       WHEN version >= 0
+                        AND COALESCE(NULLIF(TRIM(step_type), ''), 'unknown') != 'unknown'
+                       THEN version
+                       ELSE NULL
+                     END
+                   ) AS max_version
             FROM notion_thread_messages
             WHERE account_key=? AND workspace_id=? AND message_id IN ({placeholders})
             GROUP BY message_id
             """,
             (account_key, workspace_id, *chunk),
         ).fetchall()
-        archived = {str(row[0]): int(row[1]) for row in rows}
+        archived = {
+            str(row[0]): int(row[1])
+            for row in rows
+            if row[1] is not None
+        }
         for message_id in chunk:
             archived_version = archived.get(message_id)
             if archived_version is None:

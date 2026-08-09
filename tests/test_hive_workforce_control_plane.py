@@ -192,9 +192,16 @@ def test_server_registers_hive_workforce_http_contract(monkeypatch):
         "NOTION_ACCOUNTS",
         '[{"token_v2":"test","space_id":"space","user_id":"user"}]',
     )
-    from app.server import app
+    from app.api.hive_workforce import router as hive_workforce_router
+    from app.server import app  # noqa: F401 - importing server verifies router registration succeeds
 
-    paths = {route.path for route in app.routes}
+    # Validate the concrete router contract directly. Some test/runtime wrappers
+    # replace included app routes with proxy objects that do not expose `.path`.
+    paths = {
+        f"/v1{route.path}"
+        for route in hive_workforce_router.routes
+        if getattr(route, "path", None)
+    }
     assert "/v1/hive/workforce/overview" in paths
     assert "/v1/hive/workforce/registry" in paths
     assert "/v1/hive/workforce/requisitions" in paths

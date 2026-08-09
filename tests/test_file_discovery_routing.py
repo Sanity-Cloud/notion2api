@@ -46,7 +46,14 @@ def test_discovery_routes_only_through_everything_with_bounded_batches():
     assert decision.result_verification_required is True
     assert "DesktopCommander.read_file" in decision.verification_tools
     assert any(batch.path.lower().endswith("\\code") for batch in decision.search_batches)
-    assert any("users" in batch.path.lower() for batch in decision.search_batches)
+    assert {batch.root_id for batch in decision.search_batches} == {
+        "code",
+        "mcp",
+        "documents",
+        "downloads",
+        "desktop",
+        "sanitycloud-local",
+    }
 
 
 def test_requested_root_and_file_types_are_applied_exactly():

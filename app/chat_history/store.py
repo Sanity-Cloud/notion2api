@@ -504,8 +504,22 @@ class ChatHistoryStore:
         account_key: str | None = None,
     ) -> tuple[str, str, str | None]:
         resolved_account = str(account_key or self.account_key or LEGACY_ACCOUNT_KEY).strip() or LEGACY_ACCOUNT_KEY
-        resolved_workspace = str(workspace_id or "").strip() or "unknown"
+        resolved_workspace = str(workspace_id or "").strip()
         resolved_user = str(notion_user_id or "").strip() or None
+        # Canonical account keys are workspace_id:user_id. Derive row-level
+        # ownership from the shard binding when callers only provide account_key
+        # (notably live-turn recording). Synthetic/legacy keys remain unknown.
+        if (
+            (not resolved_workspace or not resolved_user)
+            and ":" in resolved_account
+            and not resolved_account.startswith("profile:")
+        ):
+            key_workspace, key_user = resolved_account.split(":", 1)
+            if not resolved_workspace and key_workspace.strip():
+                resolved_workspace = key_workspace.strip()
+            if not resolved_user and key_user.strip():
+                resolved_user = key_user.strip()
+        resolved_workspace = resolved_workspace or "unknown"
         return resolved_account, resolved_workspace, resolved_user
 
     def _ensure_indexes(self) -> None:
@@ -748,6 +762,7 @@ class ChatHistoryStore:
         if not isinstance(threads, dict) or not isinstance(messages, dict):
             return result
 
+        account, workspace, user = self._ownership()
         with self._conn() as conn:
             for thread in threads.values():
                 if not isinstance(thread, dict):
@@ -758,7 +773,7 @@ class ChatHistoryStore:
                     result["threads_skipped"] += 1
                     continue
                 existing = conn.execute(
-                    "SELECT title,created_time,last_edited_time,alive,message_ids_json,raw_json FROM chat_threads WHERE id=?",
+                    "SELECT title,created_time,last_edited_time,alive,message_ids_json,raw_json,account_key,workspace_id,notion_user_id FROM chat_threads WHERE id=?",
                     (thread_id,),
                 ).fetchone()
                 existing_ids = json.loads((existing["message_ids_json"] if existing else None) or "[]")
@@ -799,15 +814,18 @@ class ChatHistoryStore:
                     _json_dumps(merged_raw, {}),
                 )
                 conn.execute(
-                    """INSERT INTO chat_threads(id,title,created_time,last_edited_time,alive,message_ids_json,raw_json)
-                    VALUES(?,?,?,?,?,?,?)
+                    """INSERT INTO chat_threads(id,title,created_time,last_edited_time,alive,message_ids_json,raw_json,account_key,workspace_id,notion_user_id)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET
                       title=CASE WHEN TRIM(COALESCE(excluded.title,''))='' THEN chat_threads.title ELSE excluded.title END,
                       last_edited_time=excluded.last_edited_time,
                       alive=excluded.alive,
                       message_ids_json=excluded.message_ids_json,
-                      raw_json=excluded.raw_json""",
-                    (thread_id, *proposed),
+                      raw_json=excluded.raw_json,
+                      account_key=COALESCE(excluded.account_key, chat_threads.account_key),
+                      workspace_id=COALESCE(excluded.workspace_id, chat_threads.workspace_id),
+                      notion_user_id=COALESCE(excluded.notion_user_id, chat_threads.notion_user_id)""",
+                    (thread_id, *proposed, account, workspace, user),
                 )
                 if existing is None:
                     result["threads_inserted"] += 1
@@ -828,7 +846,7 @@ class ChatHistoryStore:
                 created_time = _text(message.get("created_time"))
                 metadata = _message_model_metadata(message)
                 existing = conn.execute(
-                    "SELECT thread_id,role,text,created_time,requested_model,notion_requested_model,actual_model,model_provider,raw_json FROM chat_messages WHERE id=?",
+                    "SELECT thread_id,role,text,created_time,requested_model,notion_requested_model,actual_model,model_provider,raw_json,account_key,workspace_id,notion_user_id FROM chat_messages WHERE id=?",
                     (message_id,),
                 ).fetchone()
                 if existing is not None and str(existing["text"] or "").strip():
@@ -853,13 +871,17 @@ class ChatHistoryStore:
                         actual,
                         provider,
                         _json_dumps(existing_raw, {}),
+                        _text(existing["account_key"]) or account,
+                        _text(existing["workspace_id"]) or workspace,
+                        _text(existing["notion_user_id"]) or user,
                     )
                     changed = tuple(existing) != proposed
                     if changed:
                         conn.execute(
                             """UPDATE chat_messages
                             SET thread_id=?, role=?, text=?, created_time=?,
-                                requested_model=?, notion_requested_model=?, actual_model=?, model_provider=?, raw_json=?
+                                requested_model=?, notion_requested_model=?, actual_model=?, model_provider=?, raw_json=?,
+                                account_key=?, workspace_id=?, notion_user_id=?
                             WHERE id=?""",
                             (*proposed, message_id),
                         )
@@ -878,11 +900,14 @@ class ChatHistoryStore:
                     _text(metadata.get("actual_model")),
                     _text(metadata.get("model_provider")),
                     _json_dumps(message.get("raw"), {}),
+                    account,
+                    workspace,
+                    user,
                 )
                 conn.execute(
-                    """INSERT INTO chat_messages(id,thread_id,role,text,created_time,requested_model,notion_requested_model,actual_model,model_provider,raw_json)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(id) DO UPDATE SET thread_id=excluded.thread_id,role=excluded.role,text=excluded.text,created_time=excluded.created_time,requested_model=excluded.requested_model,notion_requested_model=excluded.notion_requested_model,actual_model=excluded.actual_model,model_provider=excluded.model_provider,raw_json=excluded.raw_json""",
+                    """INSERT INTO chat_messages(id,thread_id,role,text,created_time,requested_model,notion_requested_model,actual_model,model_provider,raw_json,account_key,workspace_id,notion_user_id)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET thread_id=excluded.thread_id,role=excluded.role,text=excluded.text,created_time=excluded.created_time,requested_model=excluded.requested_model,notion_requested_model=excluded.notion_requested_model,actual_model=excluded.actual_model,model_provider=excluded.model_provider,raw_json=excluded.raw_json,account_key=COALESCE(excluded.account_key,chat_messages.account_key),workspace_id=COALESCE(excluded.workspace_id,chat_messages.workspace_id),notion_user_id=COALESCE(excluded.notion_user_id,chat_messages.notion_user_id)""",
                     (message_id, *proposed),
                 )
                 conn.execute("DELETE FROM chat_messages_fts WHERE id=?", (message_id,))
