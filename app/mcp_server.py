@@ -49,6 +49,7 @@ from app.hive_runtime import (
     default_hive_runtime_db_path,
     get_hive_runtime_store,
 )
+from app.hive_multithread import leader_conversation_id
 from app.hive_dispatcher import (
     HiveAdapterSnapshot,
     HiveExecutionSnapshot,
@@ -4235,7 +4236,8 @@ def create_server(
                 deduplicated = bool(existing_job)
 
                 conversation_id, session_key, session_created = _conversation_id_for_session(
-                    session_name
+                    session_name,
+                    conversation_id=leader_conversation_id(mission_id),
                 )
                 payload = {
                     "model": DEFAULT_MODEL,

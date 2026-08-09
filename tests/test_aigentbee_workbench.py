@@ -292,7 +292,11 @@ def test_leader_request_is_durable_retry_safe_and_member_bound(
     monkeypatch.setattr(
         mcp_server_module,
         "_conversation_id_for_session",
-        lambda session_name: ("leader-conversation", session_name, False),
+        lambda session_name, **kwargs: (
+            kwargs.get("conversation_id") or "leader-conversation",
+            session_name,
+            False,
+        ),
     )
     monkeypatch.setattr(
         mcp_server_module,
