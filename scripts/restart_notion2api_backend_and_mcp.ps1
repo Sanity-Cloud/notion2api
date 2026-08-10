@@ -132,6 +132,10 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $LogRoot, $StateRoot | Out-Null
+    $buildCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null).Trim()
+    if ($buildCommit -notmatch '^[0-9a-f]{40,64}$') {
+        throw 'Could not resolve a validated Notion2API build commit.'
+    }
     $before = [ordered]@{
         backend_pid = $null
         mcp_pid = $null
@@ -152,6 +156,7 @@ try {
     $env:NOTION_ADMISSION_ACCOUNT_MAX_INFLIGHT = '4'
     $env:NOTION_ADMISSION_ACCOUNT_CAPACITY = '4'
     $env:NOTION_ADMISSION_ACCOUNT_REFILL_PER_SECOND = '1.0'
+    $env:NOTION2API_BUILD_COMMIT = $buildCommit
     $env:CHAT_HISTORY_DB_DIR = Join-Path $StateRoot 'chat_history'
     if (-not $env:CHAT_HISTORY_DB_PATH) {
         $env:CHAT_HISTORY_DB_PATH = Join-Path $StateRoot 'chat_history.db'
@@ -178,6 +183,10 @@ try {
     if (-not (Wait-HttpHealthy -Url $backendHealth)) {
         Stop-Process -Id $backendProcess.Id -Force -ErrorAction SilentlyContinue
         throw "Notion2API backend did not become healthy at $backendHealth. Check $backendErrLog"
+    }
+    $backendHealthPayload = Invoke-RestMethod -Uri $backendHealth -TimeoutSec 5
+    if ($backendHealthPayload.history.build_commit -ne $buildCommit) {
+        throw 'Backend health does not report the checked-out build commit.'
     }
     $backendAfter = Get-PortListener -Port $BackendPort
     if (-not $backendAfter) {

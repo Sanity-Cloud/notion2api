@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +36,10 @@ def main() -> int:
     parser.add_argument("--backup-dir", required=True)
     parser.add_argument("--receipt", required=True)
     parser.add_argument("--expected-commit", required=True)
+    parser.add_argument(
+        "--chat-history-db-dir",
+        help="Explicit runtime shard root; overrides CHAT_HISTORY_DB_DIR for target resolution.",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
     args = parser.parse_args()
 
@@ -50,6 +55,8 @@ def main() -> int:
     )
     if worktree_status.strip():
         raise RuntimeError("schema activation requires a clean repository worktree")
+    if args.chat_history_db_dir:
+        os.environ["CHAT_HISTORY_DB_DIR"] = str(Path(args.chat_history_db_dir).resolve())
 
     targets = _governed_shards()
     if not targets:
