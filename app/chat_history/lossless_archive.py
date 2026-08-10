@@ -13,6 +13,12 @@ import sqlite3
 import time
 from typing import Any
 
+from app.chat_history.contracts import (
+    HISTORY_SCHEMA_VERSION,
+    PARSER_CONTRACT_VERSION,
+    PROJECTION_VERSION,
+)
+
 ARCHIVE_DDL = """
 CREATE TABLE IF NOT EXISTS raw_notion_records (
   account_key TEXT NOT NULL,
@@ -29,6 +35,22 @@ CREATE TABLE IF NOT EXISTS raw_notion_records (
   retrieved_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
   imported_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
   PRIMARY KEY (account_key, workspace_id, table_name, record_id, version)
+);
+CREATE TABLE IF NOT EXISTS raw_notion_record_observations (
+  account_key TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  notion_user_id TEXT,
+  table_name TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT -1,
+  last_version INTEGER,
+  content_hash TEXT NOT NULL,
+  raw_json TEXT NOT NULL,
+  source_kind TEXT,
+  source_endpoint TEXT,
+  sync_run_id TEXT,
+  observed_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  PRIMARY KEY (account_key, workspace_id, table_name, record_id, version, content_hash)
 );
 CREATE TABLE IF NOT EXISTS notion_thread_messages (
   account_key TEXT NOT NULL,
@@ -47,6 +69,12 @@ CREATE TABLE IF NOT EXISTS notion_thread_messages (
   trace_id TEXT,
   model_metadata_json TEXT NOT NULL DEFAULT '{}',
   raw_json TEXT NOT NULL DEFAULT '{}',
+  parser_contract_version TEXT NOT NULL DEFAULT 'unversioned',
+  projection_version INTEGER NOT NULL DEFAULT 0,
+  source_content_hash TEXT,
+  projected_at INTEGER,
+  normalization_outcome TEXT NOT NULL DEFAULT 'unversioned',
+  normalization_warnings_json TEXT NOT NULL DEFAULT '[]',
   tombstone_status TEXT,
   imported_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
   updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
@@ -62,7 +90,15 @@ CREATE TABLE IF NOT EXISTS notion_message_parts (
   text TEXT,
   content_json TEXT,
   raw_json TEXT NOT NULL DEFAULT '{}',
+  parser_contract_version TEXT NOT NULL DEFAULT 'unversioned',
+  projection_version INTEGER NOT NULL DEFAULT 0,
+  source_content_hash TEXT,
+  projected_at INTEGER,
   PRIMARY KEY (account_key, workspace_id, message_id, message_version, ordinal)
+);
+CREATE TABLE IF NOT EXISTS chat_history_archive_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sync_runs (
   sync_run_id TEXT PRIMARY KEY,
@@ -106,6 +142,10 @@ CREATE TABLE IF NOT EXISTS reconciliation_events (
 ARCHIVE_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_raw_notion_records_lookup
   ON raw_notion_records(account_key, workspace_id, table_name, record_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_raw_notion_record_observations_lookup
+  ON raw_notion_record_observations(
+    account_key, workspace_id, table_name, record_id, version DESC, observed_at DESC
+  );
 CREATE INDEX IF NOT EXISTS idx_notion_thread_messages_thread
   ON notion_thread_messages(account_key, workspace_id, thread_id, created_time, message_id);
 CREATE INDEX IF NOT EXISTS idx_notion_thread_messages_latest
@@ -145,7 +185,50 @@ def coerce_version(value: Any) -> int | None:
 
 def ensure_archive_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(ARCHIVE_DDL)
+    _ensure_projection_lineage_columns(conn)
     conn.executescript(ARCHIVE_INDEX_DDL)
+    conn.execute(
+        "INSERT OR REPLACE INTO chat_history_archive_meta(key,value) VALUES('history_schema_version',?)",
+        (str(HISTORY_SCHEMA_VERSION),),
+    )
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+
+
+def _ensure_columns(
+    conn: sqlite3.Connection, table_name: str, columns: dict[str, str]
+) -> None:
+    existing = _table_columns(conn, table_name)
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{name}" {definition}')
+
+
+def _ensure_projection_lineage_columns(conn: sqlite3.Connection) -> None:
+    common = {
+        "parser_contract_version": "TEXT NOT NULL DEFAULT 'unversioned'",
+        "projection_version": "INTEGER NOT NULL DEFAULT 0",
+        "source_content_hash": "TEXT",
+        "projected_at": "INTEGER",
+    }
+    _ensure_columns(
+        conn,
+        "notion_thread_messages",
+        {
+            **common,
+            "normalization_outcome": "TEXT NOT NULL DEFAULT 'unversioned'",
+            "normalization_warnings_json": "TEXT NOT NULL DEFAULT '[]'",
+        },
+    )
+    _ensure_columns(conn, "notion_message_parts", common)
+
+
+def history_schema_hash() -> str:
+    """Return a stable fingerprint for the effective archive schema contract."""
+    payload = f"{HISTORY_SCHEMA_VERSION}\n{ARCHIVE_DDL}\n{ARCHIVE_INDEX_DDL}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def latest_record_version(
@@ -257,21 +340,42 @@ def persist_raw_record(
     raw: Any,
     source_kind: str | None = None,
     source_endpoint: str | None = None,
+    sync_run_id: str | None = None,
 ) -> bool:
-    """Insert a versioned raw record. Returns True when a new row was written."""
+    """Preserve one raw observation and refresh its canonical version projection.
+
+    Returns True only when this identity/version/content-hash observation is new.
+    """
     resolved_version = coerce_version(version)
     if resolved_version is None:
         resolved_version = -1
     raw_json = _json_dumps(raw, {})
     digest = content_hash_for(raw_json)
     now = int(time.time())
-    before = conn.execute(
+    observation_insert = conn.execute(
         """
-        SELECT 1 FROM raw_notion_records
-        WHERE account_key=? AND workspace_id=? AND table_name=? AND record_id=? AND version=?
+        INSERT OR IGNORE INTO raw_notion_record_observations(
+          account_key, workspace_id, notion_user_id, table_name, record_id, version,
+          last_version, content_hash, raw_json, source_kind, source_endpoint,
+          sync_run_id, observed_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
-        (account_key, workspace_id, table_name, record_id, resolved_version),
-    ).fetchone()
+        (
+            account_key,
+            workspace_id,
+            notion_user_id,
+            table_name,
+            record_id,
+            resolved_version,
+            coerce_version(last_version),
+            digest,
+            raw_json,
+            source_kind,
+            source_endpoint,
+            sync_run_id,
+            now,
+        ),
+    )
     conn.execute(
         """
         INSERT INTO raw_notion_records(
@@ -302,7 +406,7 @@ def persist_raw_record(
             now,
         ),
     )
-    return before is None
+    return observation_insert.rowcount == 1
 
 
 def persist_thread_message_record(
@@ -330,14 +434,54 @@ def persist_thread_message_record(
         """,
         (account_key, workspace_id, message_id, version),
     ).fetchone()
-    raw_json = _json_dumps(record.get("raw") or record.get("raw_wrapper") or {}, {})
+    # Match the exact wrapper hashed by persist_raw_record so the semantic row
+    # can be traced back to one source observation without ambiguity.
+    raw_json = _json_dumps(record.get("raw_wrapper") or record.get("raw") or {}, {})
+    source_content_hash = content_hash_for(raw_json)
+    source_observation = conn.execute(
+        """
+        SELECT 1 FROM raw_notion_record_observations
+        WHERE account_key=? AND workspace_id=? AND table_name='thread_message'
+          AND record_id=? AND version=? AND content_hash=?
+        """,
+        (
+            account_key,
+            workspace_id,
+            message_id,
+            version,
+            source_content_hash,
+        ),
+    ).fetchone()
+    if source_observation is None:
+        raise ValueError(
+            "semantic projection requires an exact archived source observation"
+        )
+    warnings = [
+        str(warning)
+        for warning in (record.get("normalization_warnings") or [])
+        if str(warning).strip()
+    ]
+    # Compatibility for manually constructed semantic records that did not pass
+    # through the current parser contract.
+    if version < 0 and "unknown_version" not in warnings:
+        warnings.append("unknown_version")
+    if (
+        str(record.get("step_type") or "unknown") == "unknown"
+        and "unknown_step_type" not in warnings
+    ):
+        warnings.append("unknown_step_type")
+    normalization_outcome = str(record.get("normalization_outcome") or "").strip()
+    if not normalization_outcome:
+        normalization_outcome = "normalized_with_warnings" if warnings else "normalized"
     conn.execute(
         """
         INSERT INTO notion_thread_messages(
           account_key, workspace_id, notion_user_id, message_id, thread_id, step_type,
           visible, role, text, created_time, version, last_version, inference_id, trace_id,
-          model_metadata_json, raw_json, tombstone_status, imported_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)
+          model_metadata_json, raw_json, parser_contract_version, projection_version,
+          source_content_hash, projected_at, normalization_outcome,
+          normalization_warnings_json, tombstone_status, imported_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)
         ON CONFLICT(account_key, workspace_id, message_id, version) DO UPDATE SET
           thread_id=excluded.thread_id,
           step_type=excluded.step_type,
@@ -350,6 +494,12 @@ def persist_thread_message_record(
           trace_id=excluded.trace_id,
           model_metadata_json=excluded.model_metadata_json,
           raw_json=excluded.raw_json,
+          parser_contract_version=excluded.parser_contract_version,
+          projection_version=excluded.projection_version,
+          source_content_hash=excluded.source_content_hash,
+          projected_at=excluded.projected_at,
+          normalization_outcome=excluded.normalization_outcome,
+          normalization_warnings_json=excluded.normalization_warnings_json,
           tombstone_status=NULL,
           updated_at=excluded.updated_at
         """,
@@ -370,6 +520,12 @@ def persist_thread_message_record(
             str(record.get("trace_id") or "") or None,
             _json_dumps(record.get("model_metadata") or {}, {}),
             raw_json,
+            PARSER_CONTRACT_VERSION,
+            PROJECTION_VERSION,
+            source_content_hash,
+            now,
+            normalization_outcome,
+            _json_dumps(warnings, []),
             now,
             now,
         ),
@@ -395,8 +551,9 @@ def persist_thread_message_record(
             """
             INSERT INTO notion_message_parts(
               account_key, workspace_id, message_id, message_version, ordinal,
-              part_type, text, content_json, raw_json
-            ) VALUES (?,?,?,?,?,?,?,?,?)
+              part_type, text, content_json, raw_json, parser_contract_version,
+              projection_version, source_content_hash, projected_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 account_key,
@@ -408,6 +565,10 @@ def persist_thread_message_record(
                 part.get("text"),
                 _json_dumps(part.get("content"), None) if part.get("content") is not None else None,
                 _json_dumps(part.get("raw") or part, {}),
+                PARSER_CONTRACT_VERSION,
+                PROJECTION_VERSION,
+                source_content_hash,
+                now,
             ),
         )
         result["parts_written"] += 1
@@ -548,6 +709,8 @@ def advance_sync_cursor(
     cursor_value: str | None,
     sync_run_id: str | None,
     allow_advance: bool,
+    expected_cursor_value: str | None = None,
+    enforce_expected_cursor: bool = False,
 ) -> bool:
     """Advance durable cursor only when allow_advance is True (successful persist)."""
     if not allow_advance:
@@ -569,6 +732,65 @@ def advance_sync_cursor(
                         "cursor_name": cursor_name,
                         "attempted_cursor_value": cursor_value,
                         "reason": "partial_or_failed_sync",
+                    },
+                    {},
+                ),
+            ),
+        )
+        return False
+    if enforce_expected_cursor:
+        advanced = conn.execute(
+            """
+            INSERT INTO sync_cursors(
+              account_key, workspace_id, cursor_name, cursor_value, sync_run_id, updated_at
+            )
+            SELECT ?,?,?,?,?,?
+            WHERE ? IS NULL OR EXISTS (
+              SELECT 1 FROM sync_cursors
+              WHERE account_key=? AND workspace_id=? AND cursor_name=?
+                AND cursor_value IS ?
+            )
+            ON CONFLICT(account_key, workspace_id, cursor_name) DO UPDATE SET
+              cursor_value=excluded.cursor_value,
+              sync_run_id=excluded.sync_run_id,
+              updated_at=excluded.updated_at
+            WHERE sync_cursors.cursor_value IS ?
+            """,
+            (
+                account_key,
+                workspace_id,
+                cursor_name,
+                cursor_value,
+                sync_run_id,
+                int(time.time()),
+                expected_cursor_value,
+                account_key,
+                workspace_id,
+                cursor_name,
+                expected_cursor_value,
+                expected_cursor_value,
+            ),
+        )
+        if advanced.rowcount == 1:
+            return True
+        conn.execute(
+            """
+            INSERT INTO reconciliation_events(
+              account_key, workspace_id, sync_run_id, event_type, table_name, record_id, details_json
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                account_key,
+                workspace_id,
+                sync_run_id,
+                "checkpoint_stale_writer_rejected",
+                None,
+                None,
+                _json_dumps(
+                    {
+                        "cursor_name": cursor_name,
+                        "expected_cursor_value": expected_cursor_value,
+                        "attempted_cursor_value": cursor_value,
                     },
                     {},
                 ),
