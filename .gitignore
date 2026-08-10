@@ -58,6 +58,14 @@ test_*.py
 *_test.py
 debug_*.py
 
+# Allow this sanitized, synthetic chat-history contract fixture while keeping
+# every other untracked test artifact ignored.
+!tests/
+tests/*
+!tests/fixtures/
+tests/fixtures/*
+!tests/fixtures/notion-chat-history-drift.json
+
 # Claude Code local settings
 .claude/settings.local.json
 .claude/worktrees/

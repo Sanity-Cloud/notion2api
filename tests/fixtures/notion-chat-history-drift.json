@@ -1,0 +1,129 @@
+{
+  "fixture_contract": "synthetic-notion-chat-history-drift-v1",
+  "cases": [
+    {
+      "name": "future_wrapper_nesting",
+      "message_id": "fixture-deep-wrapper",
+      "raw": {
+        "value": {
+          "value": {
+            "value": {
+              "id": "fixture-deep-wrapper",
+              "version": 4,
+              "parent_id": "fixture-thread-a",
+              "step": {
+                "type": "agent-inference",
+                "value": [{"type": "text", "content": "neutral answer"}]
+              }
+            }
+          }
+        }
+      },
+      "expected_warnings": ["future_wrapper_nesting", "semantic_role_inferred"],
+      "expected_visible": true
+    },
+    {
+      "name": "unknown_inference_part",
+      "message_id": "fixture-unknown-part",
+      "raw": {
+        "id": "fixture-unknown-part",
+        "version": 2,
+        "parent_id": "fixture-thread-a",
+        "step": {
+          "type": "agent-inference",
+          "value": [{"type": "future-neutral-part", "content": {"kind": "opaque"}}]
+        }
+      },
+      "expected_warnings": [
+        "unsupported_inference_part_type",
+        "semantic_role_inferred",
+        "not_displayable"
+      ],
+      "expected_visible": false
+    },
+    {
+      "name": "missing_thread_reference",
+      "message_id": "fixture-missing-thread",
+      "raw": {
+        "id": "fixture-missing-thread",
+        "version": 1,
+        "step": {
+          "type": "user",
+          "value": [{"type": "text", "content": "neutral prompt"}]
+        }
+      },
+      "expected_warnings": ["missing_thread_reference", "semantic_role_inferred"],
+      "expected_visible": true
+    },
+    {
+      "name": "hidden_execution_step",
+      "message_id": "fixture-hidden-step",
+      "raw": {
+        "id": "fixture-hidden-step",
+        "version": 3,
+        "parent_id": "fixture-thread-b",
+        "step": {
+          "type": "agent-tool-result",
+          "value": {"result": "neutral hidden evidence"}
+        }
+      },
+      "expected_warnings": [],
+      "expected_visible": false
+    },
+    {
+      "name": "metadata_only_record",
+      "message_id": "fixture-metadata-only",
+      "raw": {
+        "id": "fixture-metadata-only",
+        "version": 5,
+        "parent_id": "fixture-thread-b",
+        "step": {
+          "type": "agent-inference",
+          "model": "fixture-model",
+          "value": []
+        }
+      },
+      "expected_warnings": ["semantic_role_inferred", "not_displayable"],
+      "expected_visible": false
+    },
+    {
+      "name": "conflicting_wrapper_versions",
+      "message_id": "fixture-conflicting-version",
+      "raw": {
+        "id": "fixture-conflicting-version",
+        "version": 1,
+        "parent_id": "fixture-thread-c",
+        "value": {
+          "id": "fixture-conflicting-version",
+          "version": 2,
+          "parent_id": "fixture-thread-c",
+          "step": {"type": "user", "value": [{"type": "text", "content": "neutral"}]}
+        }
+      },
+      "expected_warnings": ["conflicting_version_fields", "unknown_step_type"],
+      "expected_visible": false
+    },
+    {
+      "name": "versionless_payload_a",
+      "message_id": "fixture-versionless",
+      "raw": {
+        "id": "fixture-versionless",
+        "parent_id": "fixture-thread-c",
+        "step": {"type": "user", "value": [{"type": "text", "content": "neutral A"}]}
+      },
+      "expected_warnings": ["unknown_version", "semantic_role_inferred"],
+      "expected_visible": true
+    },
+    {
+      "name": "versionless_payload_b",
+      "message_id": "fixture-versionless",
+      "raw": {
+        "id": "fixture-versionless",
+        "parent_id": "fixture-thread-c",
+        "step": {"type": "user", "value": [{"type": "text", "content": "neutral B"}]}
+      },
+      "expected_warnings": ["unknown_version", "semantic_role_inferred"],
+      "expected_visible": true
+    }
+  ]
+}

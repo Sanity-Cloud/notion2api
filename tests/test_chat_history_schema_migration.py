@@ -2,6 +2,9 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
+
+from app.chat_history.schema_activation import activate_shard
 from app.chat_history.store import ChatHistoryStore, MODEL_METADATA_COLUMNS
 
 
@@ -27,6 +30,9 @@ def test_store_upgrades_legacy_chat_messages_schema():
         finally:
             conn.close()
 
+        with pytest.raises(RuntimeError, match="controlled activation"):
+            ChatHistoryStore(str(db_path))
+        activate_shard(db_path, backup_dir=Path(tmp) / "backups", timeout_seconds=2.0)
         ChatHistoryStore(str(db_path))
 
         conn = sqlite3.connect(db_path)

@@ -529,6 +529,8 @@ def sync_chat_history_from_notion(
     records_persisted = 0
     persisted = False
     checkpoint_advanced = False
+    checkpoint_rejected = False
+    prior_cursor: str | None = None
 
     sync_run_started = False
     if store is not None and persist:
@@ -550,6 +552,7 @@ def sync_chat_history_from_notion(
                 cursor = prior_cursor
         except Exception as exc:  # pragma: no cover - defensive around optional store wiring
             sync_error = f"sync_run_init_failed: {exc}"
+            raise RuntimeError(sync_error) from exc
 
     try:
         while pages_scanned < max_pages:
@@ -672,6 +675,7 @@ def sync_chat_history_from_notion(
                 account_key=account_key,
                 source_kind="notion_server",
                 source_endpoint="getInferenceTranscriptsForUser",
+                sync_run_id=sync_run_id,
             )
             bundle["persist_result"] = dict(imported)
             records_persisted = int(imported.get("messages_inserted", 0)) + int(
@@ -695,8 +699,11 @@ def sync_chat_history_from_notion(
                     workspace_id=workspace_id,
                     account_key=account_key,
                     allow_advance=allow_advance,
+                    expected_cursor_value=prior_cursor,
+                    enforce_expected_cursor=True,
                 )
             )
+            checkpoint_rejected = bool(allow_advance and not checkpoint_advanced)
     except Exception as exc:
         sync_error = str(exc)
         raise
@@ -704,7 +711,12 @@ def sync_chat_history_from_notion(
         if store is not None and persist and sync_run_started:
             status = "error" if sync_error else (
                 "partial"
-                if hydration_failed_ids or thread_hydration_failed_ids or hydration_graph_incomplete
+                if (
+                    hydration_failed_ids
+                    or thread_hydration_failed_ids
+                    or hydration_graph_incomplete
+                    or checkpoint_rejected
+                )
                 else "completed"
             )
             if sync_error is None and persist and not persisted:
@@ -728,11 +740,15 @@ def sync_chat_history_from_notion(
                         "thread_messages": len(bundle.get("thread_messages", {})),
                         "thread_hydration_failed_ids": thread_hydration_failed_ids,
                         "hydration_graph_incomplete": hydration_graph_incomplete,
+                        "checkpoint_rejected": checkpoint_rejected,
                     },
                     error_text=sync_error,
                 )
-            except Exception:
-                pass
+            except Exception as finish_exc:
+                if sync_error is None:
+                    raise RuntimeError(
+                        f"sync_run_finish_failed: {finish_exc}"
+                    ) from finish_exc
 
     messages_seen = len(bundle["messages"])
     summary = {

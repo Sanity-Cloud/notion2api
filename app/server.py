@@ -29,6 +29,9 @@ from app.config import (
     is_standard_mode,
 )
 from app.conversation import ConversationManager
+from app.chat_history.contracts import runtime_history_contract
+from app.chat_history.lossless_archive import history_schema_hash
+from app.chat_history.store import get_chat_history_db_root
 from app.core.errors import openai_error_payload
 from app.core.internal_callers import is_repo_ai_internal_request
 from app.limiter import limiter
@@ -256,6 +259,11 @@ def health_check(request: Request):
     uptime = time.time() - request.app.state.start_time
     pool = request.app.state.account_pool
     status = pool.get_status_summary()
+    history_contract = runtime_history_contract(
+        conversation_store_path=request.app.state.conversation_manager.db_path,
+        history_store_root=get_chat_history_db_root(),
+        history_schema_hash=history_schema_hash(),
+    )
     return {
         "status": "ok",
         "accounts": status["active"],
@@ -265,6 +273,7 @@ def health_check(request: Request):
         "account_selection": pool.get_selection_summary(),
         "governance": pool.get_governance_summary(),
         "notion_admission": get_notion_admission_controller().snapshot(),
+        "history": history_contract,
     }
 
 

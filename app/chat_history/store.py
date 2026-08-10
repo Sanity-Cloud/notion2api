@@ -17,6 +17,7 @@ from app.chat_history.extractor import (
 )
 from app.chat_history.lossless_archive import (
     advance_sync_cursor,
+    archive_schema_is_current,
     begin_sync_run,
     ensure_archive_schema,
     finish_sync_run,
@@ -473,7 +474,13 @@ class ChatHistoryStore:
         self.account_key = str(account_key or "").strip()
         self.db_path = db_path or get_default_chat_history_db_path(self.account_key or None)
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
+        existing_store = os.path.isfile(self.db_path) and os.path.getsize(self.db_path) > 0
         with self._conn() as conn:
+            if existing_store and not archive_schema_is_current(conn):
+                raise RuntimeError(
+                    "existing chat-history schema requires controlled activation; "
+                    "run scripts/activate_chat_history_schema.py before starting the runtime"
+                )
             conn.executescript(DDL)
             _ensure_chat_message_columns(conn)
             ensure_archive_schema(conn)
@@ -554,6 +561,7 @@ class ChatHistoryStore:
         account_key: str | None = None,
         source_kind: str | None = None,
         source_endpoint: str | None = None,
+        sync_run_id: str | None = None,
     ) -> dict[str, int]:
         threads = bundle.get("threads", {})
         messages = bundle.get("messages", {})
@@ -710,6 +718,7 @@ class ChatHistoryStore:
                     raw=raw_record.get("raw") or {},
                     source_kind=str(raw_record.get("source_kind") or source_kind or "bundle"),
                     source_endpoint=str(raw_record.get("source_endpoint") or source_endpoint or "") or None,
+                    sync_run_id=sync_run_id,
                 )
                 if inserted:
                     result["raw_records_inserted"] += 1
@@ -731,6 +740,7 @@ class ChatHistoryStore:
                     raw=record.get("raw_wrapper") or record.get("raw") or {},
                     source_kind=source_kind or "bundle",
                     source_endpoint=source_endpoint,
+                    sync_run_id=sync_run_id,
                 )
                 semantic_result = persist_thread_message_record(
                     conn,
@@ -1114,6 +1124,8 @@ class ChatHistoryStore:
         workspace_id: str | None = None,
         account_key: str | None = None,
         allow_advance: bool = True,
+        expected_cursor_value: str | None = None,
+        enforce_expected_cursor: bool = False,
     ) -> bool:
         account, workspace, _user = self._ownership(workspace_id=workspace_id, account_key=account_key)
         with self._conn() as conn:
@@ -1126,6 +1138,8 @@ class ChatHistoryStore:
                 cursor_value=cursor_value,
                 sync_run_id=sync_run_id,
                 allow_advance=allow_advance,
+                expected_cursor_value=expected_cursor_value,
+                enforce_expected_cursor=enforce_expected_cursor,
             )
             conn.commit()
             return advanced
