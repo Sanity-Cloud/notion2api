@@ -17,6 +17,7 @@ from app.chat_history.extractor import (
 )
 from app.chat_history.lossless_archive import (
     advance_sync_cursor,
+    archive_schema_is_current,
     begin_sync_run,
     ensure_archive_schema,
     finish_sync_run,
@@ -473,7 +474,13 @@ class ChatHistoryStore:
         self.account_key = str(account_key or "").strip()
         self.db_path = db_path or get_default_chat_history_db_path(self.account_key or None)
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
+        existing_store = os.path.isfile(self.db_path) and os.path.getsize(self.db_path) > 0
         with self._conn() as conn:
+            if existing_store and not archive_schema_is_current(conn):
+                raise RuntimeError(
+                    "existing chat-history schema requires controlled activation; "
+                    "run scripts/activate_chat_history_schema.py before starting the runtime"
+                )
             conn.executescript(DDL)
             _ensure_chat_message_columns(conn)
             ensure_archive_schema(conn)

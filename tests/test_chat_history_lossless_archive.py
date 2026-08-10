@@ -17,6 +17,7 @@ from app.chat_history.lossless_archive import (
     persist_thread_message_record,
 )
 from app.chat_history.notion_sync import sync_chat_history_from_notion
+from app.chat_history.schema_activation import activate_shard
 from app.chat_history.store import ChatHistoryStore
 from app.conversation import ConversationManager
 
@@ -651,6 +652,10 @@ def test_store_additively_upgrades_legacy_schema_without_losing_rows(tmp_path):
     conn.commit()
     conn.close()
 
+    with pytest.raises(RuntimeError, match="controlled activation"):
+        ChatHistoryStore(str(db_path), account_key="alpha")
+
+    activate_shard(db_path, backup_dir=tmp_path / "legacy-backup", timeout_seconds=2.0)
     ChatHistoryStore(str(db_path), account_key="alpha")
 
     conn = sqlite3.connect(db_path)
@@ -662,6 +667,76 @@ def test_store_additively_upgrades_legacy_schema_without_losing_rows(tmp_path):
     assert {"raw_notion_records", "notion_thread_messages", "sync_runs", "reconciliation_events"} <= tables
     conn.close()
 
+
+def test_controlled_schema_activation_backs_up_and_preserves_existing_history(tmp_path):
+    db_path = tmp_path / "account-history.db"
+    backup_dir = tmp_path / "backups"
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    conn.execute(
+        """
+        CREATE TABLE raw_notion_records (
+          account_key TEXT NOT NULL, workspace_id TEXT NOT NULL, notion_user_id TEXT,
+          table_name TEXT NOT NULL, record_id TEXT NOT NULL, version INTEGER NOT NULL,
+          last_version INTEGER, raw_json TEXT NOT NULL, content_hash TEXT,
+          source_kind TEXT, source_endpoint TEXT, retrieved_at INTEGER NOT NULL,
+          imported_at INTEGER NOT NULL,
+          PRIMARY KEY (account_key, workspace_id, table_name, record_id, version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO raw_notion_records VALUES
+        ('fixture','fixture-space','fixture-user','thread_message','fixture-message',1,
+         NULL,'{"id":"fixture-message","text":"neutral"}','fixture-hash',
+         'fixture','fixture-endpoint',1,1)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    receipt = activate_shard(db_path, backup_dir=backup_dir, timeout_seconds=2.0)
+
+    assert receipt["integrity_check"] == "ok"
+    assert receipt["backup_integrity_check"] == "ok"
+    assert receipt["pre_state"]["canonical_raw_hash"] == receipt["post_state"][
+        "canonical_raw_hash"
+    ]
+    assert receipt["post_state"]["counts"]["raw_notion_record_observations"] == 0
+    assert (backup_dir / receipt["backup_filename"]).is_file()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute(
+            "SELECT value FROM chat_history_archive_meta WHERE key='history_schema_version'"
+        ).fetchone()[0] == "2"
+        assert conn.execute("SELECT COUNT(*) FROM raw_notion_records").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM raw_notion_record_observations"
+        ).fetchone()[0] == 0
+
+    second_receipt = activate_shard(db_path, backup_dir=backup_dir, timeout_seconds=2.0)
+    assert second_receipt["status"] == "already_active"
+    assert "backup_filename" not in second_receipt
+
+
+@pytest.mark.parametrize(
+    "damage_sql",
+    [
+        "DROP TABLE sync_cursors",
+        "ALTER TABLE notion_message_parts DROP COLUMN projected_at",
+        "DROP INDEX idx_sync_runs_account_started",
+    ],
+)
+def test_runtime_refuses_partially_activated_archive_schema(tmp_path, damage_sql):
+    db_path = tmp_path / "damaged-current.db"
+    ChatHistoryStore(str(db_path), account_key="alpha")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(damage_sql)
+        conn.commit()
+
+    with pytest.raises(RuntimeError, match="controlled activation"):
+        ChatHistoryStore(str(db_path), account_key="alpha")
 
 def test_conversation_binding_generation_and_ownership(tmp_path):
     manager = ConversationManager(str(tmp_path / "conversations.db"))
