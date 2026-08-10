@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from app.account_scope import canonical_account_key  # noqa: E402
 from app.chat_history.schema_activation import (  # noqa: E402
+    absent_shard_receipt,
     activate_shard,
     write_activation_receipt,
 )
@@ -70,13 +71,16 @@ def main() -> int:
     write_activation_receipt(receipts, status="in_progress", **receipt_args)
     try:
         for target in targets:
-            receipts.append(
-                activate_shard(
-                    target,
-                    backup_dir=args.backup_dir,
-                    timeout_seconds=args.timeout_seconds,
+            if target.exists():
+                receipts.append(
+                    activate_shard(
+                        target,
+                        backup_dir=args.backup_dir,
+                        timeout_seconds=args.timeout_seconds,
+                    )
                 )
-            )
+            else:
+                receipts.append(absent_shard_receipt(target))
             write_activation_receipt(receipts, status="in_progress", **receipt_args)
     except Exception as exc:
         write_activation_receipt(

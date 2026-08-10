@@ -87,6 +87,24 @@ def _state(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def absent_shard_receipt(db_path: str | Path) -> dict[str, Any]:
+    """Receipt a governed shard target that has not been materialized yet."""
+    source_path = Path(db_path).resolve()
+    if source_path.suffix.lower() != ".db":
+        raise ValueError("activation target must have a .db suffix")
+    if source_path.exists():
+        raise ValueError("absent-shard receipt requires a missing target")
+    return {
+        "activation_contract_version": ACTIVATION_CONTRACT_VERSION,
+        "status": "not_present",
+        "shard_id": _opaque_id("history-shard", str(source_path)),
+        "history_schema_version": HISTORY_SCHEMA_VERSION,
+        "history_schema_hash": history_schema_hash(),
+        "history_schema_hash_scope": "declared_contract",
+        "activated_at": int(time.time()),
+    }
+
+
 def activate_shard(
     db_path: str | Path,
     *,

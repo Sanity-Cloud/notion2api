@@ -17,7 +17,7 @@ from app.chat_history.lossless_archive import (
     persist_thread_message_record,
 )
 from app.chat_history.notion_sync import sync_chat_history_from_notion
-from app.chat_history.schema_activation import activate_shard
+from app.chat_history.schema_activation import absent_shard_receipt, activate_shard
 from app.chat_history.store import ChatHistoryStore
 from app.conversation import ConversationManager
 
@@ -737,6 +737,14 @@ def test_runtime_refuses_partially_activated_archive_schema(tmp_path, damage_sql
 
     with pytest.raises(RuntimeError, match="controlled activation"):
         ChatHistoryStore(str(db_path), account_key="alpha")
+
+
+def test_absent_governed_shard_is_receipted_without_creating_it(tmp_path):
+    db_path = tmp_path / "not-yet-materialized.db"
+    receipt = absent_shard_receipt(db_path)
+    assert receipt["status"] == "not_present"
+    assert len(receipt["shard_id"]) == 24
+    assert not db_path.exists()
 
 def test_conversation_binding_generation_and_ownership(tmp_path):
     manager = ConversationManager(str(tmp_path / "conversations.db"))
