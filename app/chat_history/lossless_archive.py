@@ -11,6 +11,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from functools import lru_cache
 from typing import Any
 
 from app.chat_history.contracts import (
@@ -184,13 +185,73 @@ def coerce_version(value: Any) -> int | None:
 
 
 def ensure_archive_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(ARCHIVE_DDL)
+    _execute_ddl(conn, ARCHIVE_DDL)
     _ensure_projection_lineage_columns(conn)
-    conn.executescript(ARCHIVE_INDEX_DDL)
+    _execute_ddl(conn, ARCHIVE_INDEX_DDL)
     conn.execute(
         "INSERT OR REPLACE INTO chat_history_archive_meta(key,value) VALUES('history_schema_version',?)",
         (str(HISTORY_SCHEMA_VERSION),),
     )
+
+
+def archive_schema_is_current(conn: sqlite3.Connection) -> bool:
+    """Return whether the additive archive contract is already activated."""
+    required_columns, required_indexes = _expected_archive_shape()
+    existing_tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if not set(required_columns) <= existing_tables:
+        return False
+    version_row = conn.execute(
+        "SELECT value FROM chat_history_archive_meta WHERE key='history_schema_version'"
+    ).fetchone()
+    if version_row is None or str(version_row[0]) != str(HISTORY_SCHEMA_VERSION):
+        return False
+    for table_name, expected_columns in required_columns.items():
+        if not expected_columns <= _table_columns(conn, table_name):
+            return False
+    existing_indexes = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+        ).fetchall()
+    }
+    return required_indexes <= existing_indexes
+
+
+@lru_cache(maxsize=1)
+def _expected_archive_shape() -> tuple[dict[str, set[str]], set[str]]:
+    """Derive the required additive shape from the authoritative DDL itself."""
+    expected = sqlite3.connect(":memory:")
+    try:
+        ensure_archive_schema(expected)
+        table_names = {
+            str(row[0])
+            for row in expected.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        columns = {name: _table_columns(expected, name) for name in table_names}
+        indexes = {
+            str(row[0])
+            for row in expected.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+            ).fetchall()
+        }
+        return columns, indexes
+    finally:
+        expected.close()
+
+
+def _execute_ddl(conn: sqlite3.Connection, ddl: str) -> None:
+    """Execute this module's simple DDL without ending a caller-owned transaction."""
+    for statement in ddl.split(";"):
+        statement = statement.strip()
+        if statement:
+            conn.execute(statement)
 
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
