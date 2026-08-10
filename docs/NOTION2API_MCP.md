@@ -72,7 +72,9 @@ Continue an existing chat with any authoritative identifier:
 
 The model may change on a later turn without changing the local conversation or remote Notion chat. Results expose the local `conversation_id`, the durable `remote_chat_id`/`notion_thread_id`, and the pollable `request_id`.
 
-Chat requests return `pending` immediately. Poll `notion2api_get_chat_job` for the visible response, bounded activity summary, checklist/task state, poll count, and stall indicators. Raw private reasoning is not persisted. A stalled job reports `dead_loop_suspected` and `cancel_recommended`; cancel it explicitly with `notion2api_cancel_chat_job` or set `cancel_if_stalled=true` while polling.
+Chat requests return `pending` immediately. Poll `notion2api_get_chat_job` for the visible response, bounded activity summary, checklist/task state, poll count, and stall indicators. Raw private reasoning is not persisted. A process-local watchdog also reconciles active jobs and persists bounded monitoring state even when no client is polling. A stalled job reports `dead_loop_suspected` and `cancel_recommended`; cancel it explicitly with `notion2api_cancel_chat_job` or set `cancel_if_stalled=true` while polling.
+
+Cancellation is deliberately fail-closed. Cancelling an MCP job records the local task cancellation request, the pre-cancel stall evidence, and `reconciliation_required=true` while the upstream Notion outcome is unconfirmed. Local `asyncio` cancellation is **not** represented as proof that Notion stopped. If a terminal assistant turn is observed later, the job remains `cancelled` but records `late_completion_detected=true`, `upstream_execution_state=terminal`, and clears the reconciliation gap. Cancelled, stale, errored, and quarantined jobs are not projected as authoritative answers. Do not start replacement mutation work while `reconciliation_required=true`.
 
 ## Notion AI modes, tasks, sources, and personalization
 
