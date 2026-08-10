@@ -45,6 +45,15 @@ KNOWN_STEP_TYPES = HIDDEN_MESSAGE_TYPES | {
     "updated-config",
     "workflow",
 }
+KNOWN_INFERENCE_PART_TYPES = {
+    "text",
+    "citation",
+    "file",
+    "image",
+    "search-result",
+    "tool-call",
+    "tool-result",
+}
 VERSION_FIELDS = ("version", "last_version", "lastVersion")
 HYDRATION_SCAN_FIELDS = (
     "recordMap",
@@ -266,6 +275,70 @@ def record_versions(raw: Any, value: dict[str, Any] | None = None) -> tuple[int 
     return version, last_version
 
 
+def _normalization_warnings(
+    *,
+    raw: Any,
+    value: dict[str, Any],
+    resolved_id_was_synthetic: bool,
+    step_type: str,
+    thread_id: str | None,
+    visible: bool,
+    role_was_inferred: bool,
+    version: int | None,
+    parts: list[dict[str, Any]],
+) -> list[str]:
+    """Describe parser decisions while the original Notion shape is available."""
+    warnings: list[str] = []
+
+    wrapper_depth = 0
+    current = raw
+    while isinstance(current, dict) and isinstance(current.get("value"), dict):
+        if current is value:
+            break
+        wrapper_depth += 1
+        current = current["value"]
+        if wrapper_depth >= 8:
+            break
+    if wrapper_depth > 2:
+        warnings.append("future_wrapper_nesting")
+
+    version_values: set[int] = set()
+    last_version_values: set[int] = set()
+    current = raw
+    for _depth in range(8):
+        if not isinstance(current, dict):
+            break
+        candidate = _coerce_version(current.get("version"))
+        if candidate is not None:
+            version_values.add(candidate)
+        for key in ("last_version", "lastVersion"):
+            candidate = _coerce_version(current.get(key))
+            if candidate is not None:
+                last_version_values.add(candidate)
+        nested = current.get("value")
+        if not isinstance(nested, dict) or nested is current:
+            break
+        current = nested
+    if len(version_values) > 1 or len(last_version_values) > 1:
+        warnings.append("conflicting_version_fields")
+
+    if version is None:
+        warnings.append("unknown_version")
+    if resolved_id_was_synthetic:
+        warnings.append("synthetic_message_id")
+    if step_type == "unknown" or step_type not in KNOWN_STEP_TYPES:
+        warnings.append("unknown_step_type")
+    if any(str(part.get("part_type") or "unknown") not in KNOWN_INFERENCE_PART_TYPES for part in parts):
+        warnings.append("unsupported_inference_part_type")
+    if not thread_id:
+        warnings.append("missing_thread_reference")
+    if role_was_inferred:
+        warnings.append("semantic_role_inferred")
+    if step_type in {"agent-inference", "user"} and not visible:
+        warnings.append("not_displayable")
+    return warnings
+
+
 def extract_message_parts(value: dict[str, Any]) -> list[dict[str, Any]]:
     """Preserve ordinal + part_type + raw/text for agent-inference.value[] (and similar)."""
     step = step_payload(value)
@@ -350,11 +423,17 @@ def normalize_thread_message_record(
                 if text:
                     break
     role = visible_message_role(value)
+    explicit_role_fields = ("role", "author_role", "authorRole")
+    explicit_role = _first_str(value, explicit_role_fields) or _first_str(
+        step, explicit_role_fields
+    )
     visible = bool(text and role is not None)
+    resolved_id_was_synthetic = False
     if not resolved_id:
         if not (text or step_type != "unknown"):
             return None
         resolved_id = _synthetic_message_id(fallback_thread_id, text or step_type)
+        resolved_id_was_synthetic = True
     thread_id = (
         _first_str(value, THREAD_ID_FIELDS)
         or _first_str(step, THREAD_ID_FIELDS)
@@ -373,6 +452,18 @@ def normalize_thread_message_record(
     trace_id = str(model_metadata.get("trace_id") or "") or (
         _first_scalar_text(step, ("traceId", "trace_id")) or ""
     )
+    parts = extract_message_parts(value)
+    normalization_warnings = _normalization_warnings(
+        raw=raw,
+        value=value,
+        resolved_id_was_synthetic=resolved_id_was_synthetic,
+        step_type=step_type,
+        thread_id=thread_id,
+        visible=visible,
+        role_was_inferred=bool(role and not explicit_role),
+        version=version,
+        parts=parts,
+    )
     return {
         "id": str(resolved_id),
         "thread_id": thread_id,
@@ -384,13 +475,17 @@ def normalize_thread_message_record(
         "created_time": created_at or value.get("created_time") or value.get("createdTime"),
         "version": version,
         "last_version": last_version,
-        "parts": extract_message_parts(value),
+        "parts": parts,
         "actual_model": model_metadata.get("actual_model"),
         "model_provider": model_metadata.get("model_provider"),
         "notion_model_name": model_metadata.get("notion_model_name"),
         "model_metadata": model_metadata,
         "inference_id": inference_id or None,
         "trace_id": trace_id or None,
+        "normalization_outcome": (
+            "normalized_with_warnings" if normalization_warnings else "normalized"
+        ),
+        "normalization_warnings": normalization_warnings,
         "raw": value,
         "raw_wrapper": raw if isinstance(raw, dict) else {"value": value},
     }

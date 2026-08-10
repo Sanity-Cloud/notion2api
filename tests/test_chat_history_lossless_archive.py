@@ -1,5 +1,8 @@
 import json
 import sqlite3
+import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,15 +10,18 @@ from app.chat_history.extractor import (
     normalize_thread_message_record,
     visible_transcript_message,
 )
+from app.chat_history.contracts import runtime_history_contract
 from app.chat_history.lossless_archive import (
     ensure_archive_schema,
-    mark_server_omission,
     persist_raw_record,
     persist_thread_message_record,
 )
 from app.chat_history.notion_sync import sync_chat_history_from_notion
 from app.chat_history.store import ChatHistoryStore
 from app.conversation import ConversationManager
+
+
+DRIFT_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "notion-chat-history-drift.json"
 
 
 def _semantic_record(
@@ -40,6 +46,80 @@ def _semantic_record(
     record = normalize_thread_message_record(message_id, raw, fallback_thread_id=thread_id)
     assert record is not None
     return record
+
+
+def test_sanitized_notion_drift_fixture_contract_and_parser_warnings():
+    fixture_text = DRIFT_FIXTURE_PATH.read_text(encoding="utf-8")
+    lowered = fixture_text.lower()
+    for forbidden in (
+        "token_v2",
+        "authorization",
+        "cookie",
+        "password",
+        "api_key",
+        "user_email",
+        "@example.",
+        "@gmail.",
+    ):
+        assert forbidden not in lowered
+
+    fixture = json.loads(fixture_text)
+    assert fixture["fixture_contract"] == "synthetic-notion-chat-history-drift-v1"
+    assert len(fixture["cases"]) >= 8
+    for case in fixture["cases"]:
+        record = normalize_thread_message_record(case["message_id"], case["raw"])
+        assert record is not None, case["name"]
+        assert record["visible"] is case["expected_visible"], case["name"]
+        assert set(record["normalization_warnings"]) >= set(
+            case["expected_warnings"]
+        ), case["name"]
+
+
+def test_health_handler_exposes_bounded_history_contract(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "NOTION_ADMISSION_DB_PATH", str(tmp_path / "admission" / "admission.db")
+    )
+    from app.server import health_check
+
+    receipt_commit = "6ec66fdab5c7fc6b85ac9ffc790ebc93b0429e55"
+    monkeypatch.setenv("NOTION2API_BUILD_COMMIT", receipt_commit)
+    monkeypatch.setattr("app.server.get_chat_history_db_root", lambda: str(tmp_path / "history"))
+    monkeypatch.setattr(
+        "app.server.get_notion_admission_controller",
+        lambda: SimpleNamespace(snapshot=lambda: {"status": "fixture"}),
+    )
+
+    class FakePool:
+        def get_status_summary(self):
+            return {"active": 1, "total": 1, "cooling": 0}
+
+        def get_selection_summary(self):
+            return {"strategy": "fixture"}
+
+        def get_governance_summary(self):
+            return {"contract": "fixture"}
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                start_time=time.time() - 5,
+                account_pool=FakePool(),
+                conversation_manager=SimpleNamespace(
+                    db_path=str(tmp_path / "private" / "conversations.db")
+                ),
+            )
+        )
+    )
+    response = health_check(request)
+    history = response["history"]
+
+    assert history["build_commit"] == receipt_commit
+    assert history["history_schema_hash_scope"] == "declared_contract"
+    assert history["live_server_archive_mode"] == "reconciliation_only"
+    assert len(history["conversation_store_id"]) == 24
+    assert len(history["history_store_id"]) == 24
+    assert "private" not in repr(history).lower()
+    assert "conversations.db" not in repr(history).lower()
 
 
 def test_hidden_step_is_retained_but_not_visible():
@@ -171,6 +251,198 @@ def test_duplicate_raw_ingestion_is_idempotent():
     assert conn.execute("SELECT COUNT(*) FROM raw_notion_records").fetchone()[0] == 1
 
 
+@pytest.mark.parametrize("version", [7, None])
+def test_distinct_payloads_survive_under_same_resolved_version(version):
+    conn = sqlite3.connect(":memory:")
+    ensure_archive_schema(conn)
+    kwargs = dict(
+        account_key="alpha",
+        workspace_id="ws",
+        notion_user_id="user",
+        table_name="thread_message",
+        record_id="edited-message",
+        version=version,
+        last_version=None,
+        source_kind="notion_server",
+        source_endpoint="syncRecordValuesSpaceInitial",
+    )
+
+    assert persist_raw_record(conn, **kwargs, raw={"id": "edited-message", "text": "A"})
+    assert persist_raw_record(conn, **kwargs, raw={"id": "edited-message", "text": "B"})
+    assert not persist_raw_record(conn, **kwargs, raw={"id": "edited-message", "text": "B"})
+
+    resolved_version = 7 if version == 7 else -1
+    observations = conn.execute(
+        """
+        SELECT raw_json FROM raw_notion_record_observations
+        WHERE account_key='alpha' AND workspace_id='ws' AND record_id='edited-message'
+          AND version=? ORDER BY content_hash
+        """,
+        (resolved_version,),
+    ).fetchall()
+    canonical = conn.execute(
+        """
+        SELECT raw_json FROM raw_notion_records
+        WHERE account_key='alpha' AND workspace_id='ws' AND record_id='edited-message'
+          AND version=?
+        """,
+        (resolved_version,),
+    ).fetchone()
+    assert len(observations) == 2
+    assert json.loads(canonical[0])["text"] == "B"
+
+
+def test_observations_preserve_account_workspace_and_sync_run_provenance():
+    conn = sqlite3.connect(":memory:")
+    ensure_archive_schema(conn)
+    for account_key, workspace_id, sync_run_id in (
+        ("alpha", "ws-a", "run-a"),
+        ("beta", "ws-b", "run-b"),
+    ):
+        assert persist_raw_record(
+            conn,
+            account_key=account_key,
+            workspace_id=workspace_id,
+            notion_user_id=f"user-{account_key}",
+            table_name="thread_message",
+            record_id="same-message",
+            version=3,
+            last_version=2,
+            raw={"id": "same-message", "version": 3},
+            sync_run_id=sync_run_id,
+        )
+
+    rows = conn.execute(
+        """
+        SELECT account_key, workspace_id, sync_run_id
+        FROM raw_notion_record_observations ORDER BY account_key
+        """
+    ).fetchall()
+    assert rows == [("alpha", "ws-a", "run-a"), ("beta", "ws-b", "run-b")]
+
+
+def test_schema_activation_does_not_backfill_existing_raw_records():
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE raw_notion_records (
+          account_key TEXT NOT NULL, workspace_id TEXT NOT NULL, notion_user_id TEXT,
+          table_name TEXT NOT NULL, record_id TEXT NOT NULL, version INTEGER NOT NULL,
+          last_version INTEGER, raw_json TEXT NOT NULL, content_hash TEXT,
+          source_kind TEXT, source_endpoint TEXT, retrieved_at INTEGER NOT NULL,
+          imported_at INTEGER NOT NULL,
+          PRIMARY KEY (account_key, workspace_id, table_name, record_id, version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO raw_notion_records VALUES
+        ('alpha','ws','user','thread_message','legacy',1,NULL,'{}',NULL,NULL,NULL,1,1)
+        """
+    )
+
+    ensure_archive_schema(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM raw_notion_records").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM raw_notion_record_observations").fetchone()[0] == 0
+
+
+def test_raw_observation_and_canonical_write_roll_back_with_semantic_failure(
+    tmp_path, monkeypatch
+):
+    store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
+    record = _semantic_record("atomic-message", version=1)
+
+    def fail_semantic_write(*_args, **_kwargs):
+        raise RuntimeError("semantic write failed")
+
+    monkeypatch.setattr(
+        "app.chat_history.store.persist_thread_message_record", fail_semantic_write
+    )
+    with pytest.raises(RuntimeError, match="semantic write failed"):
+        store.upsert_bundle(
+            {"threads": {}, "messages": {}, "thread_messages": {record["id"]: record}},
+            workspace_id="ws",
+            notion_user_id="user",
+            account_key="alpha",
+            sync_run_id="run-atomic",
+        )
+
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM raw_notion_records").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM raw_notion_record_observations").fetchone()[0] == 0
+
+
+def test_parser_warnings_are_persisted_with_projection():
+    raw = {
+        "value": {
+            "value": {
+                "value": {
+                    "version": 1,
+                    "step": {
+                        "type": "future-step",
+                        "value": [{"type": "future-part", "content": {"opaque": True}}],
+                    },
+                }
+            }
+        }
+    }
+    record = normalize_thread_message_record(None, raw)
+    assert record is not None
+    assert set(record["normalization_warnings"]) >= {
+        "future_wrapper_nesting",
+        "synthetic_message_id",
+        "unknown_step_type",
+        "unsupported_inference_part_type",
+        "missing_thread_reference",
+    }
+
+    conn = sqlite3.connect(":memory:")
+    ensure_archive_schema(conn)
+    persist_raw_record(
+        conn,
+        account_key="alpha",
+        workspace_id="ws",
+        notion_user_id="user",
+        table_name="thread_message",
+        record_id=record["id"],
+        version=record["version"],
+        last_version=record["last_version"],
+        raw=record["raw_wrapper"],
+    )
+    persist_thread_message_record(
+        conn,
+        account_key="alpha",
+        workspace_id="ws",
+        notion_user_id="user",
+        record=record,
+    )
+    row = conn.execute(
+        """
+        SELECT normalization_outcome, normalization_warnings_json
+        FROM notion_thread_messages
+        """
+    ).fetchone()
+    assert row[0] == "normalized_with_warnings"
+    assert set(json.loads(row[1])) == set(record["normalization_warnings"])
+
+
+def test_semantic_projection_rejects_missing_source_observation():
+    record = _semantic_record("orphan-message", version=1)
+    conn = sqlite3.connect(":memory:")
+    ensure_archive_schema(conn)
+
+    with pytest.raises(ValueError, match="exact archived source observation"):
+        persist_thread_message_record(
+            conn,
+            account_key="alpha",
+            workspace_id="ws",
+            notion_user_id="user",
+            record=record,
+        )
+
+
 def test_version_aware_freshness_requires_rehydrate_for_newer_server_version(tmp_path):
     store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
     record = _semantic_record("versioned-message", version=1)
@@ -292,6 +564,46 @@ def test_partial_sync_does_not_advance_existing_checkpoint(tmp_path):
     assert store.get_sync_cursor(
         "inference_transcripts", workspace_id="ws", account_key="alpha"
     ) == "cursor-old"
+
+
+def test_stale_concurrent_sync_cannot_overwrite_newer_checkpoint(tmp_path):
+    store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
+    assert store.advance_sync_cursor(
+        "inference_transcripts",
+        "cursor-old",
+        workspace_id="ws",
+        account_key="alpha",
+    )
+    # Both runs began from cursor-old, but only the first writer may advance.
+    assert store.advance_sync_cursor(
+        "inference_transcripts",
+        "cursor-new",
+        workspace_id="ws",
+        account_key="alpha",
+        sync_run_id="run-winner",
+        expected_cursor_value="cursor-old",
+        enforce_expected_cursor=True,
+    )
+    assert not store.advance_sync_cursor(
+        "inference_transcripts",
+        "cursor-stale",
+        workspace_id="ws",
+        account_key="alpha",
+        sync_run_id="run-stale",
+        expected_cursor_value="cursor-old",
+        enforce_expected_cursor=True,
+    )
+    assert store.get_sync_cursor(
+        "inference_transcripts", workspace_id="ws", account_key="alpha"
+    ) == "cursor-new"
+    with sqlite3.connect(store.db_path) as conn:
+        event = conn.execute(
+            """
+            SELECT event_type FROM reconciliation_events
+            WHERE sync_run_id='run-stale'
+            """
+        ).fetchone()
+    assert event == ("checkpoint_stale_writer_rejected",)
 
 
 def test_server_omission_marks_tombstone_without_deleting_archive(tmp_path):
@@ -701,11 +1013,113 @@ def test_sync_hydrates_metadata_threads_before_messages_and_parses_live_wrappers
         ("user", 1, "question"),
         ("agent-inference", 2, "answer"),
     ]
+    with sqlite3.connect(store.db_path) as conn:
+        unmatched = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM notion_thread_messages AS message
+            LEFT JOIN raw_notion_record_observations AS observation
+              ON observation.account_key=message.account_key
+             AND observation.workspace_id=message.workspace_id
+             AND observation.table_name='thread_message'
+             AND observation.record_id=message.message_id
+             AND observation.version=message.version
+             AND observation.content_hash=message.source_content_hash
+            WHERE observation.content_hash IS NULL
+            """
+        ).fetchone()[0]
+    assert unmatched == 0
     assert [
         {request["pointer"]["table"] for request in payload.get("requests", [])}
         for url, payload in calls
         if "syncRecordValuesSpaceInitial" in url
     ] == [{"thread"}, {"thread_message"}]
+
+
+def test_sync_run_is_partial_when_checkpoint_cas_rejects_writer(monkeypatch, tmp_path):
+    class FakeClient:
+        space_id = "ws"
+        user_id = "user"
+        account_key = "alpha"
+
+    monkeypatch.setattr(
+        "app.chat_history.notion_sync._post_json",
+        lambda *_args, **_kwargs: {"nextCursor": "cursor-new", "hasMore": False},
+    )
+    store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
+    monkeypatch.setattr(store, "advance_sync_cursor", lambda *_args, **_kwargs: False)
+
+    bundle = sync_chat_history_from_notion(
+        FakeClient(), max_pages=1, store=store, persist=True
+    )
+
+    sync_run_id = bundle["sync_summary"]["sync_run_id"]
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            "SELECT status, checkpoint_advanced, metrics_json FROM sync_runs WHERE sync_run_id=?",
+            (sync_run_id,),
+        ).fetchone()
+    assert row[0:2] == ("partial", 0)
+    assert json.loads(row[2])["checkpoint_rejected"] is True
+
+
+def test_sync_surfaces_completion_ledger_failure(monkeypatch, tmp_path):
+    class FakeClient:
+        space_id = "ws"
+        user_id = "user"
+        account_key = "alpha"
+
+    monkeypatch.setattr(
+        "app.chat_history.notion_sync._post_json",
+        lambda *_args, **_kwargs: {"nextCursor": "cursor-new", "hasMore": False},
+    )
+    store = ChatHistoryStore(str(tmp_path / "history.db"), account_key="alpha")
+    monkeypatch.setattr(
+        store,
+        "finish_sync_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ledger unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="sync_run_finish_failed: ledger unavailable"):
+        sync_chat_history_from_notion(
+            FakeClient(), max_pages=1, store=store, persist=True
+        )
+
+
+def test_runtime_history_contract_is_secret_safe_and_receipt_bound(tmp_path, monkeypatch):
+    monkeypatch.delenv("NOTION2API_BUILD_COMMIT", raising=False)
+    monkeypatch.setenv("BUILD_COMMIT", "ambient-must-not-be-used")
+    conversation_path = tmp_path / "private" / "conversations.db"
+    history_root = tmp_path / "private" / "chat_history"
+
+    unverified = runtime_history_contract(
+        conversation_store_path=conversation_path,
+        history_store_root=history_root,
+        history_schema_hash="schema-hash",
+    )
+    assert unverified["runtime_contract_version"] == 1
+    assert unverified["build_commit"] == "unverified"
+    assert unverified["live_server_archive_mode"] == "reconciliation_only"
+    assert str(conversation_path.resolve()) not in repr(unverified)
+    assert str(history_root.resolve()) not in repr(unverified)
+
+    monkeypatch.setenv("NOTION2API_BUILD_COMMIT", "not-a-git-commit-or-receipt")
+    malformed = runtime_history_contract(
+        conversation_store_path=conversation_path,
+        history_store_root=history_root,
+        history_schema_hash="schema-hash",
+    )
+    assert malformed["build_commit"] == "unverified"
+
+    receipt_commit = "6ec66fdab5c7fc6b85ac9ffc790ebc93b0429e55"
+    monkeypatch.setenv("NOTION2API_BUILD_COMMIT", receipt_commit)
+    verified = runtime_history_contract(
+        conversation_store_path=conversation_path,
+        history_store_root=history_root,
+        history_schema_hash="schema-hash",
+    )
+    assert verified["build_commit"] == receipt_commit
+    assert verified["history_schema_hash_scope"] == "declared_contract"
 
 
 def test_sync_uses_bound_store_account_key_over_noncanonical_client_key(monkeypatch, tmp_path):
