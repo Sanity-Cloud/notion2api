@@ -379,6 +379,10 @@ def test_shared_weight_bucket_uses_exact_fixed_point_boundaries(
             admission_weight=0.25,
         )
 
+    # This assertion targets fixed-point consumption, not elapsed-time refill.
+    # Freeze the shared store's wall clock so a loaded test host cannot add one
+    # or more refill units while the eight acquisitions are running.
+    monkeypatch.setattr("app.notion_admission_store.time.time", lambda: 1_900_000_000.0)
     database = tmp_path / "fixed-point.sqlite3"
     controller = NotionAdmissionController(
         shared_store=SharedAdmissionStore(database)

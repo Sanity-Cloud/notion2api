@@ -62,6 +62,7 @@ debug_*.py
 # every other untracked test artifact ignored.
 !tests/
 tests/*
+!tests/test_usage_quotas.py
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/notion-chat-history-drift.json
@@ -69,6 +70,7 @@ tests/fixtures/*
 # Claude Code local settings
 .claude/settings.local.json
 .claude/worktrees/
+.codex-test-tmp/
 
 # Docker (Optional to ignore if you want to keep configs in git, usually we keep them)
 # But we definitely ignore local-specific overrides

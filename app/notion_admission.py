@@ -14,7 +14,10 @@ from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
 from app.notion_admission_store import SharedAdmissionStore
-from app.notion_request_telemetry import NotionRequestTelemetryStore
+from app.notion_request_telemetry import (
+    NotionRequestTelemetryStore,
+    UsageQuotaExceededError,
+)
 
 
 class AdmissionError(RuntimeError):
@@ -747,18 +750,6 @@ class NotionAdmissionController:
                             throttled_seconds += sleep_for
                             self._condition.wait(timeout=sleep_for)
                             continue
-                        if bucket is not None:
-                            bucket.consume(now, admission_weight)
-                        self._account_queues[account_key].popleft()
-                        if not self._account_queues[account_key]:
-                            self._account_queues.pop(account_key, None)
-                        if thread_key:
-                            self._thread_queues[thread_key].popleft()
-                            if not self._thread_queues[thread_key]:
-                                self._thread_queues.pop(thread_key, None)
-                            self._thread_active.add(thread_key)
-                        self._account_inflight[account_key] += 1
-                        self._counters["admitted"] += 1
                         waited = max(0.0, self._clock() - started)
                         disposition = (
                             "throttled"
@@ -791,8 +782,23 @@ class NotionAdmissionController:
                         )
                         try:
                             _REQUEST_TELEMETRY.start(receipt.as_dict())
+                        except UsageQuotaExceededError:
+                            self._counters["quota_rejected"] += 1
+                            raise
                         except Exception:
                             self._counters["telemetry_start_failures"] += 1
+                        if bucket is not None:
+                            bucket.consume(now, admission_weight)
+                        self._account_queues[account_key].popleft()
+                        if not self._account_queues[account_key]:
+                            self._account_queues.pop(account_key, None)
+                        if thread_key:
+                            self._thread_queues[thread_key].popleft()
+                            if not self._thread_queues[thread_key]:
+                                self._thread_queues.pop(thread_key, None)
+                            self._thread_active.add(thread_key)
+                        self._account_inflight[account_key] += 1
+                        self._counters["admitted"] += 1
                         self._last_receipts.append(receipt.as_dict())
                         return AdmissionPermit(
                             self,
@@ -1271,6 +1277,11 @@ _GLOBAL_CONTROLLER = NotionAdmissionController()
 
 def get_notion_admission_controller() -> NotionAdmissionController:
     return _GLOBAL_CONTROLLER
+
+
+def get_notion_usage_store() -> NotionRequestTelemetryStore:
+    """Return the canonical durable usage/quota store used by admission."""
+    return _REQUEST_TELEMETRY
 
 
 def admitted_session(session: Any, owner: Any) -> AdmittedSession:
