@@ -20,6 +20,7 @@ from app.api.hive_workforce import router as hive_workforce_router
 from app.api.models import router as models_router
 from app.api.responses import router as responses_router
 from app.api.notion import router as notion_router
+from app.api.usage import router as usage_router
 from app.attachments.runtime_config import apply_attachment_runtime_config
 from app.config import (
     ALLOWED_ORIGINS,
@@ -37,6 +38,7 @@ from app.core.internal_callers import is_repo_ai_internal_request
 from app.limiter import limiter
 from app.logger import logger, setup_uvicorn_logging
 from app.notion_admission import get_notion_admission_controller
+from app.notion_request_telemetry import UsageQuotaExceededError
 
 
 apply_attachment_runtime_config()
@@ -143,6 +145,25 @@ def custom_rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded)
 app.add_exception_handler(RateLimitExceeded, custom_rate_limit_exceeded_handler)
 
 
+@app.exception_handler(UsageQuotaExceededError)
+async def usage_quota_exceeded_handler(request: Request, exc: UsageQuotaExceededError):
+    retry_after = max(1, int(exc.retry_after_seconds + 0.999))
+    return JSONResponse(
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+        content={
+            "error": {
+                "message": "Operational usage quota exceeded",
+                "type": "rate_limit_error",
+                "code": "usage_quota_exceeded",
+                "quota_id": exc.quota_id,
+                "dimension": exc.dimension,
+                "retry_after_seconds": retry_after,
+            }
+        },
+    )
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     if isinstance(exc.detail, dict):
@@ -246,6 +267,7 @@ app.include_router(features_router, prefix="/v1")
 app.include_router(hive_workforce_router, prefix="/v1")
 app.include_router(responses_router, prefix="/v1")
 app.include_router(notion_router, prefix="/v1")
+app.include_router(usage_router, prefix="/v1")
 
 
 # text
