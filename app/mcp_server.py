@@ -1713,13 +1713,18 @@ def _local_conversation_db_path() -> Path:
 
 def _runtime_audit(client: Notion2APIClient, requested_model: str) -> dict[str, Any]:
     root = Path(__file__).resolve().parents[1]
+    imported_history_path = Path(
+        os.getenv("CHAT_HISTORY_DB_PATH", str(root / "data" / "chat_history.db"))
+    )
+    if not imported_history_path.is_absolute():
+        imported_history_path = root / imported_history_path
     return {
         "requested_model": requested_model,
         "backend_base_url": client.base_url,
         "timeout_seconds": client.timeout,
         "session_state_path": str(DEFAULT_SESSION_STATE_PATH),
         "local_conversations_db": str(_local_conversation_db_path()),
-        "imported_history_db": str(root / "data" / "chat_history.db"),
+        "imported_history_db": str(imported_history_path),
     }
 
 

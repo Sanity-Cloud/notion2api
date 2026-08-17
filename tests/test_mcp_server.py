@@ -2310,3 +2310,13 @@ def test_mcp_outputs_promote_reasoning_effort_receipt():
     assert result["requested_reasoning_effort"] == "high"
     assert result["resolved_reasoning_effort"] == "high"
     assert result["reasoning_effort_source"] == "explicit"
+
+
+def test_runtime_audit_reports_configured_imported_history_path(monkeypatch, tmp_path):
+    configured = tmp_path / "isolated-history.db"
+    monkeypatch.setenv("CHAT_HISTORY_DB_PATH", str(configured))
+    client = type("Client", (), {"base_url": "http://127.0.0.1:8120", "timeout": 10})()
+
+    audit = mcp_server._runtime_audit(client, "terra")
+
+    assert audit["imported_history_db"] == str(configured)
