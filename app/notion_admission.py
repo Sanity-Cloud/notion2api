@@ -726,11 +726,6 @@ class NotionAdmissionController:
             try:
                 while True:
                     now = self._clock()
-                    if now >= deadline:
-                        self._counters["timeouts"] += 1
-                        raise AdmissionTimeoutError(
-                            f"Timed out waiting for Notion admission after {now - started:.3f}s"
-                        )
                     account_head = self._account_queues[account_key][0] == ticket
                     thread_head = (
                         not thread_key or self._thread_queues[thread_key][0] == ticket
@@ -749,6 +744,11 @@ class NotionAdmissionController:
 
                     if account_head and thread_head and account_available and thread_available:
                         if token_delay > 0:
+                            if now >= deadline:
+                                self._counters["timeouts"] += 1
+                                raise AdmissionTimeoutError(
+                                    f"Timed out waiting for Notion admission after {now - started:.3f}s"
+                                )
                             self._counters["throttled"] += 1
                             self._counters["throttle_wait_events"] += 1
                             sleep_for = min(token_delay, max(0.01, deadline - now))
@@ -812,6 +812,11 @@ class NotionAdmissionController:
                             idempotency_key=normalized_idempotency,
                             receipt=receipt,
                             shared_lease_id=shared_lease_id,
+                        )
+                    if now >= deadline:
+                        self._counters["timeouts"] += 1
+                        raise AdmissionTimeoutError(
+                            f"Timed out waiting for Notion admission after {now - started:.3f}s"
                         )
                     remaining = max(0.01, deadline - now)
                     self._counters["queue_wait_events"] += 1
