@@ -618,9 +618,10 @@ class NotionAdmissionController:
                 )
                 if result.status == "throttled":
                     self._counters["throttled"] += 1
+                    self._counters["throttle_wait_events"] += 1
                     throttled_seconds += delay
                 else:
-                    self._counters["queued"] += 1
+                    self._counters["queue_wait_events"] += 1
                 self._sleep(delay)
         except Exception:
             try:
@@ -664,6 +665,7 @@ class NotionAdmissionController:
         )
         attempt_id = str(attempt_id or uuid.uuid4().hex)
         ticket = f"{threading.get_ident()}:{time.time_ns()}"
+        self._counters["queue_entries"] += 1
         started = self._clock()
         deadline = started + (self.queue_timeout if timeout_seconds is None else timeout_seconds)
         shared_lease_id = ""
@@ -717,6 +719,8 @@ class NotionAdmissionController:
             account_queue_depth = max(account_queue_depth, shared_account_depth)
             thread_queue_depth = max(thread_queue_depth, shared_thread_depth)
             if account_queue_depth or thread_queue_depth:
+                self._counters["queued_unique_jobs"] += 1
+                # Backward-compatible alias: queued now means unique queued jobs.
                 self._counters["queued"] += 1
 
             try:
@@ -746,6 +750,7 @@ class NotionAdmissionController:
                     if account_head and thread_head and account_available and thread_available:
                         if token_delay > 0:
                             self._counters["throttled"] += 1
+                            self._counters["throttle_wait_events"] += 1
                             sleep_for = min(token_delay, max(0.01, deadline - now))
                             throttled_seconds += sleep_for
                             self._condition.wait(timeout=sleep_for)
@@ -809,6 +814,7 @@ class NotionAdmissionController:
                             shared_lease_id=shared_lease_id,
                         )
                     remaining = max(0.01, deadline - now)
+                    self._counters["queue_wait_events"] += 1
                     self._condition.wait(timeout=min(0.25, remaining))
             except Exception:
                 account_queue = self._account_queues.get(account_key)
@@ -939,6 +945,19 @@ class NotionAdmissionController:
         with self._condition:
             now = self._clock()
             self._prune_recent_unlocked(now)
+            counters = dict(self._counters)
+            for key in (
+                "queue_entries",
+                "queued_unique_jobs",
+                "queue_wait_events",
+                "throttle_wait_events",
+                "admitted",
+                "completed",
+                "failed",
+                "timeouts",
+            ):
+                counters.setdefault(key, 0)
+            counters.setdefault("queued", counters["queued_unique_jobs"])
             local = {
                 "enabled": True,
                 "account_capacity": self.capacity,
@@ -950,7 +969,19 @@ class NotionAdmissionController:
                 "thread_queue_depth": sum(len(queue) for queue in self._thread_queues.values()),
                 "active_idempotency_keys": len(self._active_idempotency),
                 "recent_idempotency_keys": len(self._recent_idempotency),
-                "counters": dict(self._counters),
+                "metric_schema_version": 2,
+                "counter_semantics": {
+                    "queue_entries": "admission requests entering the controller",
+                    "queued_unique_jobs": "distinct requests that observed queue depth",
+                    "queued": "backward-compatible alias of queued_unique_jobs",
+                    "queue_wait_events": "queue/recheck observations while waiting",
+                    "throttle_wait_events": "token-bucket or provider throttle waits",
+                    "admitted": "requests granted an admission permit",
+                    "completed": "admitted requests released successfully",
+                    "failed": "admitted requests released unsuccessfully",
+                    "timeouts": "requests that exceeded admission timeout",
+                },
+                "counters": counters,
                 "recent_receipts": list(self._last_receipts)[-20:],
             }
         try:

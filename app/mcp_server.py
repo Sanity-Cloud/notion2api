@@ -36,9 +36,19 @@ from app.aigentbee_workbench import (
     leader_session_name,
     load_swarm_widget_html,
     validate_leader_request,
+    validate_prerequisite_progression,
+)
+from app.mcp_observability import (
+    install_mcp_noise_filter,
+    mcp_observability_snapshot,
+    record_mcp_http_error,
 )
 from app.output_hygiene import detect_visible_output_contamination
 from app.output_integrity import assess_output_integrity
+from app.session_retention import (
+    archive_and_filter_sessions,
+    build_session_retention_plan,
+)
 from app.hive_runtime import (
     HiveDelegatedTaskSpec,
     HiveHandoffReceipt,
@@ -156,7 +166,15 @@ class HealthOutput(BaseModel):
         default_factory=dict,
         description="Shared Notion admission queue, throttling, and idempotency receipt.",
     )
-    raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend health response.")
+    conversation_compression: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Compression backend, warning-coalescing, and context telemetry.",
+    )
+    mcp_runtime: dict[str, Any] = Field(
+        default_factory=dict,
+        description="MCP transport correlation and routine-log coalescing telemetry.",
+    )
+    raw: dict[str, Any] = Field(default_factory=dict, description="Raw backend health response plus local MCP telemetry.")
 
 
 class ModelInfo(BaseModel):
@@ -296,6 +314,24 @@ class ListSessionsOutput(BaseModel):
     default_session: str = Field(description="Default session policy. New chats are auto-named; explicit op remains a shared legacy alias.")
     state_path: str = Field(description="Path to the MCP session state file.")
     sessions: list[dict[str, Any]] = Field(default_factory=list, description="Known named MCP session bindings and remote thread metadata.")
+    retention: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Preview-only retention plan; no session is removed by listing.",
+    )
+
+
+class SessionRetentionOutput(BaseModel):
+    ok: bool = Field(description="Whether retention planning or application succeeded.")
+    applied: bool = Field(default=False, description="Whether eligible bindings were archived and removed from the active index.")
+    state_path: str = Field(default="", description="Active MCP session-state path.")
+    archive_path: str = Field(default="", description="Append-only JSONL archive receipt path.")
+    policy: dict[str, Any] = Field(default_factory=dict)
+    counts: dict[str, int] = Field(default_factory=dict)
+    protected: list[dict[str, Any]] = Field(default_factory=list)
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    archived: int = Field(default=0)
+    retained: int = Field(default=0)
+    error: str | None = Field(default=None)
 
 
 class UnsafeUrlContinuationOutput(BaseModel):
@@ -787,21 +823,42 @@ class Notion2APIClient:
         self.api_key = (api_key or "").strip()
         self.timeout = timeout
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, request_id: str | None = None) -> dict[str, str]:
         headers = {"Accept": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        if request_id:
+            headers["X-Request-ID"] = request_id
         return headers
 
     async def get(self, path: str) -> dict[str, Any]:
+        request_id = f"mcp-{uuid.uuid4().hex}"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(f"{self.base_url}{path}", headers=self._headers())
-        return _json_or_error(response)
+            response = await client.get(
+                f"{self.base_url}{path}",
+                headers=self._headers(request_id),
+            )
+        return _json_or_error(
+            response,
+            correlation_id=request_id,
+            method="GET",
+            path=path,
+        )
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request_id = f"mcp-{uuid.uuid4().hex}"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(f"{self.base_url}{path}", headers=self._headers(), json=payload)
-        return _json_or_error(response)
+            response = await client.post(
+                f"{self.base_url}{path}",
+                headers=self._headers(request_id),
+                json=payload,
+            )
+        return _json_or_error(
+            response,
+            correlation_id=request_id,
+            method="POST",
+            path=path,
+        )
 
     async def post_chat_stream(self, path: str, payload: dict[str, Any], on_progress: Any) -> dict[str, Any]:
         stream_payload = dict(payload)
@@ -818,13 +875,23 @@ class Notion2APIClient:
         done_received = False
         stream_error: dict[str, Any] | None = None
 
-        headers = self._headers()
+        request_id = f"mcp-{uuid.uuid4().hex}"
+        headers = self._headers(request_id)
         headers["Accept"] = "text/event-stream"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream("POST", f"{self.base_url}{path}", headers=headers, json=stream_payload) as response:
                 if response.status_code >= 400:
                     body = await response.aread()
-                    return _json_or_error(httpx.Response(response.status_code, headers=response.headers, content=body))
+                    return _json_or_error(
+                        httpx.Response(
+                            response.status_code,
+                            headers=response.headers,
+                            content=body,
+                        ),
+                        correlation_id=request_id,
+                        method="POST",
+                        path=path,
+                    )
                 remote_conversation_id = str(response.headers.get("X-Conversation-Id") or "").strip()
                 remote_chat_id = str(response.headers.get("X-Notion-Thread-Id") or "").strip()
                 if remote_conversation_id:
@@ -1001,7 +1068,13 @@ class Notion2APIClient:
 
 
 
-def _json_or_error(response: httpx.Response) -> dict[str, Any]:
+def _json_or_error(
+    response: httpx.Response,
+    *,
+    correlation_id: str = "",
+    method: str = "",
+    path: str = "",
+) -> dict[str, Any]:
     content_type = response.headers.get("content-type", "")
     try:
         data: Any = response.json() if "json" in content_type.lower() or response.content else {}
@@ -1009,10 +1082,40 @@ def _json_or_error(response: httpx.Response) -> dict[str, Any]:
         data = {"text": response.text[:4000]}
 
     if response.status_code >= 400:
+        response_request_id = str(
+            response.headers.get("X-Request-ID")
+            or response.headers.get("X-Correlation-ID")
+            or response.headers.get("traceparent")
+            or ""
+        ).strip()
+        correlation = {
+            "request_id": str(correlation_id or response_request_id),
+            "response_request_id": response_request_id,
+            "method": str(method).upper(),
+            "path": str(path),
+        }
+        record_mcp_http_error(
+            status_code=response.status_code,
+            request_id=correlation["request_id"],
+            response_request_id=response_request_id,
+            method=correlation["method"],
+            path=correlation["path"],
+        )
+        logger.warning(
+            "MCP backend HTTP request failed",
+            extra={
+                "request_info": {
+                    "event": "mcp_backend_http_error",
+                    "status_code": response.status_code,
+                    **correlation,
+                }
+            },
+        )
         return {
             "ok": False,
             "status_code": response.status_code,
             "error": data,
+            "correlation": correlation,
         }
     if isinstance(data, dict):
         data.setdefault("ok", True)
@@ -3851,7 +3954,9 @@ def _load_session_records(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, 
 def _save_session_records(
     records: dict[str, dict[str, Any]],
     path: Path = DEFAULT_SESSION_STATE_PATH,
-) -> None:
+    *,
+    strict: bool = False,
+) -> bool:
     with _SESSION_STATE_MUTEX:
         clean: dict[str, dict[str, Any]] = {}
         for raw_name, raw_record in records.items():
@@ -3872,9 +3977,12 @@ def _save_session_records(
                 path,
                 {"version": SESSION_STATE_VERSION, "sessions": clean},
             )
+            return True
         except Exception:
+            if strict:
+                raise
             # Session continuity is helpful but should not break model calls.
-            return
+            return False
 
 
 def _load_session_state(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, str]:
@@ -3883,6 +3991,47 @@ def _load_session_state(path: Path = DEFAULT_SESSION_STATE_PATH) -> dict[str, st
         for name, record in _load_session_records(path).items()
         if str(record.get("conversation_id") or "").strip()
     }
+
+
+def _session_archive_path(path: Path = DEFAULT_SESSION_STATE_PATH) -> Path:
+    return path.with_name(f"{path.stem}.archive.jsonl")
+
+
+def _session_job_bindings() -> tuple[set[str], set[str]]:
+    protected_names: set[str] = set()
+    protected_conversations: set[str] = set()
+    state = _load_chat_job_state()
+    jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
+    if not isinstance(jobs, dict):
+        return protected_names, protected_conversations
+    for raw_job in jobs.values():
+        if not isinstance(raw_job, dict):
+            continue
+        session_name = str(raw_job.get("session_name") or "").strip()
+        conversation_id = str(raw_job.get("conversation_id") or "").strip()
+        if session_name:
+            protected_names.add(_session_key(session_name))
+        if conversation_id:
+            protected_conversations.add(conversation_id)
+    return protected_names, protected_conversations
+
+
+def _build_session_retention_plan(
+    records: dict[str, dict[str, Any]],
+    *,
+    retention_days: int | None = None,
+    max_records: int | None = None,
+    now_ms: int | None = None,
+) -> dict[str, Any]:
+    protected_names, protected_conversations = _session_job_bindings()
+    return build_session_retention_plan(
+        records,
+        protected_session_names=protected_names,
+        protected_conversation_ids=protected_conversations,
+        retention_days=retention_days,
+        max_records=max_records,
+        now_ms=now_ms,
+    )
 
 
 def _save_session_state(sessions: dict[str, str], path: Path = DEFAULT_SESSION_STATE_PATH) -> None:
@@ -4285,6 +4434,7 @@ def create_server(
     mcp_path: str,
     stateless_http: bool = True,
 ) -> FastMCP:
+    install_mcp_noise_filter()
     client = Notion2APIClient(base_url=base_url, api_key=api_key, timeout=timeout)
     transport_security = _transport_security_settings(host=host)
     server_name = os.getenv("MCP_SERVER_NAME", "notion2api").strip() or "notion2api"
@@ -4507,6 +4657,11 @@ def create_server(
                     request,
                     request_type,
                     requested_by,
+                )
+                validate_prerequisite_progression(
+                    snapshot,
+                    clean_request,
+                    clean_type,
                 )
                 member_name = member.title
                 member_role = member.role
@@ -4752,6 +4907,9 @@ def create_server(
     @server.tool(name=_tool_name("notion2api_health"), description=_tool_description("Check whether the configured Notion2API backend is reachable and healthy."), structured_output=True)
     async def notion2api_health() -> HealthOutput:
         data = await client.get("/health")
+        mcp_runtime = mcp_observability_snapshot()
+        raw = dict(data)
+        raw["mcp_runtime"] = mcp_runtime
         return HealthOutput(
             ok=bool(data.get("ok", False)),
             status_code=data.get("status_code"),
@@ -4763,7 +4921,11 @@ def create_server(
             account_selection=dict(data.get("account_selection") or {}),
             governance=dict(data.get("governance") or {}),
             notion_admission=dict(data.get("notion_admission") or {}),
-            raw=data,
+            conversation_compression=dict(
+                data.get("conversation_compression") or {}
+            ),
+            mcp_runtime=mcp_runtime,
+            raw=raw,
         )
 
     @server.tool(
@@ -6173,7 +6335,7 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _external_effect_error_snapshot(exc)
 
-    @server.tool(name=_tool_name("notion2api_list_sessions"), description=_tool_description("List named persistent Notion2API MCP chat sessions with local and remote identifiers."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_list_sessions"), description=_tool_description("List named persistent Notion2API MCP chat sessions with local and remote identifiers and a preview-only retention plan."), structured_output=True)
     async def notion2api_list_sessions() -> ListSessionsOutput:
         records = _load_session_records()
         items = [
@@ -6186,7 +6348,65 @@ def create_server(
             default_session=AUTO_SESSION_LABEL,
             state_path=str(DEFAULT_SESSION_STATE_PATH),
             sessions=items,
+            retention=_build_session_retention_plan(records),
         )
+
+    @server.tool(
+        name=_tool_name("notion2api_manage_session_retention"),
+        description=_tool_description(
+            "Preview session-retention candidates or, only when apply=true, archive eligible bindings to append-only JSONL before removing them from the active session index. Active chat-job bindings, governance leader sessions, evidence-bound sessions, and records without timestamps are protected."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_manage_session_retention(
+        apply: bool = False,
+        retention_days: int | None = None,
+        max_records: int | None = None,
+        applied_by: str = "ChatGPT user",
+    ) -> SessionRetentionOutput:
+        try:
+            with _SESSION_STATE_MUTEX:
+                records = _load_session_records()
+                plan = _build_session_retention_plan(
+                    records,
+                    retention_days=retention_days,
+                    max_records=max_records,
+                )
+                archive_path = _session_archive_path()
+                archive_receipt = {
+                    "archived": 0,
+                    "archive_path": str(archive_path),
+                }
+                retained = records
+                if apply and plan.get("candidates"):
+                    retained, archive_receipt = archive_and_filter_sessions(
+                        records,
+                        plan,
+                        archive_path=archive_path,
+                        applied_by=applied_by,
+                    )
+                    _save_session_records(retained, strict=True)
+            counts = dict(plan.get("counts") or {})
+            counts["retained"] = len(retained)
+            return SessionRetentionOutput(
+                ok=True,
+                applied=bool(apply and int(archive_receipt.get("archived") or 0)),
+                state_path=str(DEFAULT_SESSION_STATE_PATH),
+                archive_path=str(archive_receipt.get("archive_path") or archive_path),
+                policy=dict(plan.get("policy") or {}),
+                counts=counts,
+                protected=list(plan.get("protected") or []),
+                candidates=list(plan.get("candidates") or []),
+                archived=int(archive_receipt.get("archived") or 0),
+                retained=len(retained),
+            )
+        except Exception as exc:
+            return SessionRetentionOutput(
+                ok=False,
+                state_path=str(DEFAULT_SESSION_STATE_PATH),
+                archive_path=str(_session_archive_path()),
+                error=f"{type(exc).__name__}: {exc}",
+            )
 
     @server.tool(name=_tool_name("notion2api_allow_unsafe_url_once"), description=_tool_description("Grant Notion's Allow once confirmation for pending connections.web.loadPage calls and resume the interrupted inference through runInferenceTranscript. Resolves the remote thread from a named MCP session unless notion_thread_id is provided."), structured_output=True)
     async def notion2api_allow_unsafe_url_once(

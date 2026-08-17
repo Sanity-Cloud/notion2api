@@ -37,6 +37,34 @@ TRUSTED_GOVERNANCE_SENDER_PREFIXES = (
     "chatgpt-sanitycloud",
     "notion2api-governance",
 )
+PREREQUISITE_TOPIC_MARKERS = (
+    "trust anchor",
+    "trust-anchor",
+    "issuer_trust_anchor",
+    "authority contract",
+    "governance contract",
+    "decision receipt",
+    "contract analysis",
+)
+PREREQUISITE_ANALYSIS_MARKERS = (
+    "analyze",
+    "analysis",
+    "review",
+    "evaluate",
+    "validate contract",
+    "revise contract",
+)
+PREREQUISITE_IMPLEMENTATION_MARKERS = (
+    "implement",
+    "materialize",
+    "authority-test",
+    "authority test",
+    "pinned test root",
+    "create test root",
+    "build test root",
+    "persist receipt",
+)
+PREREQUISITE_ANALYSIS_LIMIT = 2
 
 
 class SwarmMemberView(BaseModel):
@@ -370,6 +398,7 @@ def build_swarm_workbench(
             "trustedGovernanceRecordCount": len(
                 _trusted_governance_context(snapshot)
             ),
+            "prerequisiteLoopGuard": prerequisite_loop_guard_state(snapshot),
             "requestCreatesExecutionEvidence": False,
             "historySource": leader.persistence_source,
             "historyDurable": leader.durable_persisted,
@@ -411,6 +440,81 @@ def _trusted_governance_context(snapshot: HiveMissionSnapshot) -> list[dict[str,
             }
         )
     return records[-20:]
+
+
+def prerequisite_loop_guard_state(snapshot: HiveMissionSnapshot) -> dict[str, Any]:
+    trusted_count = len(_trusted_governance_context(snapshot))
+    recent_analysis = 0
+    seen_request_ids: set[str] = set()
+    for event in sorted(snapshot.events, key=lambda item: item.created_at, reverse=True)[:20]:
+        if str(event.event_type or "").upper() not in {
+            "LEADER_REQUEST_INTENT",
+            "LEADER_REQUEST_SUBMITTED",
+        }:
+            continue
+        payload = dict(event.payload or {})
+        request_identity = str(
+            payload.get("request_id")
+            or payload.get("request_fingerprint")
+            or event.event_id
+        ).strip()
+        if request_identity in seen_request_ids:
+            continue
+        seen_request_ids.add(request_identity)
+        preview = str(
+            payload.get("request_preview")
+            or payload.get("request_text")
+            or ""
+        ).lower()
+        request_type = str(payload.get("request_type") or "").lower()
+        topic_related = any(marker in preview for marker in PREREQUISITE_TOPIC_MARKERS)
+        analytical = request_type == "review" or any(
+            marker in preview for marker in PREREQUISITE_ANALYSIS_MARKERS
+        )
+        implementation = any(
+            marker in preview for marker in PREREQUISITE_IMPLEMENTATION_MARKERS
+        )
+        if topic_related and analytical and not implementation:
+            recent_analysis += 1
+    mode = "open"
+    if trusted_count == 0 and recent_analysis >= PREREQUISITE_ANALYSIS_LIMIT:
+        mode = "implementation_only"
+    return {
+        "enabled": True,
+        "mode": mode,
+        "trusted_governance_record_count": trusted_count,
+        "recent_unresolved_analysis_requests": recent_analysis,
+        "analysis_limit": PREREQUISITE_ANALYSIS_LIMIT,
+        "required_progression": (
+            "Submit one bounded authority-test implementation packet."
+            if mode == "implementation_only"
+            else "Normal bounded leader routing."
+        ),
+    }
+
+
+def validate_prerequisite_progression(
+    snapshot: HiveMissionSnapshot,
+    request: str,
+    request_type: str,
+) -> None:
+    state = prerequisite_loop_guard_state(snapshot)
+    if state["mode"] != "implementation_only":
+        return
+    text = str(request or "").lower()
+    topic_related = any(marker in text for marker in PREREQUISITE_TOPIC_MARKERS)
+    analytical = str(request_type or "").lower() == "review" or any(
+        marker in text for marker in PREREQUISITE_ANALYSIS_MARKERS
+    )
+    implementation = any(
+        marker in text for marker in PREREQUISITE_IMPLEMENTATION_MARKERS
+    )
+    if topic_related and analytical and not implementation:
+        raise ValueError(
+            "Mission prerequisite remains unresolved: further trust-anchor or governance-contract "
+            "analysis is blocked after repeated iterations. Submit one bounded authority-test "
+            "implementation packet or ingest a trusted governance record."
+        )
 
 
 def build_leader_prompt(

@@ -29,6 +29,7 @@ from app.config import (
     is_lite_mode,
     is_standard_mode,
 )
+from app.compression_observability import compression_telemetry_snapshot
 from app.conversation import ConversationManager
 from app.chat_history.contracts import runtime_history_contract
 from app.chat_history.lossless_archive import history_schema_hash
@@ -296,6 +297,7 @@ def health_check(request: Request):
         "governance": pool.get_governance_summary(),
         "notion_admission": get_notion_admission_controller().snapshot(),
         "history": history_contract,
+        "conversation_compression": compression_telemetry_snapshot(),
     }
 
 
