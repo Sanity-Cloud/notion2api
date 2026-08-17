@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 import time
 import uuid
 from difflib import SequenceMatcher
@@ -996,61 +997,52 @@ def _guard_stream_until_integrity(
     This guard therefore withholds provider output until the stream reaches a
     terminal integrity decision. Local probe streams do not use this wrapper.
     """
-    buffered: list[str] = []
     metadata_events: list[str] = []
     hygiene_events: list[str] = []
-    total_chars = 0
     quarantined = False
-    forced_limit = False
 
-    for raw_chunk in source:
-        chunk = str(raw_chunk)
-        total_chars += len(chunk)
-        if not forced_limit and total_chars <= MAX_GUARDED_STREAM_BUFFER_CHARS:
-            buffered.append(chunk)
-        else:
-            forced_limit = True
-            buffered.clear()
+    with tempfile.SpooledTemporaryFile(
+        max_size=MAX_GUARDED_STREAM_BUFFER_CHARS,
+        mode="w+b",
+    ) as buffered:
+        for raw_chunk in source:
+            chunk = str(raw_chunk)
+            encoded = chunk.encode("utf-8")
+            buffered.write(len(encoded).to_bytes(8, "big"))
+            buffered.write(encoded)
 
-        payload = _parse_sse_json(chunk)
-        if payload is None:
-            continue
-        event_type = str(payload.get("type") or "")
-        if event_type == "model_metadata":
-            metadata_events.append(chunk)
-        if event_type == "output_hygiene":
-            hygiene_events.append(chunk)
-            hygiene = payload.get("hygiene")
-            if isinstance(hygiene, dict) and _output_requires_quarantine(hygiene):
-                quarantined = True
+            payload = _parse_sse_json(chunk)
+            if payload is None:
+                continue
+            event_type = str(payload.get("type") or "")
+            if event_type == "model_metadata":
+                metadata_events.append(chunk)
+            if event_type == "output_hygiene":
+                hygiene_events.append(chunk)
+                hygiene = payload.get("hygiene")
+                if isinstance(hygiene, dict) and _output_requires_quarantine(hygiene):
+                    quarantined = True
 
-        choices = payload.get("choices")
-        if isinstance(choices, list) and choices:
-            choice = choices[0] if isinstance(choices[0], dict) else {}
-            if choice.get("finish_reason") == "content_filter":
-                quarantined = True
+            choices = payload.get("choices")
+            if isinstance(choices, list) and choices:
+                choice = choices[0] if isinstance(choices[0], dict) else {}
+                if choice.get("finish_reason") == "content_filter":
+                    quarantined = True
 
-    if forced_limit:
-        hygiene = {
-            "output_integrity": assess_output_integrity(
-                "",
-                additional_reasons=("guarded_stream_buffer_limit_exceeded",),
-            )
-        }
-        yield from metadata_events
-        yield _build_hygiene_metadata_event(hygiene)
-        yield _build_stream_chunk(response_id, model, finish_reason="content_filter")
-        yield "data: [DONE]\n\n"
-        return
+        if quarantined:
+            yield from metadata_events
+            yield from hygiene_events
+            yield _build_stream_chunk(response_id, model, finish_reason="content_filter")
+            yield "data: [DONE]\n\n"
+            return
 
-    if quarantined:
-        yield from metadata_events
-        yield from hygiene_events
-        yield _build_stream_chunk(response_id, model, finish_reason="content_filter")
-        yield "data: [DONE]\n\n"
-        return
-
-    yield from buffered
+        buffered.seek(0)
+        while True:
+            length_bytes = buffered.read(8)
+            if not length_bytes:
+                break
+            chunk_length = int.from_bytes(length_bytes, "big")
+            yield buffered.read(chunk_length).decode("utf-8")
 
 
 def _emit_visible_stream_correction(
