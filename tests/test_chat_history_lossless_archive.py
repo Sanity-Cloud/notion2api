@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sqlite3
 import time
@@ -111,7 +112,7 @@ def test_health_handler_exposes_bounded_history_contract(monkeypatch, tmp_path):
             )
         )
     )
-    response = health_check(request)
+    response = asyncio.run(health_check(request))
     history = response["history"]
 
     assert history["build_commit"] == receipt_commit
