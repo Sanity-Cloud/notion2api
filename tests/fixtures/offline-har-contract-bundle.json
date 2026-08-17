@@ -1,0 +1,1126 @@
+{
+  "endpoints": [
+    {
+      "confidence": "medium",
+      "disposition": "excluded",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "excluded-telemetry-client",
+      "observation_count": 11,
+      "path": "/api/v3/etClient",
+      "request_schema_fingerprints": [
+        "58e69fc5c72c1cd619a526972fab90290861e1d1b4e7fff71f460d56f0ec203a",
+        "6c5d7acb144643182ebb4c21a750c9b66b2c87f3ef8b89e7ffe2742dc512721c",
+        "8093759de796630ffb3f84d6bc97b57f7d04e4acdbd057610582c4c3b742da87",
+        "8d3c94ad1638a0b81614d58febe618e3de87fb6d51a49e7dfcbb43233822275b",
+        "9380bdd6553d4364c38439fa7da558906e8301ab16c7b9b441bd46feb19393e3",
+        "b1dd568eec74fa7bf4be277d81e7296ea2dad1a4afe627c7420d8a5473f4bfe0",
+        "b598c6465418c2519f4e9decd8c288a839233cf152dec24189b246cf9923642a",
+        "b613b9d491eed1f5961e5a197eae5c18d1e47a05017944cd7d7130968215b209",
+        "f751d1c748d8496de8f9271cee9877d4951f75f901c6e40e889b9a87d5692df6"
+      ],
+      "response_schema_fingerprints": [
+        "4c14a89aa47d83bc04264d76dc21f30f0a19fce6d220297a8e05f23a897c70a4"
+      ],
+      "volatility": "high-schema-variance"
+    },
+    {
+      "confidence": "high",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 14,
+      "path": "/api/v3/getAIUsageEligibilityV2",
+      "request_schema_fingerprints": [
+        "68f29a7d9c24e0698d427b38f51a7fbf6224cea05e33c77ed64466468cb37eb9"
+      ],
+      "response_schema_fingerprints": [
+        "bc29c6f7da6995b114f5d9011c939289382b13b3840455e2f8b290969f763ae5"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "high",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 45,
+      "path": "/api/v3/getCreditRateLimitStatus",
+      "request_schema_fingerprints": [
+        "68f29a7d9c24e0698d427b38f51a7fbf6224cea05e33c77ed64466468cb37eb9"
+      ],
+      "response_schema_fingerprints": [
+        "9cd15f5d25206b20e433caedb79810fb93c2c239d71c3ed85eab4e6f75ba480c"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "high",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 3,
+      "path": "/api/v3/getInferenceTranscriptsUnreadCount",
+      "request_schema_fingerprints": [
+        "59214051ccb1189b8b90a488fce72680bed5623c094ff07677cc0b3897f5faae"
+      ],
+      "response_schema_fingerprints": [
+        "fe2af150050b40cde844645ffeafdcabc002dcfeac979fb191ade9712b13b348"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "high",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 3,
+      "path": "/api/v3/getRecentPageVisits",
+      "request_schema_fingerprints": [
+        "77ced75025940b1ae93acb90b2d59a364c667a766d64ed54c71fc5b9cdceb11d"
+      ],
+      "response_schema_fingerprints": [
+        "096dbf2dab39f2388310505f5975ca2746dd904cddf1b517d82dd01958371f50"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "medium",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 1,
+      "path": "/api/v3/getSidebarSectionItems",
+      "request_schema_fingerprints": [
+        "c3529c9080664a5ecb28264f08b81fe1e5a2093182d7acd21028b86fd1a3b6a0"
+      ],
+      "response_schema_fingerprints": [
+        "ff1a974b4feb0fd6232d1cdde7773532014cdd1a29f505e656b9c39d8096d4da"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "medium",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 2,
+      "path": "/api/v3/getUserNotificationsFanout",
+      "request_schema_fingerprints": [
+        "9e77ad31be8aee16d09ea8c65770912b20273a9f12312a198bb23b492180c700"
+      ],
+      "response_schema_fingerprints": [
+        "aef0ea6297f07290d770d83f9bd68c39a87d8509cf0519e95bf7bca8a216bf2b"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "medium",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 1,
+      "path": "/api/v3/getUserNotificationsInitial",
+      "request_schema_fingerprints": [
+        "4d1947d42d6b89b1e748f2278cc86b3b49069c8e8d4ad1da5a8527a5b1e597d5"
+      ],
+      "response_schema_fingerprints": [
+        "aa0b82ff642627fa90e9d0d3e38a3944bb88639349e86c797b19f6d59c4e0a43"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "medium",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 2,
+      "path": "/api/v3/getUserSharedPagesInSpace",
+      "request_schema_fingerprints": [
+        "68f29a7d9c24e0698d427b38f51a7fbf6224cea05e33c77ed64466468cb37eb9"
+      ],
+      "response_schema_fingerprints": [
+        "07c551f73353388fb9656a9d96ab885fed2d615196a3e002e31aba5fa6c1bfca"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "medium",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 1,
+      "path": "/api/v3/syncPageRecordSinceTimestamp",
+      "request_schema_fingerprints": [
+        "ce3d4b0ded0f30de2e29a8ed79cbfe4c699f774c09f850abd472e1bb10754581"
+      ],
+      "response_schema_fingerprints": [
+        "096dbf2dab39f2388310505f5975ca2746dd904cddf1b517d82dd01958371f50"
+      ],
+      "volatility": "medium-internal-undocumented"
+    },
+    {
+      "confidence": "medium",
+      "disposition": "candidate",
+      "methods": [
+        "POST"
+      ],
+      "mutation_risk": "medium-post-read-internal",
+      "observation_count": 349,
+      "path": "/api/v3/syncRecordValuesSpaceInitial",
+      "request_schema_fingerprints": [
+        "5f35b59d1f827e43ebdf2400a06d02464b517af416d9c7dcf3cfec0f713eaa96"
+      ],
+      "response_schema_fingerprints": [
+        "047b9bdf7dd14b6086fb6e7483f1084211b8019d85f704137b80c5011c44f822",
+        "066096aa093522f0b4e1651748434cfc2833c50954fe5aae7847947bb90f455f",
+        "073913aa43499c327254f0ef962d978c6485d941b03af572e00f4b6d78476459",
+        "07f694ab98b6dbdf65f1e4dd56dcfbe30a1f9c21f102d3ecf3abaf50842e2c31",
+        "0903e1eb9164191ed02a5559f34ed056cc4e1766f575001a055411ffd9c0c7ca",
+        "096dbf2dab39f2388310505f5975ca2746dd904cddf1b517d82dd01958371f50",
+        "09f34d5533868175916a132ad5b4b176bfa6d3740355a28f7083379d8798459d",
+        "0a18b53ccbb3ddc2f2b3ce5998dc7e79dae9befcaed34039d0333b528528519e",
+        "0b3e6a9889f2a2323798008c7673f1d5afb9fab1735aa96918f490770868e4dc",
+        "0ebeae26006980445469b290e7862b6e430715117c493f721a49b98dc15347a8",
+        "115ecaaf86b637c405f71cd114fb7e14072cbbfe93613f23f439116a6a49b7ba",
+        "11fe72c4c8244eb3b7d55c47225599687de3b788450eb41a2e609ef82d87aa1c",
+        "127425678ef2585b4a679e17bcb393726b7c98522540444b5d4289bb8485e54c",
+        "153029842965a922e3ec92dcc1ff01c1bbd6acbbf1ac2e53de883a0fc599cdab",
+        "1797efc40f79dc5d6f1505ba1bc86985f3ecd851db960c1bf1d9873c1af769de",
+        "18efdef2387514db1231c92e4c9ed294df53c857184f8abc8b4f534006db28f7",
+        "19b2ff2a0075d45286cbe1f9cc8ecebe4029166d46dca022342d3a5cd9adb028",
+        "1ffbe84df9574dec24bef4ccfc78126d4f17ee8ec7042eaf74ed9318b8047c8d",
+        "2214740b0d53721f074cf48176993fdc50eb9056fc75bb48ca79b4ae2499c8fd",
+        "230baf5154b5479ed7ba290fed4e4fe4f2638a273e43032a366d96dd763c44c0",
+        "2510559024fde3de8c9f572828f5b8ac6a460c02f3ecf6da6d9349e76b4833c3",
+        "268faf0be68ca606bcf944a15f28e5af1b70bdd28da917b18ebce8ea2bbf8f03",
+        "2af2b3e85ed5ed2146a8467b3c092ef935c20b422954235f405082e7c414987d",
+        "31b467e68bf96e9e4c98cad21f6724f08b39ce4b72528583f1c3488c7609e116",
+        "31e23cb4142da74f9ed7dba09420d99e31a458852cb91c0b2f85fd2d5773b917",
+        "3547bc92a690e924edfe090648d9f381b814ddf23e9054a78093d2bc278ff889",
+        "3ad4f25115ff21c5bf86c51f0602de84374a5c0f31fd5bf06d47d03292877865",
+        "3ba81bfdce73e9775be7dd9babe4b8687204325d13cba6f9e7a801b88b6c3d05",
+        "411c50a5c2110b0ce6ee9d00db853c8f24ab82eaaf1aa4f93389c12909db1c6c",
+        "433f85d317f9bfb007ad0375ccd762036cab161657b8b52e99cddc5c558a7e6d",
+        "471c338b376a411dbcba43e6dd7635fe3c47a0375ed1079bea6a00c57f5097c7",
+        "4826de14abde23c8ed1e844e39a0a4546e11ecfb28e68001f3506cb1d3ff25b0",
+        "4af906a3fa1ea4f34eebd0557e6bd6bcc551baf0b6feabe73f2983aeab083ac7",
+        "4dc4e6dea63da8fa0b17df35d533a7229a3a560bb69cfcd484bcb0c1033676fc",
+        "5115d92d8310a08d65e868513d1f9b7675bfdd6ac10bc1e4cd8aeb4de33823dd",
+        "520e68a6cae3d0867efe1fb05d5b95070844bc7a19f9ebc234ad4e2a71104201",
+        "54f13b8cee92eb60f6bd6d96d360ed3644c0bbada139ee89bcd98ad0acff26ee",
+        "56973da58cf2219504d9ac1f4cb41a0aad347d9f6a89cde32ac491372485662d",
+        "57ac5e5a7dd4b8b859ba1e533f265bbcf4e3b2ff5b7ebcacb242cb653cd16e43",
+        "5879c3b7ff93cbe73d413f4a425c4cacfdfce086567f340c7ad4c141efde0e47",
+        "5921a11d0a6a04c0b2dd6ae6cf6711e919c31110eebe6d9c972de4841ffb7ff5",
+        "61c059ddb9d3594e04e5f37a4f88ba99bfe336c0031c1d45ce1e64ce8629e536",
+        "6249cff8724b1c355dc6312eda53ed1d9bc27cc6917c9f7aef87dde7093c9854",
+        "6559a1eb17f5f746646062953dcda41c1f9318f1482cb6c33ecff7a573ad8cf4",
+        "679a37784f89c9bcea8a8b7f863bd431b621b70756ad27251c83471c08532e98",
+        "67be5075a16b1599053e4726ded103ec8973236bfe0ebd1579afcb81adfe0a4d",
+        "69b7b06d9197e725ab61a973d6a5fd387d97f50378e46b09841b9864c44414ff",
+        "69dd3845680e214f28f44fc322827310171d01d10ce7315e60f4794243d833da",
+        "6a857494dab7e2beb8498023be80df57cb0dd8ea4bd5aa8a85ce408fcbb46fef",
+        "6bf2d3a72b3c28be9b22b32bc11205b3ac4eb76d240618d463ef479e4942f616",
+        "724c33c11811af3fe1d87a672fb8c9206463329c3563e43580f5957be53b4578",
+        "73c0809a3e7b94ec65f40f316577065faaa2c62fa85f992d0df64b5a00cb54c7",
+        "74d3a114c90c537e9e4876f216152993dfa78b88121afbc8af919ab0204022ba",
+        "7863feae07675257c72e2891c12dc5024bffba47ec0059df1eefca9b57ec485a",
+        "7d296e7881e34eee8d5cc1f25d2c63152a71b5593e8b4d99701dfed93f84558c",
+        "7d60cddc4b405595e1115819045c281600263da6b127df4b371e0f09c54fc5a8",
+        "7e66d72e1721d945010fb244eb694b3f3417efaef71e3fad973e4c297e155690",
+        "81703a6296028672e000a0c7e4b7d14148a2023e3b83f023ab1b4bc7b4d01f01",
+        "82f5c628141b3ea8a48c94acf61b3bade84c3076a94dbad606018e9172c0aa55",
+        "87ae906f5c8d8c064fd22cee4a0158f4ea1e00e99fbe15242aed3515b6d92f0e",
+        "8b1305441b4babef422b7683cc3c5f40cde80bfb006962ebae9f84fea757f006",
+        "8cd47e659f951ceb77e3ce20d7cd1aea4932ec93b5c5dba650aa1e4603df468a",
+        "8d421c21cfffcaa2404e3b889215b5fd02bacbd890831fdbe0bfa56c381fa9a3",
+        "8f6b7d6f0718d07bff84ccfda6b39891777e5a90287de64f1066169d8c1caec4",
+        "9205b4544475ed58619a904dcb3b81bb9aae33f682eb5ec6c7b14b89cc529f27",
+        "a059ab6b06f4ce79d7cd1a36094e060081072a90592a47895ddc5498ba41a8ac",
+        "a1d06d8e6c3c2fffbff798d03c0bdec590c3c151636f57a631c943b622f4b10d",
+        "a71971aead6889aca2170784d69520f49c6868c8d123ce36ae15bf497e7c14f0",
+        "ab401ee92d65873e7c78d3fb2ea606fdd509aba77f7bbfa9f7e0a088c653eab5",
+        "abe2375daad8d4bdaf05d827415dcee09571adaa5f17dbfb8be5d95c86b1e628",
+        "ace86d31d205064a5ce56b06c7397452bd309c95230c49ac719d4d51aa729499",
+        "ae0a986034ef8b8b2b918a13412432b86658214e8fea89526d6b56cd9eeb307a",
+        "b0410ec3c257f66c2f253cd91bb8c1b9ac3bffa918c27b59e1e902f45fe72270",
+        "b1508af0e338c77fcce2c46cc37bba6cc0fa64b766514409dd36e55d7e548520",
+        "b31d8e42dd3795d923b0a3b59b7dfb8f1290ddb25db4448d8a8118dc341e14d4",
+        "b419a8110fdd328e602f6f906cf6254ea373a919c6f32e9bec584d12dbcae91d",
+        "b9896d1528450538e3ceec26cdfda347a802a833727a426f1a59faaed1959542",
+        "be638fd1a90e3b0b812733d6b26de93afc83fcb8d499a26f9dd7f105cb2900ce",
+        "c305ee2a05ccc08e2ffb6ad80ab8f6fc7427995100d215bafeeb517614356041",
+        "c5cf0867da2619ec8371d63cd0a84e088c52afe441f0d38fc870c55a10706863",
+        "c86097219fb85d51a65d6d2fb86f75b0e8823d3cb1cdd13aca5e72eda9c81235",
+        "d61ca8f66781daf0d69f189b019612fb7d5e737da7b8ca805989a05a6eca3572",
+        "d855b91ed53dbc6ff15aae6be214e5d73f84c22a00b5e6d2fda8035058b48442",
+        "d8a60116a703b93bc8f1a3fec3c1c2c50fd27fa595dc46048369aa784f3b0584",
+        "db9d643a2f4d2cbbeedec4c52a0f65cb0cac40afe48d2a7ec2d6a9d076f9ab3d",
+        "e0aab97a4c22595ae6c7e26f496e3533b1a24f1a5bce5fc15b919f052f54bd6b",
+        "e23532e74d0a6b8d104e0a9ec3f60d6e117c0c487809d52bf03be43ac899029e",
+        "f0bbce03d44c36ec1a5aa4971adda2b08bc95ce7327b6eb714f937a77ae6121b",
+        "f1db491b8a36efa6adac6aa0c2b9a372bcab5f2ce1a709ad6700c5483e0fb6cc",
+        "f557e5e4a0872269efe0d6f3d92eb348148087e17302d88758c1204160eee555",
+        "f6187244e725353c82c6c8ef9d4815c1e0ab7d69b5a90ff6edb76543c3dab574",
+        "f7444f8422c7e4e4ac7b57cc8e2f41504e1a197d56cede8dfb2c27b63f759245",
+        "faed8ae2eed559ff8414d97e4770879daed00d98513121100d9aee6bdd5a4be3",
+        "fdf9fad1808572d3e7b9dee44133abaf246ee5dd6f8ea408f0fd5cf5f0878569",
+        "ff0369cefe8b9bbc4a0316e7c78ff492b488a92f6c2f9e344d235a4e0855d4b4"
+      ],
+      "volatility": "high-schema-variance"
+    }
+  ],
+  "fixtures": [
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/etClient",
+      "request_body": {
+        "api_key": "<synthetic-redacted-string>",
+        "client_upload_time": "<synthetic-redacted-string>",
+        "events": [
+          {
+            "device_id": "<synthetic-redacted-string>",
+            "event_id": 0,
+            "event_properties": {
+              "__context": {
+                "page": {
+                  "referrer": "<synthetic-redacted-string>",
+                  "search": "<synthetic-redacted-string>"
+                }
+              },
+              "appSource": "<synthetic-redacted-string>",
+              "app_version": "<synthetic-redacted-string>",
+              "available_credit": 0,
+              "browser": "<synthetic-redacted-string>",
+              "browser_version": "<synthetic-redacted-string>",
+              "browser_version_bucketized": "<synthetic-redacted-string>",
+              "client_initialization_id": "<synthetic-redacted-string>",
+              "current_space_view_count": 0,
+              "default_event_properties_initialized": false,
+              "desktopArch": "<synthetic-redacted-string>",
+              "desktopChromiumVersion": "<synthetic-redacted-string>",
+              "desktopElectronVersion": "<synthetic-redacted-string>",
+              "desktopIsPostStartupGracePeriod": false,
+              "desktopKernelVersion": "<synthetic-redacted-string>",
+              "desktopMachineModelIdentifier": "<synthetic-redacted-string>",
+              "desktopOsVersion": "<synthetic-redacted-string>",
+              "desktopPlatform": "<synthetic-redacted-string>",
+              "desktopTargetPlatform": "<synthetic-redacted-string>",
+              "desktop_app_version": "<synthetic-redacted-string>",
+              "deviceType": "<synthetic-redacted-string>",
+              "device_id": "<synthetic-redacted-string>",
+              "device_os": "<synthetic-redacted-string>",
+              "device_type": "<synthetic-redacted-string>",
+              "dnt": false,
+              "email": "<synthetic-redacted-string>",
+              "experimentStoreLoaded": false,
+              "experiment_device": {
+                "id": "<synthetic-redacted-string>"
+              },
+              "experiments": {
+                "statsig-abc_code_language": false,
+                "statsig-acquisition_blurred_background_signup": "<synthetic-redacted-string>",
+                "statsig-acquisition_contextual_signup_page": false,
+                "statsig-acquisition_email_signup_tile": "<synthetic-redacted-string>",
+                "statsig-acquisition_land_on_signup_page_mobile_app": "<synthetic-redacted-string>",
+                "statsig-acquisition_login_signup_links": "<synthetic-redacted-string>",
+                "statsig-acquisition_remove_google_onetap_login": "<synthetic-redacted-string>",
+                "statsig-acquisition_remove_google_onetap_signup": "<synthetic-redacted-string>",
+                "statsig-acquisition_shimmer_background_signup": "<synthetic-redacted-string>",
+                "statsig-acquisition_show_mobile_email_form": "<synthetic-redacted-string>",
+                "statsig-acquisition_signup_email_continue_button_copy": "<synthetic-redacted-string>",
+                "statsig-acquisition_signup_work_email_business_trial_copy": "<synthetic-redacted-string>",
+                "statsig-acquisition_simplified_signup_three_variants": "<synthetic-redacted-string>",
+                "statsig-admin_unified_account_view": false,
+                "statsig-admin_unified_user_view": false,
+                "statsig-collection_group_reducer_visible": false,
+                "statsig-content_reskin_v2_condensed_lists": false,
+                "statsig-content_reskin_v2_wider_page": false,
+                "statsig-defer_css_blocking_until_render": false,
+                "statsig-desktop_enable_crash_reporting": false,
+                "statsig-desktop_log_in_with_browser_button": false,
+                "statsig-disable_prefetch_old_sidebar": "<synthetic-redacted-string>",
+                "statsig-download_for_offline": false,
+                "statsig-early_main_app_chunk_import": false,
+                "statsig-enable_reorder_login_options": false,
+                "statsig-external_agent_manage_spec": false,
+                "statsig-login_page_aa_test": "<synthetic-redacted-string>",
+                "statsig-login_with_chatgpt_client": false,
+                "statsig-mobile_app_launch_blank_page": false,
+                "statsig-mobile_native_backfill_or_ignore_killswitch": false,
+                "statsig-mobile_wait_for_user_root_on_deep_link": false,
+                "statsig-opfs_page_cache": "<synthetic-redacted-string>",
+                "statsig-prewarmed_tab_hidden_behind": false,
+                "statsig-prewarmed_tab_load_sidebar_exp": "<synthetic-redacted-string>",
+                "statsig-query_client": false,
+                "statsig-recover_from_prefetch_userid_mismatch": false,
+                "statsig-signup_work_email_business_trial_v2": "<synthetic-redacted-string>",
+                "statsig-siwc_full_page_redirect": false,
+                "statsig-skip_agent_preview_lazy_load": "<synthetic-redacted-string>",
+                "statsig-software_factory_page": false
+              },
+              "fired_during_onboarding": false,
+              "hardware_concurrency": 0,
+              "hardware_memory": 0,
+              "host": "<synthetic-redacted-string>",
+              "isActive": false,
+              "is_demo": false,
+              "is_desktop": false,
+              "is_desktop_app_or_browser": false,
+              "is_document_focused": false,
+              "is_experimental_build": false,
+              "is_foreground": false,
+              "is_ios": false,
+              "is_logged_in": false,
+              "is_mobile": false,
+              "is_mobile_build": false,
+              "is_online": false,
+              "is_public_domain": false,
+              "is_react_native": false,
+              "is_slippery_slope_sidebar_enabled": false,
+              "is_tablet": false,
+              "is_user_consent_to_track": false,
+              "name": "<synthetic-redacted-string>",
+              "net_downlink": 0,
+              "net_effective_type": "<synthetic-redacted-string>",
+              "net_rtt": 0,
+              "net_save_data": false,
+              "notify_desktop": false,
+              "notify_email": false,
+              "notify_email_digest": false,
+              "notify_mobile": false,
+              "notion_session_id": "<synthetic-redacted-string>",
+              "notion_session_start_ts": 0,
+              "notion_top_level_domain": "<synthetic-redacted-string>",
+              "page_all_collaborator_count": 0,
+              "page_content_count": 0,
+              "page_current_user_role": "<synthetic-redacted-string>",
+              "page_deletion_status": "<synthetic-redacted-string>",
+              "page_editor_collaborator_count": 0,
+              "page_id": "<synthetic-redacted-string>",
+              "page_is_database": false,
+              "page_is_notion_template": false,
+              "page_is_peek": false,
+              "page_is_prepopulated": false,
+              "page_is_template": false,
+              "page_public_role": "<synthetic-redacted-string>",
+              "page_read_only_collaborator_count": 0,
+              "page_space_role": "<synthetic-redacted-string>",
+              "page_user_has_explicit_access": false,
+              "platform": "<synthetic-redacted-string>",
+              "query": "<synthetic-redacted-string>",
+              "referrer": "<synthetic-redacted-string>",
+              "route_name": "<synthetic-redacted-string>",
+              "sample_decision": "<synthetic-redacted-string>",
+              "sharedUUID": "<synthetic-redacted-string>",
+              "space_ai_usage": 0,
+              "space_analytics_data_type": "<synthetic-redacted-string>",
+              "space_block_usage": 0,
+              "space_block_usage_over_limit": false,
+              "space_block_usage_percent": 0,
+              "space_created_by": "<synthetic-redacted-string>",
+              "space_created_time": 0,
+              "space_domain": "<synthetic-redacted-string>",
+              "space_has_disabled_ai": false,
+              "space_has_paid_nonzero": false,
+              "space_id": "<synthetic-redacted-string>",
+              "space_invite_link_enabled": false,
+              "space_is_ai_eligible": false,
+              "space_is_leap_enabled": false,
+              "space_is_sales_assisted": false,
+              "space_is_subscribed": false,
+              "space_plan_type": "<synthetic-redacted-string>",
+              "space_role": "<synthetic-redacted-string>",
+              "space_timeline_view_usage": 0,
+              "space_user_ai_usage": 0,
+              "space_visible_guests": 0,
+              "space_visible_members": 0,
+              "space_visible_members_bucketized": "<synthetic-redacted-string>",
+              "space_visible_total": 0,
+              "status": "<synthetic-redacted-string>",
+              "subscription_tier": "<synthetic-redacted-string>",
+              "tab_count": 0,
+              "tab_id": "<synthetic-redacted-string>",
+              "teams_is_enabled": false,
+              "time": 0,
+              "time_zone": "<synthetic-redacted-string>",
+              "time_zone_region": "<synthetic-redacted-string>",
+              "used_desktop_web_app": false,
+              "used_windows_app": false,
+              "user_email": "<synthetic-redacted-string>",
+              "user_id": "<synthetic-redacted-string>",
+              "user_session_count": 0,
+              "utm_campaign": "<synthetic-redacted-string>",
+              "utm_content": "<synthetic-redacted-string>",
+              "utm_medium": "<synthetic-redacted-string>",
+              "utm_source": "<synthetic-redacted-string>",
+              "utm_term": "<synthetic-redacted-string>",
+              "windowHeight": 0,
+              "windowWidth": 0
+            },
+            "event_type": "<synthetic-redacted-string>",
+            "groups": {
+              "workspace": "<synthetic-redacted-string>"
+            },
+            "insert_id": "<synthetic-redacted-string>",
+            "ip": "<synthetic-redacted-string>",
+            "language": "<synthetic-redacted-string>",
+            "library": "<synthetic-redacted-string>",
+            "platform": "<synthetic-redacted-string>",
+            "session_id": 0,
+            "time": 0,
+            "user_agent": "<synthetic-redacted-string>",
+            "user_id": "<synthetic-redacted-string>",
+            "version_name": "<synthetic-redacted-string>"
+          }
+        ],
+        "options": {},
+        "request_metadata": {
+          "sdk": {
+            "metrics": {
+              "histogram": {}
+            }
+          }
+        }
+      },
+      "response_body": {
+        "code": 0,
+        "events_ingested": 0,
+        "payload_size_bytes": 0,
+        "server_upload_time": 0
+      }
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/getAIUsageEligibilityV2",
+      "request_body": {
+        "spaceId": "<synthetic-redacted-string>"
+      },
+      "response_body": {
+        "basicCredits": {
+          "lastSpaceUsageAtMs": 0,
+          "lastSpaceUserUsageAtMs": 0,
+          "spaceLimit": 0,
+          "spaceUsage": 0,
+          "userLimit": 0,
+          "userPromotionalLimit": 0,
+          "userPromotionalUsage": 0,
+          "userUsage": 0
+        },
+        "dependencies": [
+          {
+            "key": "<synthetic-redacted-string>",
+            "version": 0
+          }
+        ],
+        "limits": {
+          "free": {
+            "spaceLimit": 0,
+            "userLimit": 0,
+            "userPromotionalLimit": 0
+          },
+          "purchased": {
+            "perSource": {
+              "allocated": 0,
+              "flexible_recurring": 0,
+              "monthlyAllocated": 0,
+              "monthlyCommitted": 0,
+              "yearlyElastic": 0
+            },
+            "totalLimit": 0
+          }
+        },
+        "premiumCredits": {
+          "creditsInOverage": 0,
+          "overageLimit": 0,
+          "perSource": {
+            "monthlyAllocated": {
+              "limit": 0,
+              "usageTotal": 0
+            },
+            "monthlyCommitted": {
+              "limit": 0,
+              "usageTotal": 0
+            },
+            "stackedTrial": {
+              "limit": 0,
+              "usageTotal": 0
+            },
+            "yearlyElastic": {
+              "limit": 0,
+              "usageTotal": 0
+            }
+          },
+          "servicePeriodStartMs": 0,
+          "totalCreditBalance": 0
+        },
+        "usage": {
+          "creditsInOverage": 0,
+          "currentServicePeriod": {
+            "spaceUsage": 0,
+            "userUsage": 0
+          },
+          "lastSpaceUsageAtMs": 0,
+          "lastSpaceUserUsageAtMs": 0,
+          "lifetime": {
+            "spaceUsage": 0,
+            "userPromotionalUsage": 0,
+            "userUsage": 0
+          },
+          "totalCreditBalance": 0
+        }
+      }
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/getCreditRateLimitStatus",
+      "request_body": {
+        "spaceId": "<synthetic-redacted-string>"
+      },
+      "response_body": {
+        "billingPeriodWindow": {
+          "cadence": "<synthetic-redacted-string>",
+          "creditType": "<synthetic-redacted-string>",
+          "limit": 0,
+          "periodEndMs": 0,
+          "scope": "<synthetic-redacted-string>",
+          "used": 0
+        },
+        "enforcement": "<synthetic-redacted-string>",
+        "resetsInSeconds": 0,
+        "status": "<synthetic-redacted-string>",
+        "window": {
+          "creditType": "<synthetic-redacted-string>",
+          "limit": 0,
+          "scope": "<synthetic-redacted-string>",
+          "used": 0,
+          "window": "<synthetic-redacted-string>"
+        }
+      }
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/getInferenceTranscriptsUnreadCount",
+      "request_body": {
+        "spaceId": "<synthetic-redacted-string>",
+        "threadParentId": "<synthetic-redacted-string>"
+      },
+      "response_body": {
+        "count": 0
+      }
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/getRecentPageVisits",
+      "request_body": {
+        "beforeTimestamp": 0,
+        "limit": 0,
+        "sinceTimestamp": 0,
+        "spaceId": "<synthetic-redacted-string>"
+      },
+      "response_body": null
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/getSidebarSectionItems",
+      "request_body": {
+        "sectionId": "<synthetic-redacted-string>",
+        "spaceId": "<synthetic-redacted-string>"
+      },
+      "response_body": {
+        "hasMore": false,
+        "inGate": false,
+        "recordMap": {
+          "__version__": 0,
+          "block": {
+            "3acbf4af-15b3-80b8-bb69-ec9e9d71660c": {
+              "spaceId": "<synthetic-redacted-string>",
+              "value": {
+                "role": "<synthetic-redacted-string>",
+                "value": {
+                  "alive": false,
+                  "content": [
+                    "<synthetic-redacted-string>"
+                  ],
+                  "crdt_data": {
+                    "title": {
+                      "n": null,
+                      "r": null
+                    }
+                  },
+                  "crdt_format_version": 0,
+                  "created_by_id": "<synthetic-redacted-string>",
+                  "created_by_table": "<synthetic-redacted-string>",
+                  "created_time": 0,
+                  "format": {
+                    "transcription_notes_id": "<synthetic-redacted-string>",
+                    "transcription_state": {
+                      "lastUpdatedAt": null,
+                      "state": null
+                    },
+                    "transcription_state_history": [
+                      null
+                    ]
+                  },
+                  "id": "<synthetic-redacted-string>",
+                  "last_edited_by_id": "<synthetic-redacted-string>",
+                  "last_edited_by_table": "<synthetic-redacted-string>",
+                  "last_edited_time": 0,
+                  "parent_id": "<synthetic-redacted-string>",
+                  "parent_table": "<synthetic-redacted-string>",
+                  "properties": {
+                    "title": [
+                      null
+                    ]
+                  },
+                  "space_id": "<synthetic-redacted-string>",
+                  "type": "<synthetic-redacted-string>",
+                  "version": 0
+                }
+              }
+            }
+          }
+        },
+        "truncatedBlockIds": [
+          "<synthetic-redacted-string>"
+        ]
+      }
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/getUserNotificationsFanout",
+      "request_body": {
+        "depth": 0,
+        "isInboxV2": false,
+        "markNotificationsAsReceived": false,
+        "size": 0,
+        "spaceViewPointers": [
+          {
+            "id": "<synthetic-redacted-string>",
+            "spaceId": "<synthetic-redacted-string>",
+            "table": "<synthetic-redacted-string>"
+          }
+        ]
+      },
+      "response_body": {
+        "recordMap": {
+          "__version__": 0
+        },
+        "results": [
+          {
+            "spaceId": "<synthetic-redacted-string>",
+            "unread": {
+              "following": 0,
+              "mentions": 0,
+              "nonMentions": 0
+            },
+            "unreceived": {
+              "notificationIds": [
+                null
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/getUserNotificationsInitial",
+      "request_body": {
+        "isInboxV2": false,
+        "markNotificationsAsReceived": false,
+        "size": 0
+      },
+      "response_body": {
+        "fanoutData": [
+          {
+            "headers": {
+              "x-notion-cell": "<synthetic-redacted-string>"
+            },
+            "request": {
+              "depth": 0,
+              "isInboxV2": false,
+              "markNotificationsAsReceived": false,
+              "size": 0,
+              "spaceViewPointers": [
+                {
+                  "id": "<synthetic-redacted-string>",
+                  "spaceId": "<synthetic-redacted-string>",
+                  "table": "<synthetic-redacted-string>"
+                }
+              ]
+            }
+          }
+        ],
+        "recordMap": {
+          "__version__": 0
+        },
+        "results": [
+          {
+            "spaceId": "<synthetic-redacted-string>",
+            "unread": {
+              "following": 0,
+              "mentions": 0,
+              "nonMentions": 0
+            },
+            "unreceived": {
+              "notificationIds": [
+                null
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/getUserSharedPagesInSpace",
+      "request_body": {
+        "spaceId": "<synthetic-redacted-string>"
+      },
+      "response_body": {
+        "pages": [
+          "<synthetic-redacted-string>"
+        ],
+        "recordMap": {
+          "__version__": 0,
+          "block": {
+            "3aabf4af-15b3-80a8-b46b-cc8da00ace94": {
+              "spaceId": "<synthetic-redacted-string>",
+              "value": {
+                "role": "<synthetic-redacted-string>",
+                "value": {
+                  "alive": false,
+                  "content": [
+                    "<synthetic-redacted-string>"
+                  ],
+                  "crdt_data": {
+                    "title": {
+                      "n": null,
+                      "r": null
+                    }
+                  },
+                  "crdt_format_version": 0,
+                  "created_by_id": "<synthetic-redacted-string>",
+                  "created_by_table": "<synthetic-redacted-string>",
+                  "created_time": 0,
+                  "format": {
+                    "ai_personalization_page": {
+                      "templateName": null
+                    },
+                    "page_icon": "<synthetic-redacted-string>"
+                  },
+                  "id": "<synthetic-redacted-string>",
+                  "last_edited_by_id": "<synthetic-redacted-string>",
+                  "last_edited_by_table": "<synthetic-redacted-string>",
+                  "last_edited_time": 0,
+                  "parent_id": "<synthetic-redacted-string>",
+                  "parent_table": "<synthetic-redacted-string>",
+                  "permissions": [
+                    {
+                      "role": null,
+                      "type": null,
+                      "user_id": null
+                    }
+                  ],
+                  "properties": {
+                    "title": [
+                      null
+                    ]
+                  },
+                  "space_id": "<synthetic-redacted-string>",
+                  "type": "<synthetic-redacted-string>",
+                  "version": 0
+                }
+              }
+            },
+            "3acbf4af-15b3-8015-9385-f345e766c437": {
+              "spaceId": "<synthetic-redacted-string>",
+              "value": {
+                "role": "<synthetic-redacted-string>",
+                "value": {
+                  "alive": false,
+                  "content": [
+                    "<synthetic-redacted-string>"
+                  ],
+                  "crdt_data": {
+                    "title": {
+                      "n": null,
+                      "r": null
+                    }
+                  },
+                  "crdt_format_version": 0,
+                  "created_by_id": "<synthetic-redacted-string>",
+                  "created_by_table": "<synthetic-redacted-string>",
+                  "created_time": 0,
+                  "id": "<synthetic-redacted-string>",
+                  "last_edited_by_id": "<synthetic-redacted-string>",
+                  "last_edited_by_table": "<synthetic-redacted-string>",
+                  "last_edited_time": 0,
+                  "parent_id": "<synthetic-redacted-string>",
+                  "parent_table": "<synthetic-redacted-string>",
+                  "permissions": [
+                    {
+                      "role": null,
+                      "type": null,
+                      "user_id": null
+                    }
+                  ],
+                  "properties": {
+                    "title": [
+                      null
+                    ]
+                  },
+                  "space_id": "<synthetic-redacted-string>",
+                  "type": "<synthetic-redacted-string>",
+                  "version": 0
+                }
+              }
+            },
+            "84355d62-879b-4793-a0f6-7137e65b5a87": {
+              "spaceId": "<synthetic-redacted-string>",
+              "value": {
+                "role": "<synthetic-redacted-string>",
+                "value": {
+                  "alive": false,
+                  "content": [
+                    "<synthetic-redacted-string>"
+                  ],
+                  "crdt_data": {
+                    "title": {
+                      "n": null,
+                      "r": null
+                    }
+                  },
+                  "crdt_format_version": 0,
+                  "created_by_id": "<synthetic-redacted-string>",
+                  "created_by_table": "<synthetic-redacted-string>",
+                  "created_time": 0,
+                  "format": {
+                    "system_block_type": "<synthetic-redacted-string>"
+                  },
+                  "id": "<synthetic-redacted-string>",
+                  "ignore_block_count": false,
+                  "is_template": false,
+                  "last_edited_by_id": "<synthetic-redacted-string>",
+                  "last_edited_by_table": "<synthetic-redacted-string>",
+                  "last_edited_time": 0,
+                  "parent_id": "<synthetic-redacted-string>",
+                  "parent_table": "<synthetic-redacted-string>",
+                  "permissions": [
+                    {
+                      "role": null,
+                      "type": null,
+                      "user_id": null
+                    }
+                  ],
+                  "properties": {
+                    "title": [
+                      null
+                    ]
+                  },
+                  "space_id": "<synthetic-redacted-string>",
+                  "type": "<synthetic-redacted-string>",
+                  "version": 0
+                }
+              }
+            }
+          },
+          "space_view": {
+            "3a9bf4af-15b3-81c3-9603-00065a354c1b": {
+              "spaceId": "<synthetic-redacted-string>",
+              "value": {
+                "role": "<synthetic-redacted-string>",
+                "value": {
+                  "alive": false,
+                  "bookmarked_pages": [
+                    "<synthetic-redacted-string>"
+                  ],
+                  "first_joined_space_time": 0,
+                  "id": "<synthetic-redacted-string>",
+                  "joined": false,
+                  "notify_desktop": false,
+                  "notify_email": false,
+                  "notify_mobile": false,
+                  "parent_id": "<synthetic-redacted-string>",
+                  "parent_table": "<synthetic-redacted-string>",
+                  "private_pages": [
+                    "<synthetic-redacted-string>"
+                  ],
+                  "settings": {
+                    "agent_chat_modules": [
+                      null
+                    ],
+                    "agent_personalization_settings": {
+                      "context_page_id": null,
+                      "has_already_seen_personalization_settings_modal": null,
+                      "name": null,
+                      "recently_used_pages": null
+                    },
+                    "business_trial_items_completed": {
+                      "importer": null,
+                      "meetAgent": null
+                    },
+                    "callout_seen_timestamps": {
+                      "invite_members_sidebar_callout": null
+                    },
+                    "library": {
+                      "version": null
+                    },
+                    "notify_email_digest": false,
+                    "notify_home_digest_email": false,
+                    "personal_home": {
+                      "enabled_features": null,
+                      "hide_new_badge": null,
+                      "home_landing_page_enabled_v2": null,
+                      "seen_welcome_animation": null,
+                      "version": null
+                    }
+                  },
+                  "shared_pages_manual_sort": [
+                    "<synthetic-redacted-string>"
+                  ],
+                  "space_id": "<synthetic-redacted-string>",
+                  "version": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/syncPageRecordSinceTimestamp",
+      "request_body": {
+        "dedupeOptions": {
+          "dedupeSessionId": "<synthetic-redacted-string>",
+          "isFirstDedupeRequest": false
+        },
+        "requests": [
+          {
+            "cursor": "<synthetic-redacted-string>",
+            "page": {
+              "id": "<synthetic-redacted-string>",
+              "spaceId": "<synthetic-redacted-string>"
+            }
+          }
+        ]
+      },
+      "response_body": null
+    },
+    {
+      "fixture_purpose": "parser-contract-test-only",
+      "headers": {},
+      "method": "POST",
+      "network_replay_allowed": false,
+      "path": "/api/v3/syncRecordValuesSpaceInitial",
+      "request_body": {
+        "requests": [
+          {
+            "pointer": {
+              "id": "<synthetic-redacted-string>",
+              "spaceId": "<synthetic-redacted-string>",
+              "table": "<synthetic-redacted-string>"
+            },
+            "version": 0
+          }
+        ],
+        "spacePointer": {
+          "id": "<synthetic-redacted-string>",
+          "table": "<synthetic-redacted-string>"
+        }
+      },
+      "response_body": {
+        "recordMap": {
+          "__version__": 0,
+          "thread": {
+            "3acbf4af-15b3-8049-997c-00a9685a5516": {
+              "spaceId": "<synthetic-redacted-string>",
+              "value": {
+                "role": "<synthetic-redacted-string>",
+                "value": {
+                  "alive": false,
+                  "created_by_id": "<synthetic-redacted-string>",
+                  "created_by_table": "<synthetic-redacted-string>",
+                  "created_source": "<synthetic-redacted-string>",
+                  "created_time": 0,
+                  "current_inference_id": "<synthetic-redacted-string>",
+                  "current_inference_lease_expiration": "<synthetic-redacted-string>",
+                  "data": {
+                    "title": "<synthetic-redacted-string>"
+                  },
+                  "id": "<synthetic-redacted-string>",
+                  "messages": [
+                    "<synthetic-redacted-string>"
+                  ],
+                  "parent_id": "<synthetic-redacted-string>",
+                  "parent_table": "<synthetic-redacted-string>",
+                  "space_id": "<synthetic-redacted-string>",
+                  "type": "<synthetic-redacted-string>",
+                  "updated_by_id": "<synthetic-redacted-string>",
+                  "updated_by_table": "<synthetic-redacted-string>",
+                  "updated_time": 0,
+                  "version": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "generated_from_sanitized_evidence": true,
+  "network_replay_allowed": false,
+  "source_sha256": "f598ebc5c9fadcad794d3530d29d45adc633f8c4e3738d0e628bc35662e9da34"
+}
