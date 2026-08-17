@@ -250,11 +250,12 @@ def test_chat_wait_is_always_immediate_for_polling():
 
 def test_persist_chat_progress_updates_pollable_job(monkeypatch):
     state = {"jobs": {"request-1": {"request_id": "request-1", "status": "running"}}}
+    saved = []
     monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
     monkeypatch.setattr(
         mcp_server,
         "_save_chat_job_state",
-        lambda _value: pytest.fail("stream progress must not rewrite the durable ledger"),
+        lambda value, *args, **kwargs: saved.append((value, args, kwargs)),
     )
 
     mcp_server._persist_chat_progress(
@@ -273,6 +274,8 @@ def test_persist_chat_progress_updates_pollable_job(monkeypatch):
         {"completed": True, "text": "Map pages"},
         {"completed": False, "text": "Apply edits"},
     ]
+    assert saved, "bounded progress should be durably checkpointed"
+    assert state["jobs"]["request-1"]["progress_persisted_at"] > 0
 
 
 def test_chat_job_state_cache_and_compaction_avoid_repeated_full_reads(tmp_path, monkeypatch):
@@ -554,6 +557,40 @@ def test_remote_chat_id_and_stall_monitoring(monkeypatch):
     assert job["cancel_recommended"] is True
 
 
+def test_poll_health_is_persisted_durably(monkeypatch):
+    state = {
+        "jobs": {
+            "request-1": {
+                "request_id": "request-1",
+                "status": "pending",
+                "created_at": 1_000,
+                "last_progress_at": 1_000,
+                "poll_count": 2,
+            }
+        }
+    }
+    saves = []
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_now_ms", lambda: 31_000)
+    monkeypatch.setattr(mcp_server, "_configured_chat_stall_seconds", lambda: 15.0)
+    monkeypatch.setattr(
+        mcp_server,
+        "_save_chat_job_state",
+        lambda value, *args, **kwargs: saves.append((value, args, kwargs)),
+    )
+
+    job = mcp_server._refresh_and_persist_chat_job_health(
+        "request-1",
+        increment_poll=True,
+    )
+
+    assert job is not None
+    assert job["poll_count"] == 3
+    assert job["dead_loop_suspected"] is True
+    assert state["jobs"]["request-1"]["poll_count"] == 3
+    assert saves
+
+
 def test_cancel_chat_job_marks_persisted_job_cancelled(monkeypatch):
     state = {
         "jobs": {
@@ -580,6 +617,216 @@ def test_cancel_chat_job_marks_persisted_job_cancelled(monkeypatch):
     assert result.status == "cancelled"
     assert result.error == "obsolete"
     assert state["jobs"]["request-1"]["status"] == "cancelled"
+    assert state["jobs"]["request-1"]["reconciliation_required"] is True
+    assert state["jobs"]["request-1"]["retry_safe"] is False
+
+
+def test_cancel_chat_job_preserves_stall_evidence_and_upstream_uncertainty(monkeypatch):
+    state = {
+        "jobs": {
+            "request-1": {
+                "request_id": "request-1",
+                "job_id": "request-1",
+                "status": "running",
+                "session_name": "review",
+                "conversation_id": "conv-1",
+                "created_at": 1_000,
+                "updated_at": 1_000,
+                "last_progress_at": 1_000,
+            }
+        }
+    }
+
+    class HeldTask:
+        def __init__(self):
+            self.cancelled = False
+
+        def done(self):
+            return False
+
+        def cancel(self):
+            self.cancelled = True
+
+    task = HeldTask()
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {"request-1": task})
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _request_id: state["jobs"]["request-1"])
+    monkeypatch.setattr(mcp_server, "_now_ms", lambda: 31_000)
+    monkeypatch.setattr(mcp_server, "_configured_chat_stall_seconds", lambda: 15.0)
+    monkeypatch.setattr(mcp_server, "_save_chat_job_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        mcp_server,
+        "_chat_job_output",
+        lambda *args, **kwargs: mcp_server.ChatJobOutput(
+            ok=True,
+            found=True,
+            status="cancelled",
+            request_id="request-1",
+            job_id="request-1",
+        ),
+    )
+
+    result = mcp_server._cancel_chat_job("request-1", "stalled")
+
+    cancelled = state["jobs"]["request-1"]
+    assert result.status == "cancelled"
+    assert task.cancelled is True
+    assert cancelled["cancelled_from_status"] == "running"
+    assert cancelled["stalled_for_seconds_at_cancel"] == 30.0
+    assert cancelled["dead_loop_suspected_at_cancel"] is True
+    assert cancelled["cancel_recommended_at_cancel"] is True
+    assert cancelled["cancellation_state"] == "local_task_cancel_requested_upstream_unconfirmed"
+    assert cancelled["upstream_execution_state"] == "unknown"
+    assert cancelled["reconciliation_required"] is True
+
+
+def test_cancel_reconciles_completed_checkpoint_before_marking_cancelled(monkeypatch):
+    job = {
+        "request_id": "request-1",
+        "job_id": "request-1",
+        "status": "running",
+        "conversation_id": "conv-1",
+        "baseline_message_id": 4,
+    }
+    completed = []
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _request_id: job)
+    monkeypatch.setattr(
+        mcp_server,
+        "_completed_turn_after_checkpoint",
+        lambda _conversation_id, _baseline: {"response_text": "done", "assistant_message_id": 5},
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "_complete_chat_job_from_local_turn",
+        lambda request_id, current, turn: completed.append((request_id, current, turn)),
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "_chat_job_output",
+        lambda *args, **kwargs: mcp_server.ChatJobOutput(
+            ok=True,
+            found=True,
+            status="completed",
+            request_id="request-1",
+            job_id="request-1",
+        ),
+    )
+
+    result = mcp_server._cancel_chat_job("request-1", "obsolete")
+
+    assert result.status == "completed"
+    assert completed and completed[0][0] == "request-1"
+
+
+def test_cancelled_job_output_is_not_authoritative(monkeypatch):
+    job = {
+        "request_id": "request-1",
+        "job_id": "request-1",
+        "status": "cancelled",
+        "response_text": "late result",
+        "reconciliation_required": True,
+        "created_at": 1,
+        "updated_at": 2,
+    }
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+    monkeypatch.setattr(mcp_server, "_load_chat_job", lambda _request_id: job)
+    monkeypatch.setattr(mcp_server, "_refresh_and_persist_chat_job_health", lambda *args, **kwargs: job)
+
+    result = mcp_server._chat_job_output("request-1", increment_poll=False)
+
+    assert result.status == "cancelled"
+    assert result.authoritative is False
+    assert result.retry_safe is False
+    assert result.reconciliation_required is True
+
+
+def test_cancelled_late_completion_is_reconciled_without_reviving_job(monkeypatch):
+    job = {
+        "request_id": "request-1",
+        "job_id": "request-1",
+        "status": "cancelled",
+        "conversation_id": "conv-1",
+        "reconciliation_required": True,
+        "cancellation_state": "local_task_cancel_requested_upstream_unconfirmed",
+    }
+    persisted = []
+    monkeypatch.setattr(
+        mcp_server,
+        "_chat_output_from_local_turn",
+        lambda _job, _turn: {
+            "status": "completed",
+            "response_text": "late answer",
+            "remote_chat_id": "thread-1",
+            "output_integrity": {"quarantine_required": False},
+            "quarantined": False,
+        },
+    )
+    monkeypatch.setattr(mcp_server, "_persist_chat_job", lambda value: persisted.append(dict(value)))
+    monkeypatch.setattr(mcp_server, "_now_ms", lambda: 50_000)
+
+    reconciled = mcp_server._reconcile_cancelled_chat_job_from_local_turn(
+        "request-1",
+        job,
+        {"assistant_message_id": 7},
+    )
+
+    assert reconciled["status"] == "cancelled"
+    assert reconciled["late_completion_detected"] is True
+    assert reconciled["late_completion_at"] == 50_000
+    assert reconciled["late_response_chars"] == len("late answer")
+    assert reconciled["upstream_execution_state"] == "terminal"
+    assert reconciled["reconciliation_required"] is False
+    assert reconciled["cancellation_state"] == "local_cancelled_upstream_terminal_observed"
+    assert reconciled["remote_chat_id"] == "thread-1"
+    assert persisted and persisted[-1]["status"] == "cancelled"
+
+
+def test_chat_job_sqlite_journal_records_status_transitions(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "jobs.sqlite3"
+    state = {
+        "jobs": {
+            "request-1": {
+                "request_id": "request-1",
+                "status": "running",
+                "created_at": 1,
+                "updated_at": 1,
+            }
+        }
+    }
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        mcp_server._ensure_chat_job_db_schema(conn)
+        mcp_server._append_chat_job_transition_events(conn, state, {"request-1"})
+        mcp_server._upsert_chat_jobs(conn, state, {"request-1"})
+        conn.commit()
+
+        state["jobs"]["request-1"].update(
+            {
+                "status": "cancelled",
+                "updated_at": 2,
+                "cancellation_state": "local_task_cancel_requested_upstream_unconfirmed",
+                "reconciliation_required": True,
+            }
+        )
+        mcp_server._append_chat_job_transition_events(conn, state, {"request-1"})
+        mcp_server._upsert_chat_jobs(conn, state, {"request-1"})
+        conn.commit()
+        rows = conn.execute(
+            "SELECT event_type, previous_status, new_status, metadata_json "
+            "FROM chat_job_events WHERE request_id = ? ORDER BY event_id",
+            ("request-1",),
+        ).fetchall()
+
+    assert [(row["event_type"], row["previous_status"], row["new_status"]) for row in rows] == [
+        ("job_created", "", "running"),
+        ("status_transition", "running", "cancelled"),
+    ]
+    metadata = json.loads(rows[-1]["metadata_json"])
+    assert metadata["reconciliation_required"] is True
+    assert metadata["cancellation_state"] == "local_task_cancel_requested_upstream_unconfirmed"
 
 
 def test_cancel_unknown_chat_job_returns_not_found(monkeypatch):
@@ -939,6 +1186,80 @@ def test_atomic_admission_allows_only_one_simultaneous_turn_per_conversation(
     assert conflict[3] == claimed[1]["request_id"]
     persisted = mcp_server._load_chat_job_state(state_path)
     assert list(persisted["jobs"]) == [claimed[1]["request_id"]]
+
+
+def test_unreconciled_cancelled_job_fences_replacement_turn(tmp_path, monkeypatch):
+    state_path = tmp_path / "jobs.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "jobs": {
+                    "request-old": {
+                        "request_id": "request-old",
+                        "job_id": "request-old",
+                        "status": "cancelled",
+                        "conversation_id": "shared-conversation",
+                        "created_at": 1,
+                        "updated_at": 2,
+                        "reconciliation_required": True,
+                        "upstream_execution_state": "unknown",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    status, record, task, conflict_id = mcp_server._claim_chat_job_task(
+        _claim_test_job("request-new", "shared-conversation"),
+        _HeldTask,
+        path=state_path,
+    )
+
+    assert status == "stale_conflict"
+    assert conflict_id == "request-old"
+    assert record["status"] == "cancelled"
+    assert record["reconciliation_required"] is True
+    assert task is None
+    persisted = mcp_server._load_chat_job_state(state_path)
+    assert "request-new" not in persisted["jobs"]
+
+
+def test_reconciled_cancelled_job_no_longer_fences_replacement_turn(tmp_path, monkeypatch):
+    state_path = tmp_path / "jobs.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "jobs": {
+                    "request-old": {
+                        "request_id": "request-old",
+                        "job_id": "request-old",
+                        "status": "cancelled",
+                        "conversation_id": "shared-conversation",
+                        "created_at": 1,
+                        "updated_at": 2,
+                        "reconciliation_required": False,
+                        "late_completion_detected": True,
+                        "upstream_execution_state": "terminal",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_server, "_CHAT_JOB_TASKS", {})
+
+    status, record, task, conflict_id = mcp_server._claim_chat_job_task(
+        _claim_test_job("request-new", "shared-conversation"),
+        _HeldTask,
+        path=state_path,
+    )
+
+    assert status == "claimed"
+    assert conflict_id == ""
+    assert record["request_id"] == "request-new"
+    assert task is not None
 
 
 def test_simultaneous_same_request_id_creates_only_one_task(tmp_path, monkeypatch):

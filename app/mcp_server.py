@@ -121,6 +121,7 @@ DEFAULT_CHAT_JOB_DB_PATH = Path(
     )
 )
 DEFAULT_CHAT_STALL_SECONDS = 180.0
+DEFAULT_CHAT_JOB_WATCHDOG_SECONDS = 5.0
 MAX_PROGRESS_REASONING_CHARS = 200_000
 MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS = 4_000
 MAX_CHAT_JOB_PROMPT_CHARS = 20_000
@@ -130,6 +131,7 @@ SESSION_STATE_VERSION = 2
 _SESSION_STATE_MUTEX = threading.RLock()
 _CHAT_JOB_STATE_MUTEX = threading.RLock()
 _CHAT_JOB_TASKS: dict[str, asyncio.Task[dict[str, Any]]] = {}
+_CHAT_JOB_WATCHDOG_TASK: asyncio.Task[None] | None = None
 _CHAT_JOB_STATE_CACHE: dict[
     str, tuple[tuple[int, int, int, int] | None, dict[str, Any]]
 ] = {}
@@ -137,7 +139,7 @@ _CHAT_JOB_DB_READY: set[str] = set()
 logger = logging.getLogger(__name__)
 CHAT_JOB_STATE_WRITE_RETRIES = 5
 CHAT_JOB_STATE_WRITE_BACKOFF_SECONDS = 0.05
-CHAT_JOB_LEDGER_SCHEMA_VERSION = 1
+CHAT_JOB_LEDGER_SCHEMA_VERSION = 2
 
 
 class HealthOutput(BaseModel):
@@ -397,6 +399,36 @@ class ChatJobOutput(BaseModel):
     stalled_for_seconds: float = Field(default=0.0, description="Seconds since meaningful public progress changed.")
     dead_loop_suspected: bool = Field(default=False, description="Whether the job appears stalled and may require cancellation.")
     cancel_recommended: bool = Field(default=False, description="Whether cancellation should be considered before further polling.")
+    retry_safe: bool = Field(
+        default=False,
+        description="Whether retrying this same request_id is safe without first reconciling an unknown upstream outcome.",
+    )
+    reconciliation_required: bool = Field(
+        default=False,
+        description="Whether the local tracker lacks a confirmed terminal upstream outcome and must be reconciled before replacement work.",
+    )
+    cancellation_state: str = Field(
+        default="",
+        description="Cancellation lifecycle state. Local cancellation is not treated as upstream cancellation acknowledgement.",
+    )
+    upstream_execution_state: str = Field(
+        default="",
+        description="Observed upstream execution state such as unknown, active, terminal, or not_started.",
+    )
+    cancel_requested_at: int = Field(default=0, description="Unix epoch milliseconds when cancellation was requested.")
+    cancelled_from_status: str = Field(default="", description="Job status immediately before local cancellation.")
+    stalled_for_seconds_at_cancel: float = Field(
+        default=0.0,
+        description="Immutable stall duration captured immediately before cancellation.",
+    )
+    dead_loop_suspected_at_cancel: bool = Field(
+        default=False,
+        description="Whether the stall detector was active immediately before cancellation.",
+    )
+    late_completion_detected: bool = Field(
+        default=False,
+        description="Whether a terminal local conversation checkpoint was observed after local cancellation.",
+    )
     response: dict[str, Any] | None = Field(default=None, description="Persisted ChatOutput-compatible response, if available.")
     error: str | None = Field(default=None, description="Persisted error summary, if any.")
     raw_job: dict[str, Any] = Field(default_factory=dict, description="Raw persisted job state.")
@@ -1385,6 +1417,16 @@ def _configured_chat_stall_seconds() -> float:
     return max(15.0, configured)
 
 
+def _configured_chat_job_watchdog_seconds() -> float:
+    raw = os.getenv("MCP_NOTION2API_JOB_WATCHDOG_SECONDS", "")
+    configured = (
+        _safe_float(raw, DEFAULT_CHAT_JOB_WATCHDOG_SECONDS)
+        if raw.strip()
+        else DEFAULT_CHAT_JOB_WATCHDOG_SECONDS
+    )
+    return min(60.0, max(1.0, configured))
+
+
 def _bounded_chat_wait_seconds(wait_seconds: float | None) -> float:
     # Retain the argument for compatibility with older MCP clients, but never
     # hold an MCP request open while the backend job runs.
@@ -1570,12 +1612,76 @@ def _ensure_chat_job_db_schema(conn: sqlite3.Connection) -> None:
             ON chat_jobs(conversation_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_jobs_session_updated
             ON chat_jobs(session_name, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS chat_job_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            event_at INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            previous_status TEXT NOT NULL DEFAULT '',
+            new_status TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_job_events_request_time
+            ON chat_job_events(request_id, event_at, event_id);
         """
     )
     conn.execute(
         "INSERT OR REPLACE INTO ledger_metadata(key, value) VALUES ('schema_version', ?)",
         (str(CHAT_JOB_LEDGER_SCHEMA_VERSION),),
     )
+
+
+def _chat_job_event_metadata(job: dict[str, Any]) -> dict[str, Any]:
+    progress = job.get("progress") if isinstance(job.get("progress"), dict) else {}
+    return {
+        "last_progress_at": int(job.get("last_progress_at") or 0),
+        "stalled_for_seconds": float(job.get("stalled_for_seconds") or 0.0),
+        "dead_loop_suspected": bool(job.get("dead_loop_suspected")),
+        "cancel_recommended": bool(job.get("cancel_recommended")),
+        "cancel_requested_at": int(job.get("cancel_requested_at") or 0),
+        "cancellation_state": str(job.get("cancellation_state") or ""),
+        "upstream_execution_state": str(job.get("upstream_execution_state") or ""),
+        "reconciliation_required": bool(job.get("reconciliation_required")),
+        "progress_phase": str(progress.get("phase") or ""),
+        "quarantined": bool(job.get("quarantined")),
+    }
+
+
+def _append_chat_job_transition_events(
+    conn: sqlite3.Connection,
+    state: dict[str, Any],
+    request_ids: set[str] | None,
+) -> None:
+    jobs = state.get("jobs") if isinstance(state.get("jobs"), dict) else {}
+    ids = request_ids if request_ids is not None else {str(key) for key in jobs}
+    for request_id in ids:
+        job = jobs.get(request_id)
+        if not isinstance(job, dict):
+            continue
+        row = conn.execute(
+            "SELECT status FROM chat_jobs WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        previous_status = str(row["status"] if row is not None else "")
+        new_status = str(job.get("status") or "")
+        if previous_status == new_status:
+            continue
+        event_type = "job_created" if not previous_status else "status_transition"
+        conn.execute(
+            """
+            INSERT INTO chat_job_events(
+                request_id, event_at, event_type, previous_status, new_status, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request_id,
+                int(job.get("updated_at") or _now_ms()),
+                event_type,
+                previous_status,
+                new_status,
+                json.dumps(_chat_job_event_metadata(job), ensure_ascii=False, sort_keys=True),
+            ),
+        )
 
 
 def _encoded_chat_job(job: dict[str, Any]) -> tuple[bytes, str, int]:
@@ -1812,6 +1918,7 @@ def _save_chat_job_state(
             _ensure_chat_job_db(path, storage_path)
             with _chat_job_db(storage_path) as conn:
                 conn.execute("PRAGMA synchronous = FULL")
+                _append_chat_job_transition_events(conn, state, changed_request_ids)
                 _upsert_chat_jobs(conn, state, changed_request_ids)
                 conn.commit()
         else:
@@ -2023,6 +2130,31 @@ def _refresh_chat_job_health(job: dict[str, Any], *, increment_poll: bool = Fals
     return updated
 
 
+def _refresh_and_persist_chat_job_health(
+    request_id: str,
+    *,
+    increment_poll: bool = False,
+) -> dict[str, Any] | None:
+    """Refresh monitoring fields against the latest persisted state.
+
+    Polling previously refreshed only a process-local copy. Persisting from a
+    stale caller copy could also overwrite a concurrently terminalized job, so
+    this helper always reloads the latest record while holding the job mutex.
+    """
+
+    normalized_id = _normalize_request_id(request_id)
+    with _CHAT_JOB_STATE_MUTEX:
+        state = _load_chat_job_state()
+        jobs = state.setdefault("jobs", {})
+        current = jobs.get(normalized_id)
+        if not isinstance(current, dict):
+            return None
+        updated = _refresh_chat_job_health(current, increment_poll=increment_poll)
+        jobs[normalized_id] = updated
+        _save_chat_job_state(state, changed_request_ids={normalized_id})
+        return updated
+
+
 def _persist_chat_progress(request_id: str, reasoning: str, content: str, event_count: int, complete: bool) -> None:
     with _CHAT_JOB_STATE_MUTEX:
         state = _load_chat_job_state()
@@ -2041,8 +2173,11 @@ def _persist_chat_progress(request_id: str, reasoning: str, content: str, event_
         job["updated_at"] = now
         job = _refresh_chat_job_health(job)
         jobs[request_id] = job
-        # ponytail: progress stays process-local until terminal persistence;
-        # add a small append-only journal if sub-second crash recovery matters.
+        last_persisted_at = int(job.get("progress_persisted_at") or 0)
+        if complete or now - last_persisted_at >= 5_000:
+            job["progress_persisted_at"] = now
+            jobs[request_id] = job
+            _save_chat_job_state(state, changed_request_ids={request_id})
 
 
 def _load_chat_job(request_id: str) -> dict[str, Any] | None:
@@ -2057,6 +2192,9 @@ def _mark_chat_job_stale(job: dict[str, Any]) -> dict[str, Any]:
     updated["status"] = "stale"
     updated["updated_at"] = _now_ms()
     updated["error"] = "The MCP wrapper restarted or lost the in-memory task before this job completed. Check the local conversation by conversation_id before retrying."
+    updated["retry_safe"] = False
+    updated["reconciliation_required"] = True
+    updated["upstream_execution_state"] = "unknown"
     updated = _refresh_chat_job_health(updated)
     _persist_chat_job(updated)
     return updated
@@ -2065,6 +2203,28 @@ def _mark_chat_job_stale(job: dict[str, Any]) -> dict[str, Any]:
 def _cancel_chat_job(request_id: str, reason: str = "Cancelled by caller.") -> ChatJobOutput:
     normalized_id = _normalize_request_id(request_id)
     task = _CHAT_JOB_TASKS.get(normalized_id)
+
+    # Reconcile a result that already reached the local conversation store
+    # before recording cancellation. This closes the race observed in live
+    # AIgentBee jobs where the backend had completed successfully but the MCP
+    # tracker was still marked active.
+    if task is not None and task.done():
+        _finalize_chat_job(normalized_id, task)
+        task = _CHAT_JOB_TASKS.get(normalized_id)
+    current = _load_chat_job(normalized_id)
+    if isinstance(current, dict):
+        current_status = str(current.get("status") or "")
+        if current_status in {"completed", "indeterminate_output", "error", "cancelled"}:
+            return _chat_job_output(normalized_id, increment_poll=False)
+        if current_status in {"running", "pending"} and "baseline_message_id" in current:
+            turn = _completed_turn_after_checkpoint(
+                str(current.get("conversation_id") or ""),
+                int(current.get("baseline_message_id") or 0),
+            )
+            if turn is not None:
+                _complete_chat_job_from_local_turn(normalized_id, current, turn)
+                return _chat_job_output(normalized_id, increment_poll=False)
+
     with _CHAT_JOB_STATE_MUTEX:
         state = _load_chat_job_state()
         jobs = state.setdefault("jobs", {})
@@ -2080,16 +2240,42 @@ def _cancel_chat_job(request_id: str, reason: str = "Cancelled by caller.") -> C
             "request_id": normalized_id,
             "job_id": normalized_id,
         }
+        pre_cancel = _refresh_chat_job_health(job)
+        previous_status = str(pre_cancel.get("status") or "")
+        now = _now_ms()
         job["status"] = "cancelled"
-        job["updated_at"] = _now_ms()
+        job["updated_at"] = now
         job["error"] = str(reason or "Cancelled by caller.")[:1000]
         job["dead_loop_suspected"] = False
         job["cancel_recommended"] = False
+        job["cancel_requested_at"] = now
+        job["cancelled_from_status"] = previous_status
+        job["stalled_for_seconds_at_cancel"] = float(
+            pre_cancel.get("stalled_for_seconds") or 0.0
+        )
+        job["dead_loop_suspected_at_cancel"] = bool(
+            pre_cancel.get("dead_loop_suspected")
+        )
+        job["cancel_recommended_at_cancel"] = bool(
+            pre_cancel.get("cancel_recommended")
+        )
+        job["last_progress_at_at_cancel"] = int(
+            pre_cancel.get("last_progress_at") or 0
+        )
+        job["retry_safe"] = False
+        job["reconciliation_required"] = True
+        job["upstream_execution_state"] = "unknown"
+        job["cancellation_state"] = (
+            "local_task_cancel_requested_upstream_unconfirmed"
+            if task is not None and not task.done()
+            else "local_tracker_cancelled_upstream_unconfirmed"
+        )
         jobs[normalized_id] = job
         _save_chat_job_state(state, changed_request_ids={normalized_id})
     if task is not None and not task.done():
         task.cancel()
-    _CHAT_JOB_TASKS.pop(normalized_id, None)
+    elif task is None:
+        _CHAT_JOB_TASKS.pop(normalized_id, None)
     return _chat_job_output(normalized_id, increment_poll=False)
 
 
@@ -2178,6 +2364,10 @@ def _chat_pending_output(
     wait_seconds: float,
 ) -> dict[str, Any]:
     job = _refresh_chat_job_health(job)
+    status = str(job.get("status") or "pending")
+    reconciliation_required = bool(
+        job.get("reconciliation_required") or status in {"stale", "cancelled"}
+    )
     remote_chat_id = str(job.get("remote_chat_id") or job.get("notion_thread_id") or "")
     return {
         "ok": False,
@@ -2201,18 +2391,29 @@ def _chat_pending_output(
         "session_name": session_key,
         "conversation_id": conversation_id,
         "session_created": session_created,
-        "status": str(job.get("status") or "pending"),
+        "status": status,
         "request_id": request_id,
         "job_id": request_id,
-        "retry_safe": str(job.get("status") or "") in {"running", "pending", "stale"},
+        "retry_safe": status in {"running", "pending"} and not reconciliation_required,
+        "reconciliation_required": reconciliation_required,
+        "cancellation_state": str(job.get("cancellation_state") or ""),
+        "upstream_execution_state": str(job.get("upstream_execution_state") or ""),
         "wait_seconds": wait_seconds,
         "poll_hint": (
             f"Call get_chat_job(request_id='{request_id}') or retry the same chat tool with the same request_id."
-            if str(job.get("status") or "") in {"running", "pending", "stale"}
-            else "This request id is terminal; use a new request_id for new work."
+            if status in {"running", "pending"}
+            else (
+                "Reconcile this request_id before starting replacement work; the upstream outcome is not confirmed."
+                if reconciliation_required
+                else "This request id is terminal; use a new request_id for new work."
+            )
         ),
         "error": job.get("error") if isinstance(job.get("error"), str) else None,
-        "response_text": _job_response_text(job.get("response") if isinstance(job.get("response"), dict) else None),
+        "response_text": (
+            _job_response_text(job.get("response") if isinstance(job.get("response"), dict) else None)
+            if status == "completed"
+            else ""
+        ),
         **_attachment_provenance_from_job(job),
         "progress": job.get("progress") if isinstance(job.get("progress"), dict) else None,
         "remote_chat_id": remote_chat_id,
@@ -2471,6 +2672,9 @@ def _complete_chat_job_from_local_turn(
     completed["assistant_message_id"] = int(turn.get("assistant_message_id") or 0)
     completed["dead_loop_suspected"] = False
     completed["cancel_recommended"] = False
+    completed["retry_safe"] = False
+    completed["reconciliation_required"] = False
+    completed["upstream_execution_state"] = "terminal"
     if response.get("error"):
         completed["error"] = str(response["error"])
     _persist_chat_job(completed)
@@ -2485,6 +2689,41 @@ def _complete_chat_job_from_local_turn(
     if task is not None and not task.done():
         task.cancel()
     return completed["response"]
+
+
+def _reconcile_cancelled_chat_job_from_local_turn(
+    request_id: str,
+    job: dict[str, Any],
+    turn: dict[str, Any],
+) -> dict[str, Any]:
+    """Record a late upstream terminal observation without reviving cancellation.
+
+    A local cancellation is a tracker decision, not proof that Notion stopped.
+    If the conversation DB later contains the assistant turn, retain the
+    cancellation as terminal while closing the reconciliation gap explicitly.
+    """
+
+    response = _chat_output_from_local_turn(job, turn)
+    updated = dict(job)
+    updated["updated_at"] = _now_ms()
+    updated["late_completion_detected"] = True
+    updated["late_completion_at"] = updated["updated_at"]
+    updated["late_completion_status"] = str(response.get("status") or "")
+    updated["late_response_chars"] = len(str(response.get("response_text") or ""))
+    updated["late_output_integrity"] = response.get("output_integrity")
+    updated["late_quarantined"] = bool(response.get("quarantined"))
+    updated["upstream_execution_state"] = "terminal"
+    updated["reconciliation_required"] = False
+    updated["retry_safe"] = False
+    updated["cancellation_state"] = "local_cancelled_upstream_terminal_observed"
+    remote_chat_id = str(response.get("remote_chat_id") or "")
+    if remote_chat_id:
+        updated["remote_chat_id"] = remote_chat_id
+        updated["notion_thread_id"] = remote_chat_id
+    updated["assistant_message_id"] = int(turn.get("assistant_message_id") or 0)
+    _persist_chat_job(updated)
+    return updated
+
 
 def _active_job_for_conversation(
     conversation_id: str, *, exclude_request_id: str = ""
@@ -2547,6 +2786,18 @@ def _claim_chat_job_task(
                 continue
             if str(raw_job.get("conversation_id") or "") != conversation_id:
                 continue
+
+            # A locally cancelled/stale request can still be executing upstream.
+            # Until its outcome is reconciled, it remains a mutation fence for
+            # this conversation even though its local status is terminal.
+            if bool(raw_job.get("reconciliation_required")):
+                other_id = str(other_request_id)
+                return (
+                    "stale_conflict",
+                    dict(raw_job),
+                    _CHAT_JOB_TASKS.get(other_id),
+                    other_id,
+                )
             if str(raw_job.get("status") or "") not in {"running", "pending"}:
                 continue
 
@@ -2722,6 +2973,66 @@ async def _run_chat_completion_job(
     finally:
         if not stream_task.done():
             stream_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stream_task
+
+
+async def _chat_job_watchdog_loop() -> None:
+    """Reconcile and persist job health even when no client is polling.
+
+    This is intentionally a monitor, not an auto-canceller. A stalled request
+    can have an indeterminate upstream side effect, so replacement work remains
+    blocked until an operator/caller explicitly reconciles or cancels it.
+    """
+
+    while True:
+        await asyncio.sleep(_configured_chat_job_watchdog_seconds())
+        try:
+            state = _load_chat_job_state()
+            jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
+            request_ids = [
+                str(request_id)
+                for request_id, raw_job in list(jobs.items())
+                if isinstance(raw_job, dict)
+                and (
+                    str(raw_job.get("status") or "") in {"running", "pending"}
+                    or (
+                        str(raw_job.get("status") or "") == "cancelled"
+                        and not bool(raw_job.get("late_completion_detected"))
+                    )
+                )
+            ]
+            for request_id in request_ids:
+                try:
+                    _chat_job_output(request_id, increment_poll=False)
+                except Exception:
+                    logger.exception(
+                        "Chat job watchdog reconciliation failed",
+                        extra={
+                            "request_info": {
+                                "event": "chat_job_watchdog_reconciliation_failed",
+                                "request_id": request_id,
+                            }
+                        },
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Chat job watchdog iteration failed",
+                extra={"request_info": {"event": "chat_job_watchdog_iteration_failed"}},
+            )
+
+
+def _ensure_chat_job_watchdog() -> asyncio.Task[None]:
+    global _CHAT_JOB_WATCHDOG_TASK
+    task = _CHAT_JOB_WATCHDOG_TASK
+    if task is None or task.done():
+        _CHAT_JOB_WATCHDOG_TASK = asyncio.create_task(
+            _chat_job_watchdog_loop(),
+            name="notion2api-chat-job-watchdog",
+        )
+    return _CHAT_JOB_WATCHDOG_TASK
 
 
 def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> None:
@@ -2780,6 +3091,10 @@ def _finalize_chat_job(request_id: str, task: asyncio.Task[dict[str, Any]]) -> N
 
         job["status"] = status
         job["updated_at"] = _now_ms()
+        if status in {"completed", "indeterminate_output", "error"}:
+            job["retry_safe"] = False
+            job["reconciliation_required"] = False
+            job["upstream_execution_state"] = "terminal"
         if response is not None:
             provenance = _attachment_provenance_from_job(job)
             response = {**response, **provenance}
@@ -2906,6 +3221,7 @@ async def _submit_or_resume_chat_job(
     request_id: str | None,
     wait_seconds: float | None,
 ) -> dict[str, Any]:
+    _ensure_chat_job_watchdog()
     normalized_id = _normalize_request_id(request_id)
     bounded_wait = _bounded_chat_wait_seconds(wait_seconds)
     metadata = payload.setdefault("metadata", {})
@@ -2951,7 +3267,7 @@ async def _submit_or_resume_chat_job(
         status = str(existing.get("status") or "")
         response = existing.get("response") if isinstance(existing.get("response"), dict) else None
         if status in {"completed", "indeterminate_output", "error", "cancelled"}:
-            if response:
+            if response and status != "cancelled":
                 return response
             if status == "completed" and "baseline_message_id" in existing:
                 turn = await asyncio.to_thread(
@@ -3061,6 +3377,9 @@ async def _submit_or_resume_chat_job(
             "updated_at": now,
             "last_progress_at": now,
             "poll_count": 0,
+            "retry_safe": True,
+            "reconciliation_required": False,
+            "upstream_execution_state": "active",
             "wait_seconds": bounded_wait,
             "baseline_message_id": baseline_message_id,
             **_runtime_audit(client, model),
@@ -3254,12 +3573,33 @@ def _chat_job_output(
                 job = _load_chat_job(normalized_id) or job
 
     if (
+        str(job.get("status") or "") == "cancelled"
+        and "baseline_message_id" in job
+        and not bool(job.get("late_completion_detected"))
+    ):
+        turn = _completed_turn_after_checkpoint(
+            str(job.get("conversation_id") or ""),
+            int(job.get("baseline_message_id") or 0),
+        )
+        if turn is not None:
+            job = _reconcile_cancelled_chat_job_from_local_turn(
+                normalized_id,
+                job,
+                turn,
+            )
+
+    if (
         str(job.get("status") or "") in {"running", "pending"}
         and normalized_id not in _CHAT_JOB_TASKS
     ):
         job = _mark_chat_job_stale(job)
 
-    job = _refresh_chat_job_health(job, increment_poll=increment_poll)
+    persisted_health = _refresh_and_persist_chat_job_health(
+        normalized_id,
+        increment_poll=increment_poll,
+    )
+    if persisted_health is not None:
+        job = persisted_health
     response = job.get("response") if isinstance(job.get("response"), dict) else None
     integrity = (
         dict(job["output_integrity"])
@@ -3377,10 +3717,24 @@ def _chat_job_output(
     if not route_disposition:
         route_disposition = "direct_route"
 
+    status = str(job.get("status") or "")
+    reconciliation_required = bool(
+        job.get("reconciliation_required")
+        or status == "stale"
+        or (
+            status == "cancelled"
+            and not bool(job.get("late_completion_detected"))
+        )
+    )
+    retry_safe = bool(job.get("retry_safe")) if "retry_safe" in job else status in {
+        "running",
+        "pending",
+    }
+
     return ChatJobOutput(
         ok=True,
         found=True,
-        status=str(job.get("status") or ""),
+        status=status,
         request_id=normalized_id,
         job_id=str(job.get("job_id") or normalized_id),
         session_name=str(job.get("session_name") or ""),
@@ -3402,7 +3756,7 @@ def _chat_job_output(
         ),
         output_integrity=integrity,
         quarantined=quarantined,
-        authoritative=not quarantined,
+        authoritative=(status == "completed" and not quarantined),
         quarantined_response_available=quarantined_available,
         quarantined_response_text=quarantined_response_text,
         **_attachment_provenance_from_job(job),
@@ -3413,6 +3767,19 @@ def _chat_job_output(
         stalled_for_seconds=float(job.get("stalled_for_seconds") or 0.0),
         dead_loop_suspected=bool(job.get("dead_loop_suspected")),
         cancel_recommended=bool(job.get("cancel_recommended")),
+        retry_safe=retry_safe and not reconciliation_required,
+        reconciliation_required=reconciliation_required,
+        cancellation_state=str(job.get("cancellation_state") or ""),
+        upstream_execution_state=str(job.get("upstream_execution_state") or ""),
+        cancel_requested_at=int(job.get("cancel_requested_at") or 0),
+        cancelled_from_status=str(job.get("cancelled_from_status") or ""),
+        stalled_for_seconds_at_cancel=float(
+            job.get("stalled_for_seconds_at_cancel") or 0.0
+        ),
+        dead_loop_suspected_at_cancel=bool(
+            job.get("dead_loop_suspected_at_cancel")
+        ),
+        late_completion_detected=bool(job.get("late_completion_detected")),
         response=projected_response,
         error=job.get("error") if isinstance(job.get("error"), str) else None,
         raw_job=raw_job,

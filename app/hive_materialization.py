@@ -1019,8 +1019,6 @@ class HiveMaterializationStore:
             lease_domains = sorted(
                 requested_domains.intersection(worker.writable_domains)
             )
-            if not requested_domains:
-                lease_domains = list(worker.writable_domains)
             lane = {
                 "worker": worker,
                 "work_unit_id": work_id,
