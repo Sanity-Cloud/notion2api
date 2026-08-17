@@ -973,6 +973,7 @@ def search(
     request: Request,
     q: str = Query(..., min_length=1),
     limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     account_index: int | None = Query(None, ge=0),
     account_profile: str | None = Query(None),
 ) -> dict[str, Any]:
@@ -985,7 +986,7 @@ def search(
             "account_key": scope.account_key,
             "account_profile": scope.profile_name,
             "db_path": store.db_path,
-            "results": store.search(q, limit=limit),
+            "results": store.search(q, limit=limit, offset=offset),
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

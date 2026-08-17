@@ -1674,17 +1674,17 @@ class ChatHistoryStore:
             return {"thread_exists": False, "message_count": 0, "raw_fields_seen": [], "known_message_fields_found": [], "sample": {}}
         return describe_thread_record(thread, thread.get("messages") or [])
 
-    def search(self, query: str, limit: int = 25) -> list[dict[str, Any]]:
+    def search(self, query: str, limit: int = 25, offset: int = 0) -> list[dict[str, Any]]:
         query = str(query or "").strip()
         if not query:
             return []
-        sql = "SELECT id,thread_id,role,snippet(chat_messages_fts,3,'[',']',' ... ',16) AS snippet FROM chat_messages_fts WHERE chat_messages_fts MATCH ? LIMIT ?"
+        sql = "SELECT id,thread_id,role,snippet(chat_messages_fts,3,'[',']',' ... ',16) AS snippet FROM chat_messages_fts WHERE chat_messages_fts MATCH ? ORDER BY bm25(chat_messages_fts), id LIMIT ? OFFSET ?"
         with self._conn() as conn:
             try:
-                rows = conn.execute(sql, (query, limit)).fetchall()
+                rows = conn.execute(sql, (query, limit, offset)).fetchall()
             except sqlite3.OperationalError:
                 try:
-                    rows = conn.execute(sql, (_quote_fts_phrase(query), limit)).fetchall()
+                    rows = conn.execute(sql, (_quote_fts_phrase(query), limit, offset)).fetchall()
                 except sqlite3.OperationalError as exc:
                     raise ValueError("Invalid chat-history search query") from exc
             return [dict(r) for r in rows]

@@ -47,6 +47,7 @@ ChatGPT custom connectors expect an MCP endpoint. For local development, expose 
 
 - `notion2api_health`
 - `notion2api_list_models`
+- `notion2api_chat_history`
 - `notion2api_chat`
 - `notion2api_chat_completion`
 - `notion2api_responses`
@@ -57,6 +58,33 @@ ChatGPT custom connectors expect an MCP endpoint. For local development, expose 
 - `notion2api_cancel_chat_job`
 - `notion2api_reset_session`
 - `notion2api_rename_session`
+
+### Grouped chat-history tool
+
+`notion2api_chat_history` exposes eight governed actions through one typed tool: `status`, `list_threads`, `get_thread`, `search`, `export_markdown`, `model_stats`, `sync_from_notion`, and `hydrate_thread`.
+
+List and search actions use bounded `limit` and `offset` pagination. Thread reads cap returned messages and process steps with `message_limit`; Markdown export is capped with `content_limit`. Every successful dispatch includes whitelisted account, workspace, teamspace, and governance provenance. Account emails, user IDs, raw credentials, destructive deletion, cleanup, raw-debug export, and arbitrary local database mutation are not exposed.
+
+`sync_from_notion` and `hydrate_thread` are non-destructive, idempotent archive operations. They require an explicit zero-based `account_index` and return partial-result receipts when the backend reports failed sub-operations.
+
+
+## Client-visible contract snapshots
+
+The reviewed MCP schemas are stored separately for the two runtime profiles:
+
+- `contracts/mcp/notion2api.json` ? plain Notion2API profile, currently 48 tools.
+- `contracts/mcp/aigentbee.json` ? AIgentBee-prefixed profile, currently 51 tools, including the three conditional swarm-workbench tools.
+
+The snapshots freeze tool names, descriptions, input and output schemas, required fields, defaults, enum values, annotations, profile-specific metadata, and server instructions. Regenerate them only after reviewing an intentional client-visible change:
+
+```powershell
+python scripts/generate_mcp_contract_snapshots.py
+python -m pytest -q tests/test_mcp_contract_snapshots.py
+```
+
+A process restart is required before a running MCP server advertises changed schemas. Existing ChatGPT or other connector sessions may also retain a stale tool cache and require reconnection or refresh; snapshot validation does not prove that a live client has refreshed.
+
+Current annotation coverage is incomplete for legacy tools. The snapshots preserve that fact as reviewed baseline evidence rather than assigning unverified read-only, destructive, or idempotency semantics. New or changed tools should declare explicit annotations, and a separate governance audit should classify legacy operations before clients rely on annotation-driven authorization.
 
 ## Models, sessions, and continuation
 

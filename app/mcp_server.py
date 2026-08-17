@@ -207,6 +207,18 @@ class ListModelsOutput(BaseModel):
     error: str | None = Field(default=None, description="Error summary if the backend did not return models.")
 
 
+class ChatHistoryOutput(BaseModel):
+    ok: bool = Field(description="Whether the requested chat-history action succeeded.")
+    action: str = Field(description="Validated grouped chat-history action.")
+    status_code: int | None = Field(default=None, description="HTTP status code returned by Notion2API.")
+    result: dict[str, Any] = Field(default_factory=dict, description="Bounded action-specific result.")
+    pagination: dict[str, Any] = Field(default_factory=dict, description="Deterministic page receipt for list and search actions.")
+    provenance: dict[str, Any] = Field(default_factory=dict, description="Whitelisted account, workspace, teamspace, and governance provenance.")
+    partial: bool = Field(default=False, description="Whether the backend reported a partial rather than complete result.")
+    idempotent: bool = Field(default=True, description="Whether repeating the same action and inputs is designed to avoid duplicates.")
+    error: str | None = Field(default=None, description="Bounded error summary.")
+
+
 class ChatOutput(BaseModel):
     ok: bool = Field(description="Whether the model call succeeded.")
     status_code: int | None = Field(default=None, description="HTTP status code returned by Notion2API.")
@@ -911,12 +923,17 @@ class Notion2APIClient:
             headers["X-Request-ID"] = request_id
         return headers
 
-    async def get(self, path: str) -> dict[str, Any]:
+    async def get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         request_id = f"mcp-{uuid.uuid4().hex}"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}{path}",
                 headers=self._headers(request_id),
+                params=params,
             )
         return _json_or_error(
             response,
@@ -924,6 +941,37 @@ class Notion2APIClient:
             method="GET",
             path=path,
         )
+
+    async def get_text(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        max_chars: int = 50_000,
+    ) -> dict[str, Any]:
+        request_id = f"mcp-{uuid.uuid4().hex}"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}{path}",
+                headers=self._headers(request_id),
+                params=params,
+            )
+        if response.status_code >= 400:
+            return _json_or_error(
+                response,
+                correlation_id=request_id,
+                method="GET",
+                path=path,
+            )
+        text = response.text
+        bounded = text[:max_chars]
+        return {
+            "ok": True,
+            "status_code": response.status_code,
+            "text": bounded,
+            "text_chars": len(text),
+            "truncated": len(text) > len(bounded),
+        }
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = f"mcp-{uuid.uuid4().hex}"
@@ -1228,6 +1276,99 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def _safe_chat_history_provenance(
+    account_data: dict[str, Any],
+    *,
+    requested_account_index: int,
+) -> dict[str, Any]:
+    if not isinstance(account_data, dict) or not account_data.get("ok"):
+        return {
+            "status": "unavailable",
+            "requested_account_index": requested_account_index,
+        }
+    requested_account: dict[str, Any] = {}
+    accounts = account_data.get("accounts")
+    if isinstance(accounts, list) and 0 <= requested_account_index < len(accounts):
+        candidate = accounts[requested_account_index]
+        if isinstance(candidate, dict):
+            requested_account = {
+                "account_number": candidate.get("account_number"),
+                "profile_name": candidate.get("profile_name"),
+                "base_profile_name": candidate.get("base_profile_name"),
+                "workspace_key": candidate.get("workspace_key"),
+                "workspace_name": candidate.get("workspace_name"),
+                "workspace_id": candidate.get("space_id"),
+                "teamspace_name": candidate.get("teamspace_name"),
+                "selected": candidate.get("selected"),
+                "available": candidate.get("available"),
+                "governance_aligned": candidate.get("governance_aligned"),
+            }
+            requested_account = {
+                key: value
+                for key, value in requested_account.items()
+                if value not in (None, "")
+            }
+    return {
+        "status": "available",
+        "requested_account_index": requested_account_index,
+        "requested_account": requested_account,
+        "selection_mode": account_data.get("mode"),
+        "workspace_key": account_data.get("workspace_key"),
+        "workspace_name": account_data.get("workspace_name"),
+        "workspace_id": account_data.get("workspace_id"),
+        "teamspace_name": account_data.get("teamspace_name"),
+        "teamspace_id": account_data.get("teamspace_id"),
+        "selected_account_number": account_data.get("selected_account_number"),
+        "selected_profile_name": account_data.get("selected_profile_name"),
+        "governance": dict(account_data.get("governance") or {}),
+    }
+
+
+def _chat_history_partial_result(data: dict[str, Any]) -> bool:
+    if not isinstance(data, dict):
+        return False
+    if bool(data.get("partial")) or int(data.get("status_code") or 0) == 207:
+        return True
+    if (
+        str(data.get("stopped_reason") or "").strip().lower() == "max_pages"
+        and bool(data.get("next_cursor"))
+    ):
+        return True
+    thread = data.get("thread")
+    if isinstance(thread, dict) and thread.get("hydrated") is False:
+        return True
+    for key in ("failed", "failures", "errors", "remote_failed"):
+        value = data.get(key)
+        if isinstance(value, (list, dict)) and value:
+            return True
+        if isinstance(value, int) and value > 0:
+            return True
+    for key in ("sync_summary", "remote_result", "results"):
+        nested = data.get(key)
+        if isinstance(nested, dict) and _chat_history_partial_result(nested):
+            return True
+    return False
+
+
+def _bounded_chat_history_thread(
+    data: dict[str, Any],
+    *,
+    message_limit: int,
+) -> dict[str, Any]:
+    bounded = dict(data)
+    messages = data.get("messages")
+    if isinstance(messages, list):
+        bounded["messages"] = messages[:message_limit]
+        bounded["messages_returned"] = len(bounded["messages"])
+        bounded["messages_total"] = len(messages)
+        bounded["messages_truncated"] = len(messages) > message_limit
+    steps = data.get("process_steps")
+    if isinstance(steps, list):
+        bounded["process_steps"] = steps[:message_limit]
+        bounded["process_steps_truncated"] = len(steps) > message_limit
+    return bounded
 
 
 def _model_info_from_entry(entry: Any) -> ModelInfo | None:
@@ -5237,6 +5378,172 @@ def create_server(
             models=model_list,
             catalog=dict(data.get("catalog") or {}) if isinstance(data.get("catalog"), dict) else {},
             error=_error_summary(data),
+        )
+
+    @server.tool(
+        name=_tool_name("notion2api_chat_history"),
+        description=_tool_description(
+            "Use one typed, bounded Notion2API chat-history action: status, list_threads, get_thread, "
+            "search, export_markdown, model_stats, sync_from_notion, or hydrate_thread. Destructive delete, "
+            "cleanup, raw-debug export, and local database mutation are intentionally excluded."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def notion2api_chat_history(
+        action: Literal[
+            "status",
+            "list_threads",
+            "get_thread",
+            "search",
+            "export_markdown",
+            "model_stats",
+            "sync_from_notion",
+            "hydrate_thread",
+        ],
+        thread_id: str | None = None,
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        message_limit: int = 100,
+        content_limit: int = 50_000,
+        account_index: int = 0,
+        max_pages: int = 5,
+        hydrate: bool = False,
+    ) -> ChatHistoryOutput:
+        normalized_action = str(action or "").strip()
+
+        def invalid(message: str) -> ChatHistoryOutput:
+            return ChatHistoryOutput(
+                ok=False,
+                action=normalized_action,
+                status_code=422,
+                error=message,
+            )
+
+        if account_index < 0:
+            return invalid("account_index must be zero or greater")
+        if offset < 0:
+            return invalid("offset must be zero or greater")
+        if message_limit < 1 or message_limit > 200:
+            return invalid("message_limit must be between 1 and 200")
+        if content_limit < 1 or content_limit > 200_000:
+            return invalid("content_limit must be between 1 and 200000")
+        if max_pages < 1 or max_pages > 20:
+            return invalid("max_pages must be between 1 and 20")
+        if normalized_action == "list_threads" and not 1 <= limit <= 200:
+            return invalid("list_threads limit must be between 1 and 200")
+        if normalized_action == "search" and not 1 <= limit <= 100:
+            return invalid("search limit must be between 1 and 100")
+        if normalized_action == "sync_from_notion" and not 1 <= limit <= 500:
+            return invalid("sync_from_notion limit must be between 1 and 500")
+        clean_thread_id = str(thread_id or "").strip()
+        if normalized_action in {"get_thread", "export_markdown", "hydrate_thread"} and not clean_thread_id:
+            return invalid(f"thread_id is required for {normalized_action}")
+        clean_query = str(query or "").strip()
+        if normalized_action == "search" and not clean_query:
+            return invalid("query is required for search")
+        if len(clean_query) > 1_000:
+            return invalid("query must not exceed 1000 characters")
+
+        account_data = await client.get("/v1/notion/accounts")
+        provenance = _safe_chat_history_provenance(
+            account_data,
+            requested_account_index=account_index,
+        )
+        pagination: dict[str, Any] = {}
+
+        if normalized_action == "status":
+            data = await client.get("/chat-history/status")
+            result = {key: value for key, value in data.items() if key not in {"ok", "status_code"}}
+        elif normalized_action == "list_threads":
+            data = await client.get(
+                "/chat-history/threads",
+                params={"limit": limit, "offset": offset},
+            )
+            threads = data.get("threads") if isinstance(data.get("threads"), list) else []
+            result = {"threads": threads}
+            pagination = {
+                "limit": limit,
+                "offset": offset,
+                "returned": len(threads),
+                "next_offset": offset + len(threads),
+                "has_more": len(threads) == limit,
+            }
+        elif normalized_action == "get_thread":
+            from urllib.parse import quote
+
+            data = await client.get(f"/chat-history/threads/{quote(clean_thread_id, safe='')}")
+            result = _bounded_chat_history_thread(
+                {key: value for key, value in data.items() if key not in {"ok", "status_code"}},
+                message_limit=message_limit,
+            )
+        elif normalized_action == "search":
+            data = await client.get(
+                "/chat-history/search",
+                params={"q": clean_query, "limit": limit, "offset": offset},
+            )
+            results = data.get("results") if isinstance(data.get("results"), list) else []
+            result = {"results": results, "query": clean_query}
+            pagination = {
+                "limit": limit,
+                "offset": offset,
+                "returned": len(results),
+                "next_offset": offset + len(results),
+                "has_more": len(results) == limit,
+            }
+        elif normalized_action == "export_markdown":
+            from urllib.parse import quote
+
+            data = await client.get_text(
+                f"/chat-history/threads/{quote(clean_thread_id, safe='')}/markdown",
+                max_chars=content_limit,
+            )
+            result = {
+                "thread_id": clean_thread_id,
+                "markdown": str(data.get("text") or ""),
+                "content_chars": int(data.get("text_chars") or 0),
+                "content_truncated": bool(data.get("truncated")),
+            }
+        elif normalized_action == "model_stats":
+            data = await client.get("/chat-history/model-stats")
+            result = {key: value for key, value in data.items() if key not in {"ok", "status_code"}}
+        elif normalized_action == "sync_from_notion":
+            data = await client.post(
+                "/chat-history/sync/notion",
+                {
+                    "account_index": account_index,
+                    "limit": limit,
+                    "max_pages": max_pages,
+                    "hydrate": hydrate,
+                },
+            )
+            result = {key: value for key, value in data.items() if key not in {"ok", "status_code"}}
+        else:
+            from urllib.parse import quote
+
+            data = await client.post(
+                f"/chat-history/threads/{quote(clean_thread_id, safe='')}/hydrate",
+                {"account_index": account_index},
+            )
+            result = {key: value for key, value in data.items() if key not in {"ok", "status_code"}}
+
+        ok = bool(data.get("ok", False))
+        return ChatHistoryOutput(
+            ok=ok,
+            action=normalized_action,
+            status_code=data.get("status_code"),
+            result=result,
+            pagination=pagination,
+            provenance=provenance,
+            partial=_chat_history_partial_result(data),
+            idempotent=True,
+            error=None if ok else _error_summary(data),
         )
 
     @server.tool(name=_tool_name("notion2api_chat"), description=_tool_description("Submit a prompt to Notion2API using a durable session and return immediately with a pollable request_id. Terra is the default; omit model unless the user explicitly requests another. reasoning_effort is exact and model-specific; omit it for the live catalog default. Omit session_name to generate one. Continue by session_name, conversation_id, or continue_from_request_id."), structured_output=True)
