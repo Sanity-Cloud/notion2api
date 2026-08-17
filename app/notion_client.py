@@ -344,6 +344,21 @@ class NotionOpusAPI:
             raise ValueError("Notion AI usage eligibility response must be an object")
         return payload
 
+    def get_ai_allowance_status(self) -> dict[str, Any]:
+        """Fetch Notion's rolling and billing-period AI allowance status."""
+        endpoint = "https://app.notion.com/api/v3/getCreditRateLimitStatus"
+        response = self._scraper.post(
+            endpoint,
+            headers=self._build_chat_history_headers(),
+            json={"spaceId": self.space_id},
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Notion AI allowance status response must be an object")
+        return payload
+
     def _build_cookie_header(self) -> str:
         cookie_jar = self.cookies.copy()
         cookie_jar["notion_user_id"] = self.user_id

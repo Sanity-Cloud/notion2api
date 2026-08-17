@@ -3,6 +3,46 @@ from __future__ import annotations
 from typing import Any
 
 
+def _number(value: Any, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be numeric")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be numeric") from exc
+
+
+def _window_percent(payload: Any, field: str) -> float:
+    window = payload if isinstance(payload, dict) else {}
+    used = _number(window.get("used"), f"{field}.used")
+    limit = _number(window.get("limit"), f"{field}.limit")
+    if limit <= 0:
+        raise ValueError(f"{field}.limit must be greater than zero")
+    percent = used / limit * 100
+    if percent < 0:
+        raise ValueError(f"{field}.used cannot be negative")
+    return round(percent, 6)
+
+
+def normalize_notion_ai_allowance(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Notion's getCreditRateLimitStatus plan-allowance response."""
+    rolling = payload.get("window")
+    monthly = payload.get("billingPeriodWindow")
+    result: dict[str, Any] = {
+        "rolling_used_percent": _window_percent(rolling, "window"),
+        "monthly_used_percent": _window_percent(monthly, "billingPeriodWindow"),
+        "monthly_resets_at": None,
+    }
+    monthly_window = monthly if isinstance(monthly, dict) else {}
+    period_end_ms = monthly_window.get("periodEndMs")
+    if period_end_ms is not None:
+        period_end = _number(period_end_ms, "billingPeriodWindow.periodEndMs")
+        if period_end <= 0:
+            raise ValueError("billingPeriodWindow.periodEndMs must be positive")
+        result["monthly_resets_at"] = period_end / 1000
+    return result
+
+
 def _integer(value: Any) -> int | None:
     if isinstance(value, bool):
         return None

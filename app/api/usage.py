@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
 
 from app.notion_admission import get_notion_usage_store
-from app.notion_usage import normalize_notion_ai_usage
+from app.notion_usage import normalize_notion_ai_allowance, normalize_notion_ai_usage
 
 
 router = APIRouter(prefix="/usage", tags=["usage"])
@@ -21,6 +21,18 @@ _QUOTA_FIELDS = {
     "max_request_bytes",
     "enabled",
 }
+
+
+def _compact_id(value: Any) -> str:
+    return str(value or "").strip().replace("-", "")
+
+
+def _client_allowance_account_key(client: Any) -> str:
+    space_id = _compact_id(getattr(client, "space_id", ""))
+    user_id = _compact_id(getattr(client, "user_id", ""))
+    if not space_id or not user_id:
+        raise ValueError("Selected Notion profile is missing space_id or user_id")
+    return f"{space_id}:{user_id}"
 
 
 def _contract(payload: dict[str, Any]) -> dict[str, Any]:
@@ -82,6 +94,28 @@ def latest_allowance(
     observation = get_notion_usage_store().latest_allowance_observation(
         account_key=account_key
     )
+    return _contract({"allowance": observation})
+
+
+@router.post("/allowance/refresh")
+async def refresh_allowance(
+    request: Request,
+    profile_name: str = Query(min_length=1, max_length=160),
+) -> dict[str, Any]:
+    """Fetch and persist one profile's provider-reported plan allowance percentages."""
+    try:
+        client = request.app.state.account_pool.get_client_for_selector(profile_name)
+        provider_payload = await run_in_threadpool(client.get_ai_allowance_status)
+        normalized = normalize_notion_ai_allowance(provider_payload)
+        observation = get_notion_usage_store().record_allowance_observation(
+            account_key=_client_allowance_account_key(client),
+            rolling_used_percent=normalized["rolling_used_percent"],
+            monthly_used_percent=normalized["monthly_used_percent"],
+            monthly_resets_at=normalized["monthly_resets_at"],
+            source="notion_settings_api",
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _contract({"allowance": observation})
 
 

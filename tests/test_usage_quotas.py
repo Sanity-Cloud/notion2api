@@ -14,7 +14,7 @@ from app.notion_request_telemetry import (
     NotionRequestTelemetryStore,
     UsageQuotaExceededError,
 )
-from app.notion_usage import normalize_notion_ai_usage
+from app.notion_usage import normalize_notion_ai_allowance, normalize_notion_ai_usage
 from app.server import app, usage_quota_exceeded_handler
 
 
@@ -454,6 +454,91 @@ def test_notion_usage_retrieval_uses_har_endpoint_and_space_binding() -> None:
             },
         )
     ]
+
+
+def test_notion_allowance_retrieval_uses_credit_rate_limit_status_endpoint() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "status": "within_limit",
+                "window": {"window": "6h", "used": 2.44, "limit": 100},
+                "billingPeriodWindow": {
+                    "cadence": "billing_period",
+                    "used": 28.59,
+                    "limit": 100,
+                    "periodEndMs": 2_000_000_000_000,
+                },
+            }
+
+    class Scraper:
+        def post(self, url: str, **kwargs):
+            calls.append((url, kwargs))
+            return Response()
+
+    notion_client = NotionOpusAPI.__new__(NotionOpusAPI)
+    notion_client.space_id = "synthetic-space"
+    notion_client._scraper = Scraper()
+    notion_client._build_chat_history_headers = lambda: {
+        "x-notion-space-id": "synthetic-space"
+    }
+
+    payload = notion_client.get_ai_allowance_status()
+    assert normalize_notion_ai_allowance(payload) == {
+        "rolling_used_percent": 2.44,
+        "monthly_used_percent": 28.59,
+        "monthly_resets_at": 2_000_000_000.0,
+    }
+    assert calls == [
+        (
+            "https://app.notion.com/api/v3/getCreditRateLimitStatus",
+            {
+                "headers": {"x-notion-space-id": "synthetic-space"},
+                "json": {"spaceId": "synthetic-space"},
+                "timeout": 30,
+            },
+        )
+    ]
+
+
+def test_refresh_allowance_records_provider_percentages_for_profile(monkeypatch, tmp_path) -> None:
+    provider_payload = {
+        "status": "within_limit",
+        "window": {"window": "6h", "used": 12, "limit": 100},
+        "billingPeriodWindow": {
+            "cadence": "billing_period",
+            "used": 34.5,
+            "limit": 100,
+            "periodEndMs": 2_000_100_000_000,
+        },
+    }
+    fake_client = SimpleNamespace(
+        space_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        user_id="11111111-2222-3333-4444-555555555555",
+        get_ai_allowance_status=lambda: provider_payload,
+    )
+    fake_pool = SimpleNamespace(get_client_for_selector=lambda selector: fake_client)
+    store = NotionRequestTelemetryStore(tmp_path / "allowance.sqlite3")
+    monkeypatch.setattr(notion_admission, "_REQUEST_TELEMETRY", store)
+
+    with TestClient(app) as client:
+        app.state.account_pool = fake_pool
+        response = client.post(
+            "/v1/usage/allowance/refresh",
+            params={"profile_name": "account-one"},
+        )
+
+    assert response.status_code == 200
+    allowance = response.json()["allowance"]
+    assert allowance["rolling"]["used_percent"] == 12
+    assert allowance["monthly"]["used_percent"] == 34.5
+    assert allowance["monthly"]["resets_at"] == 2_000_100_000.0
+    assert allowance["source"] == "notion_settings_api"
+    assert "account_key" not in allowance
 
 
 def test_quota_exception_handler_returns_retry_contract() -> None:
