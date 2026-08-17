@@ -63,6 +63,7 @@ debug_*.py
 !tests/
 tests/*
 !tests/test_usage_quotas.py
+!tests/browser_consumer_terminal_contract.test.js
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/notion-chat-history-drift.json
