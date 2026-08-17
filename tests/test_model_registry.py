@@ -28,11 +28,13 @@ def test_captured_notion_backend_mappings_are_registered():
         "claude-opus4.6": "avocado-froyo-medium",
         "claude-opus4.7": "apricot-sorbet-high",
         "claude-opus4.8": "ambrosia-tart-high",
+        "claude-opus5": "agave-flan",
         "gpt-5.4mini": "oregon-grape-medium",
         "gpt-5.4nano": "otaheite-apple-medium",
         "minimax-m2.5": "fireworks-minimax-m2.5",
         "kimi-2.6": "fireworks-kimi-k2.6",
         "kimi-2.7-code": "fireworks-kimi-k2.7",
+        "kimi-3": "fireworks-kimi-k3",
         "deepseek-v4pro": "baseten-deepseek-v4-pro",
         "glm-5.2": "baseten-glm-5.2",
         "grok-4.3": "xigua-mochi-medium",
@@ -41,12 +43,15 @@ def test_captured_notion_backend_mappings_are_registered():
         "gemini-3.1pro": "galette-medium-thinking",
         "claude-haiku4.5": "anthropic-haiku-4.5",
         "gemini-3flash": "gingerbread",
-        "claude-fable5": "acai-budino",
+        "claude-fable5": "acai-budino-high",
     }
 
     for public_name, notion_name in expected.items():
-        assert is_supported_model(public_name)
         assert get_notion_model(public_name) == notion_name
+        if public_name == "claude-fable5":
+            assert is_supported_model(public_name) is False
+        else:
+            assert is_supported_model(public_name)
         assert get_standard_model(notion_name) == public_name
 
 
@@ -57,6 +62,8 @@ def test_captured_display_names_are_registered():
     assert get_display_name("gpt-5.6-luna") == "GPT-5.6 Luna"
     assert get_display_name("kimi-2.7-code") == "Kimi K2.7 Code"
     assert get_display_name("fireworks-kimi-k2.7") == "Kimi K2.7 Code"
+    assert get_display_name("fireworks-kimi-k3") == "Kimi K3"
+    assert get_display_name("claude-opus5") == "Claude Opus 5"
     assert get_display_name("grok-4.3") == "Grok 4.3"
     assert get_display_name("grok-4.5") == "SpaceXAI 4.5"
     assert get_display_name("spacexai-4.5") == "SpaceXAI 4.5"
@@ -77,12 +84,14 @@ def test_gemini_3_5_flash_no_longer_uses_markdown_chat_route():
 def test_available_models_expose_only_canonical_notion_ids():
     models = list_available_models()
 
-    assert len(models) == 27
+    assert len(models) == 28
     assert len(models) == len(set(models))
     assert "orange-mousse" in models
     assert "orchid-muffin" in models
     assert "olive-jellyroll" in models
     assert "fireworks-kimi-k2.7" in models
+    assert "fireworks-kimi-k3" in models
+    assert "agave-flan" in models
     assert "acai-budino-high" not in models
     assert "angel-cake-high" in models
     assert "claude-sonnet5" not in models
@@ -191,7 +200,8 @@ def test_visible_selector_names_resolve_to_exact_backend_routes():
         "Sonnet 5": "angel-cake-high",
         "Opus 4.7": "apricot-sorbet-high",
         "Opus 4.8": "ambrosia-tart-high",
-        "Fable 5": "acai-budino",
+        "Opus 5": "agave-flan",
+        "Fable 5": "acai-budino-high",
         "Gemini 3.1 Pro": "galette-medium-thinking",
         "GPT-5.6 Sol": "orange-mousse",
         "GPT-5.6 Terra": "orchid-muffin",
@@ -204,13 +214,17 @@ def test_visible_selector_names_resolve_to_exact_backend_routes():
         "Gemini 3.5 Flash": "vertex-gemini-3.5-flash",
         "Kimi K2.6": "fireworks-kimi-k2.6",
         "Kimi K2.7 Code": "fireworks-kimi-k2.7",
+        "Kimi K3": "fireworks-kimi-k3",
         "DeepSeek V4 Pro": "baseten-deepseek-v4-pro",
         "GLM 5.2": "baseten-glm-5.2",
     }
 
     for selector_name, backend_route in expected.items():
-        assert is_supported_model(selector_name), selector_name
         assert get_notion_model(selector_name) == backend_route
+        if selector_name == "Fable 5":
+            assert is_supported_model(selector_name) is False
+        else:
+            assert is_supported_model(selector_name), selector_name
 
     assert is_static_disabled_model("Sonnet 4.6") is False
 

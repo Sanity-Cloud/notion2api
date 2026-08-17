@@ -62,6 +62,8 @@ ChatGPT custom connectors expect an MCP endpoint. For local development, expose 
 
 The default requested model is the consumer-facing `terra` alias, which resolves to the current Terra backend route. `sol`, `terra`, and `luna` are accepted alongside the longer public model names and canonical Notion route IDs.
 
+`notion2api_list_models` reads the workspace-global live Notion picker and returns per-model reasoning efforts, the default effort, ratings, restrictions, surface routes, and a catalog freshness receipt. Chat tools accept an exact optional `reasoning_effort`; omission uses the selected model's catalog default, while unsupported values fail closed without model or effort substitution.
+
 Omitting `session_name` creates a descriptive generated session name for new work. The legacy literal `op` is normalized the same way, preventing stale clients from adding new work to the old shared session.
 
 Continue an existing chat with any authoritative identifier:
@@ -82,6 +84,7 @@ Cancellation is deliberately fail-closed. Cancelling an MCP job records the loca
 
 | Argument | Values | Behavior |
 | --- | --- | --- |
+| `reasoning_effort` | model-specific values from `notion2api_list_models`, or omitted | Sends the exact validated Notion effort; omission uses the live catalog default. |
 | `mode` | `default`, `ask`, `research` | `default` can search and edit; `ask` is read-only; `research` enables deeper research and web search by default. |
 | `task` | `visualize`, `generate_image`, `create_slides`, `spreadsheet`, `deep_research` | Selects the matching Notion task preset. `visualize` is for interactive/data visualizations; `generate_image` enables Notion Agent image generation/editing. |
 | `sources` | list of source-scope strings | Restricts retrieval to selected sources. Common values are `all`, `notion`, `web`, `notion-help-center`, `github`, `gmail`, `google-calendar`, and `google-drive`. |

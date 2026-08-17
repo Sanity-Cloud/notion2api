@@ -193,6 +193,7 @@ async def create_response(
 
     chat_req = ChatCompletionRequest(
         model=model,
+        reasoning_effort=payload.get("reasoning_effort"),
         messages=messages,
         stream=stream,
         temperature=payload.get("temperature"),

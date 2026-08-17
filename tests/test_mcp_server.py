@@ -2235,3 +2235,57 @@ def test_messages_fallback_includes_persisted_job_prompt(monkeypatch, tmp_path):
     assert result.messages[0]["content"] == "Create the Academy page tree."
     assert result.messages[1]["role"] == "assistant"
     assert result.messages[1]["content"] == "Created the Academy outline."
+
+
+def test_mcp_chat_surfaces_expose_exact_reasoning_effort_schema(monkeypatch):
+    monkeypatch.setenv("MCP_SERVER_NAME", "notion2api")
+    monkeypatch.setenv("MCP_TOOL_PREFIX", "")
+    server = create_server(
+        base_url="http://127.0.0.1:8120",
+        api_key="test-key",
+        timeout=1,
+        host="127.0.0.1",
+        port=8130,
+        mcp_path="/mcp",
+    )
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+
+    for name in ("chat", "chat_with_file", "chat_completion", "responses"):
+        schema = tools[name].inputSchema
+        assert "reasoning_effort" in schema["properties"]
+        description = schema["properties"]["reasoning_effort"]["description"]
+        assert "model-specific" in description
+        assert "silently downgraded" in description
+
+
+def test_mcp_outputs_promote_reasoning_effort_receipt():
+    client = type(
+        "Client",
+        (),
+        {"base_url": "http://127.0.0.1:8120", "timeout": 10},
+    )()
+    data = {
+        "ok": True,
+        "status_code": 200,
+        "choices": [{"message": {"content": "done"}}],
+        "model_metadata": {
+            "requested_reasoning_effort": "high",
+            "resolved_reasoning_effort": "high",
+            "reasoning_effort_source": "explicit",
+        },
+    }
+
+    result = mcp_server._chat_output_from_backend(
+        data=data,
+        client=client,
+        model="terra",
+        session_key="reasoning-test",
+        conversation_id="conversation-reasoning",
+        session_created=True,
+        request_id="request-reasoning",
+        wait_seconds=0,
+    )
+
+    assert result["requested_reasoning_effort"] == "high"
+    assert result["resolved_reasoning_effort"] == "high"
+    assert result["reasoning_effort_source"] == "explicit"

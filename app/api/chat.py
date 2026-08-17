@@ -29,10 +29,12 @@ from app.conversation import (
 from app.config import is_lite_mode
 from app.logger import logger
 from app.diagnostics import emit_diagnostic_event
+from app.model_catalog import ModelCatalogUnavailable, ModelSelectionError
 from app.model_registry import (
     get_model_route_resolution,
     is_supported_model,
     list_available_models,
+    resolve_model_selection,
 )
 from app.notion_client import NotionUpstreamError
 from app.attachments.normalizer import (
@@ -224,6 +226,7 @@ def _apply_notion_request_options(
         web_access=req_body.web_access,
         persona=req_body.notion_persona,
         instructions=instructions,
+        reasoning_effort=req_body.reasoning_effort,
     )
 
 
@@ -519,46 +522,69 @@ def _resolve_request_model(
     model: str | None,
     workspace_selector: str = "",
 ) -> str:
+    del request, workspace_selector
     normalized_model = normalize_model_id(model)
     if not normalized_model:
         openai_error("The 'model' field is required.", "model_required")
-
-    restricted = set()
-    try:
-        pool = request.app.state.account_pool
-        client = (
-            pool.get_metadata_client_for_workspace(workspace_selector)
-            if workspace_selector
-            else pool.get_metadata_client()
-        )
-        from app.model_registry import get_restricted_models_for_space, get_notion_model
-
-        restricted = get_restricted_models_for_space(client)
-        notion_model = get_notion_model(normalized_model)
-        if notion_model in restricted or normalized_model in restricted:
-            openai_error(
-                f"Model '{normalized_model}' is unavailable for the current account due to restriction (e.g. trial_not_allowed).",
-                "model_restricted",
-                status_code=400,
-            )
-    except Exception as e:
-        if hasattr(e, "status_code"):
-            raise e
-
-    if not is_supported_model(normalized_model):
-        try:
-            available_models = [
-                m
-                for m in list_available_models()
-                if get_notion_model(m) not in restricted and m not in restricted
-            ]
-        except Exception:
-            available_models = list_available_models()
-        openai_error(
-            f"Unsupported model '{normalized_model}'. Available models: {', '.join(available_models)}",
-            "model_not_found",
-        )
+    # The live Notion picker is authoritative. Static aliases remain useful for
+    # normalization, but an unknown value must reach catalog validation instead
+    # of silently resolving to Terra through the legacy registry fallback.
     return normalized_model
+
+
+def _validate_request_model_selection(
+    req_body: ChatCompletionRequest,
+    client: Any,
+) -> dict[str, Any]:
+    try:
+        selection = resolve_model_selection(
+            client,
+            str(req_body.model or ""),
+            req_body.reasoning_effort,
+            surface="workflow",
+        )
+    except ModelSelectionError as exc:
+        openai_error(
+            str(exc),
+            exc.code,
+            status_code=400,
+            param=exc.param,
+        )
+    except ModelCatalogUnavailable as exc:
+        openai_error(
+            str(exc),
+            "model_catalog_unavailable",
+            status_code=503,
+            param="model",
+        )
+
+    metadata = dict(req_body.metadata or {}) if isinstance(req_body.metadata, dict) else {}
+    model_metadata = selection.get("model_metadata")
+    receipt = {
+        key: value
+        for key, value in selection.items()
+        if key != "model_metadata"
+    }
+    if isinstance(model_metadata, dict):
+        receipt["model_metadata"] = {
+            key: model_metadata.get(key)
+            for key in (
+                "canonical_id",
+                "public_name",
+                "display_name",
+                "model_family",
+                "model_provider",
+                "display_group",
+                "model_card_attributes",
+                "routes",
+                "is_approaching_rate_limit",
+            )
+        }
+    metadata["model_selection"] = receipt
+    req_body.metadata = metadata
+    req_body.model = str(selection.get("canonical_id") or req_body.model)
+    req_body.reasoning_effort = selection.get("resolved_reasoning_effort") or None
+    return selection
 
 
 def _client_type_from_request(request: Request) -> str:
@@ -1333,6 +1359,28 @@ def _response_model_metadata(
                 "aligned",
             }
         }
+
+    selection = (
+        request_metadata.get("model_selection")
+        if isinstance(request_metadata, dict)
+        else None
+    )
+    if isinstance(selection, dict):
+        payload["model_selection"] = dict(selection)
+        for key in (
+            "requested_reasoning_effort",
+            "resolved_reasoning_effort",
+            "reasoning_effort_source",
+            "supported_reasoning_efforts",
+            "default_reasoning_effort",
+            "catalog_source",
+            "catalog_snapshot_sha256",
+            "catalog_fetched_at",
+            "catalog_age_seconds",
+            "catalog_stale",
+        ):
+            if key in selection:
+                payload.setdefault(key, selection[key])
 
     caller = (
         request_metadata.get("caller") if isinstance(request_metadata, dict) else None
@@ -2270,6 +2318,7 @@ def _handle_lite_request(
         client = None
         try:
             client = _client_for_requested_workspace(pool, req_body)
+            _validate_request_model_selection(req_body, client)
             _bind_governance_request_metadata(req_body, client)
 
             # Read poll configuration from headers if available
@@ -2641,6 +2690,7 @@ def _handle_standard_request(
                 )
             else:
                 client = _client_for_requested_workspace(pool, req_body)
+            _validate_request_model_selection(req_body, client)
             _bind_governance_request_metadata(req_body, client)
             if manager and conversation_id:
                 _enforce_bee_notion_call_contract(
@@ -3264,6 +3314,7 @@ async def create_chat_completion(
             client = _client_for_conversation(
                 pool, manager, conversation_id, req_body
             )
+            _validate_request_model_selection(req_body, client)
             _bind_governance_request_metadata(req_body, client)
             _enforce_bee_notion_call_contract(
                 manager=manager,
