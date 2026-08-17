@@ -37,6 +37,8 @@ from app.model_registry import (
     resolve_model_selection,
 )
 from app.notion_client import NotionUpstreamError
+from app.request_control import controlled_chat_request
+from app.retry_policy import should_retry_upstream
 from app.attachments.normalizer import (
     PromptValidationError,
     normalize_chat_messages,
@@ -2502,7 +2504,9 @@ def _handle_lite_request(
                     }
                 },
             )
-            if attempt == max_retries or not exc.retriable:
+            if not should_retry_upstream(
+                retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
+            ):
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
             _record_chat_runtime_diagnostic(
@@ -2919,7 +2923,9 @@ def _handle_standard_request(
                     }
                 },
             )
-            if attempt == max_retries or not exc.retriable:
+            if not should_retry_upstream(
+                retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
+            ):
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
             _record_chat_runtime_diagnostic(
@@ -3014,6 +3020,7 @@ def _handle_standard_request(
 
 
 @router.post("/chat/completions", tags=["chat"])
+@controlled_chat_request
 async def create_chat_completion(
     request: Request,
     req_body: ChatCompletionRequest,
@@ -3938,7 +3945,9 @@ async def create_chat_completion(
                     }
                 },
             )
-            if attempt == max_retries or not exc.retriable:
+            if not should_retry_upstream(
+                retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
+            ):
                 return _upstream_error_response(exc)
         except RuntimeError as exc:
             _record_chat_runtime_diagnostic(

@@ -40,6 +40,7 @@ from app.limiter import limiter
 from app.logger import logger, setup_uvicorn_logging
 from app.notion_admission import get_notion_admission_controller
 from app.notion_request_telemetry import UsageQuotaExceededError
+from app.request_control import RequestController
 
 
 apply_attachment_runtime_config()
@@ -67,6 +68,7 @@ async def lifespan(app: FastAPI):
     # text
     governed_accounts = get_governed_accounts()
     app.state.account_pool = AccountPool(governed_accounts)
+    app.state.request_control = RequestController.from_env()
     # Keep durable conversation storage available in every mode so chat-history
     # resume/fork can create real local conversations without forcing heavy mode.
     app.state.conversation_manager = ConversationManager()
@@ -278,7 +280,7 @@ async def favicon():
 
 
 @app.get("/health", tags=["system"])
-def health_check(request: Request):
+async def health_check(request: Request):
     uptime = time.time() - request.app.state.start_time
     pool = request.app.state.account_pool
     status = pool.get_status_summary()
@@ -287,6 +289,8 @@ def health_check(request: Request):
         history_store_root=get_chat_history_db_root(),
         history_schema_hash=history_schema_hash(),
     )
+    controller = getattr(request.app.state, "request_control", None)
+    request_control = await controller.snapshot() if controller is not None else {}
     return {
         "status": "ok",
         "accounts": status["active"],
@@ -298,12 +302,13 @@ def health_check(request: Request):
         "notion_admission": get_notion_admission_controller().snapshot(),
         "history": history_contract,
         "conversation_compression": compression_telemetry_snapshot(),
+        "request_control": request_control,
     }
 
 
 @app.get("/healthz", tags=["system"])
-def healthz(request: Request):
-    return health_check(request)
+async def healthz(request: Request):
+    return await health_check(request)
 
 
 frontend_dir = os.path.join(
