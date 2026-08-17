@@ -52,6 +52,23 @@ def usage_summary(
     return _contract({"usage": summary})
 
 
+@router.get("/chat-analysis")
+def chat_usage_analysis(
+    account_key: str = Query(min_length=1, max_length=160),
+    start_at: float | None = Query(default=None, gt=0),
+    end_at: float | None = Query(default=None, gt=0),
+) -> dict[str, Any]:
+    try:
+        analysis = get_notion_usage_store().chat_usage_analysis(
+            account_key=account_key,
+            start_at=start_at,
+            end_at=end_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _contract({"chat_analysis": analysis})
+
+
 @router.get("/quotas")
 def list_quotas(include_disabled: bool = True) -> dict[str, Any]:
     quotas = get_notion_usage_store().list_quotas(include_disabled=include_disabled)

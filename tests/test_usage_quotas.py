@@ -158,6 +158,66 @@ def test_allowance_observation_rejects_invalid_percentage(tmp_path) -> None:
         )
 
 
+def test_chat_usage_analysis_correlates_tokens_to_allowance_intervals(tmp_path) -> None:
+    store = NotionRequestTelemetryStore(tmp_path / "usage.sqlite3")
+    for attempt_id, created_at, input_tokens, output_tokens, actual_total in (
+        ("first", 1_000, 5, 2, 6),
+        ("second", 1_100, 4, 3, None),
+    ):
+        receipt = _receipt(
+            attempt_id,
+            account_key="workspace:user",
+            estimated_input_tokens=input_tokens,
+        )
+        receipt["operation"] = "POST /api/v3/runInferenceTranscript"
+        store.start(receipt)
+        store.finish(
+            attempt_id,
+            success=True,
+            estimated_output_tokens=output_tokens,
+            actual_total_tokens=actual_total,
+        )
+        with store._connect() as conn:
+            conn.execute(
+                "UPDATE notion_request_attempts SET created_at = ? WHERE attempt_id = ?",
+                (created_at, attempt_id),
+            )
+    first = store.record_allowance_observation(
+        account_key="workspace:user",
+        rolling_used_percent=10,
+        monthly_used_percent=20,
+        observed_at=1_050,
+    )
+    second = store.record_allowance_observation(
+        account_key="workspace:user",
+        rolling_used_percent=13,
+        monthly_used_percent=21,
+        observed_at=1_200,
+    )
+
+    analysis = store.chat_usage_analysis(
+        account_key="workspace:user", start_at=900, end_at=1_300
+    )
+
+    assert analysis["chat_operation"] == "POST /api/v3/runInferenceTranscript"
+    assert analysis["chat_usage"]["request_count"] == 2
+    assert analysis["chat_usage"]["tracked_tokens"] == 13
+    assert analysis["percentage_attribution"] == (
+        "not_available_from_provider; observational_only"
+    )
+    assert len(analysis["allowance_correlations"]) == 2
+    assert analysis["allowance_correlations"][0]["allowance"]["observation_id"] == first[
+        "observation_id"
+    ]
+    correlated = analysis["allowance_correlations"][1]
+    assert correlated["allowance"]["observation_id"] == second["observation_id"]
+    assert correlated["chat_usage"]["request_count"] == 1
+    assert correlated["chat_usage"]["tracked_tokens"] == 7
+    assert correlated["rolling_used_percent_delta"] == 3
+    assert correlated["monthly_used_percent_delta"] == 1
+    assert correlated["correlation"] == "observational_not_causal"
+
+
 def test_request_quota_is_enforced_before_second_attempt_is_recorded(tmp_path) -> None:
     store = NotionRequestTelemetryStore(tmp_path / "usage.sqlite3")
     store.upsert_quota("one-request", scope="global", max_requests=1)

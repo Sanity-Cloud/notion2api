@@ -16,6 +16,7 @@ QUOTA_SCOPES = {"global", "account", "workload", "account_workload"}
 MAX_QUOTA_WINDOW_SECONDS = 31 * 86400
 NOTION_ALLOWANCE_ROLLING_WINDOW_SECONDS = 6 * 3600
 NOTION_ALLOWANCE_EXCLUDED_PRODUCTS = ("custom_agents", "workers")
+NOTION_CHAT_INFERENCE_OPERATION = "POST /api/v3/runInferenceTranscript"
 
 
 class UsageQuotaExceededError(RuntimeError):
@@ -308,6 +309,111 @@ class NotionRequestTelemetryStore:
                 (account,),
             ).fetchone()
         return self._public_allowance(row) if row is not None else None
+
+    @staticmethod
+    def _chat_usage_for_interval(
+        conn: sqlite3.Connection,
+        *,
+        account_key: str,
+        start_at: float,
+        end_at: float,
+    ) -> dict[str, Any]:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS request_count,
+                   SUM(CASE WHEN outcome = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
+                   SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failed,
+                   COALESCE(SUM(request_bytes), 0) AS request_bytes,
+                   COALESCE(SUM(response_bytes), 0) AS response_bytes,
+                   COALESCE(SUM(estimated_input_tokens), 0) AS estimated_input_tokens,
+                   COALESCE(SUM(estimated_output_tokens), 0) AS estimated_output_tokens,
+                   COALESCE(SUM(actual_total_tokens), 0) AS actual_total_tokens,
+                   SUM(CASE WHEN actual_total_tokens IS NOT NULL THEN 1 ELSE 0 END)
+                       AS actual_token_attempts,
+                   COALESCE(SUM(CASE WHEN actual_total_tokens IS NOT NULL
+                       THEN actual_total_tokens
+                       ELSE estimated_input_tokens + estimated_output_tokens END), 0)
+                       AS tracked_tokens
+            FROM notion_request_attempts
+            WHERE account_key = ?
+              AND operation = ?
+              AND created_at >= ?
+              AND created_at <= ?
+            """,
+            (account_key, NOTION_CHAT_INFERENCE_OPERATION, start_at, end_at),
+        ).fetchone()
+        request_count = int(row["request_count"] or 0)
+        actual_token_attempts = int(row["actual_token_attempts"] or 0)
+        return {
+            "request_count": request_count,
+            "succeeded": int(row["succeeded"] or 0),
+            "failed": int(row["failed"] or 0),
+            "request_bytes": int(row["request_bytes"] or 0),
+            "response_bytes": int(row["response_bytes"] or 0),
+            "estimated_input_tokens": int(row["estimated_input_tokens"] or 0),
+            "estimated_output_tokens": int(row["estimated_output_tokens"] or 0),
+            "actual_total_tokens": int(row["actual_total_tokens"] or 0),
+            "actual_token_attempts": actual_token_attempts,
+            "estimated_token_attempts": request_count - actual_token_attempts,
+            "tracked_tokens": int(row["tracked_tokens"] or 0),
+            "token_basis": "actual_total_when_available_else_estimated",
+        }
+
+    def chat_usage_analysis(
+        self,
+        *,
+        account_key: str,
+        start_at: Any = None,
+        end_at: Any = None,
+    ) -> dict[str, Any]:
+        """Relate chat telemetry to observed allowance changes without claiming causation."""
+        account = _bounded_text(account_key)
+        if not account:
+            raise ValueError("account_key is required for chat usage analysis")
+        now = time.time()
+        end = now if end_at in (None, "") else self._optional_timestamp(end_at, "end_at")
+        start = max(0.0, end - 30.0 * 86400.0) if start_at in (None, "") else self._optional_timestamp(start_at, "start_at")
+        if start > end:
+            raise ValueError("start_at must not be after end_at")
+        with self._connect() as conn:
+            overall = self._chat_usage_for_interval(conn, account_key=account, start_at=start, end_at=end)
+            rolling_start = max(start, end - NOTION_ALLOWANCE_ROLLING_WINDOW_SECONDS)
+            rolling = self._chat_usage_for_interval(conn, account_key=account, start_at=rolling_start, end_at=end)
+            rows = conn.execute(
+                "SELECT * FROM notion_allowance_observations WHERE account_key = ? AND observed_at <= ? ORDER BY observed_at ASC, created_at ASC",
+                (account, end),
+            ).fetchall()
+            previous: sqlite3.Row | None = None
+            correlations: list[dict[str, Any]] = []
+            for row in rows:
+                observed_at = float(row["observed_at"])
+                if observed_at < start:
+                    previous = row
+                    continue
+                interval_start = float(previous["observed_at"]) if previous else start
+                item: dict[str, Any] = {
+                    "allowance": self._public_allowance(row),
+                    "interval_start_at": interval_start,
+                    "interval_end_at": observed_at,
+                    "chat_usage": self._chat_usage_for_interval(conn, account_key=account, start_at=interval_start, end_at=observed_at),
+                    "correlation": "observational_not_causal",
+                    "percentage_delta_available": previous is not None,
+                }
+                if previous is not None:
+                    item["rolling_used_percent_delta"] = round(float(row["rolling_used_percent"]) - float(previous["rolling_used_percent"]), 3)
+                    item["monthly_used_percent_delta"] = round(float(row["monthly_used_percent"]) - float(previous["monthly_used_percent"]), 3)
+                correlations.append(item)
+                previous = row
+        return {
+            "account_id": _opaque_account_id(account),
+            "chat_operation": NOTION_CHAT_INFERENCE_OPERATION,
+            "selected_period": {"start_at": start, "end_at": end},
+            "chat_usage": overall,
+            "rolling_six_hour_chat_usage": {"window_seconds": NOTION_ALLOWANCE_ROLLING_WINDOW_SECONDS, "start_at": rolling_start, "end_at": end, **rolling},
+            "allowance_correlations": correlations,
+            "correlation_method": "tokens are aggregated between allowance observations",
+            "percentage_attribution": "not_available_from_provider; observational_only",
+        }
 
     @staticmethod
     def _normalize_quota(
