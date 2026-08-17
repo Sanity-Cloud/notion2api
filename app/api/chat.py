@@ -49,6 +49,10 @@ from app.attachments.security import AttachmentPolicy
 from app.attachments.errors import AttachmentError
 from app.output_integrity import assess_output_integrity
 from app.retry_policy import bounded_provider_attempts
+from app.stream_protocol import (
+    StreamProtocolTracker,
+    StreamSourceCleanupError,
+)
 from app.output_hygiene import (
     detect_visible_output_contamination,
     finalize_visible_output,
@@ -1013,13 +1017,53 @@ def _parse_sse_json(chunk: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _build_stream_error_event(response_id: str, model: str, outcome: Any) -> str:
+    """Emit a terminal-safe SSE error receipt after a guarded stream failure."""
+    payload = {
+        "id": response_id,
+        "object": "error",
+        "model": model,
+        "error": {
+            "code": outcome.code or "ERR_STREAM_INTERRUPTED",
+            "type": outcome.classification or "stream_interrupted",
+            "message": "Upstream stream ended before a valid terminal receipt.",
+            "retriable": outcome.retriable,
+        },
+        "stream_receipt": outcome.receipt,
+    }
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _close_stream_source(
+    source: Iterable[Any],
+) -> tuple[bool, StreamSourceCleanupError | None]:
+    close = getattr(source, "close", None)
+    if not callable(close):
+        return False, None
+    try:
+        close()
+    except Exception as exc:
+        logger.warning(
+            "Failed to close upstream stream",
+            exc_info=True,
+            extra={
+                "request_info": {
+                    "event": "stream_source_close_failed",
+                    "cleanup_error_type": type(exc).__name__,
+                }
+            },
+        )
+        return True, StreamSourceCleanupError.from_exception(exc)
+    return True, None
+
+
 def _guard_stream_until_integrity(
     source: Iterable[str],
     *,
     response_id: str,
     model: str,
 ) -> Generator[str, None, None]:
-    """Buffer provider SSE until final integrity classification is known.
+    """Buffer provider SSE until final integrity and terminal framing are known.
 
     A final-only quarantine cannot retract deltas already delivered to clients.
     This guard therefore withholds provider output until the stream reaches a
@@ -1028,40 +1072,71 @@ def _guard_stream_until_integrity(
     metadata_events: list[str] = []
     hygiene_events: list[str] = []
     quarantined = False
+    tracker = StreamProtocolTracker()
+    source_error: BaseException | None = None
+    cleanup_attempted = False
+    cleanup_error: StreamSourceCleanupError | None = None
+    propagating = False
 
     with tempfile.SpooledTemporaryFile(
         max_size=MAX_GUARDED_STREAM_BUFFER_CHARS,
         mode="w+b",
     ) as buffered:
-        for raw_chunk in source:
-            chunk = str(raw_chunk)
-            encoded = chunk.encode("utf-8")
-            buffered.write(len(encoded).to_bytes(8, "big"))
-            buffered.write(encoded)
+        try:
+            for raw_chunk in source:
+                chunk = str(raw_chunk)
+                tracker.observe(chunk)
+                encoded = chunk.encode("utf-8")
+                buffered.write(len(encoded).to_bytes(8, "big"))
+                buffered.write(encoded)
 
-            payload = _parse_sse_json(chunk)
-            if payload is None:
-                continue
-            event_type = str(payload.get("type") or "")
-            if event_type == "model_metadata":
-                metadata_events.append(chunk)
-            if event_type == "output_hygiene":
-                hygiene_events.append(chunk)
-                hygiene = payload.get("hygiene")
-                if isinstance(hygiene, dict) and _output_requires_quarantine(hygiene):
-                    quarantined = True
+                payload = _parse_sse_json(chunk)
+                if payload is None:
+                    continue
+                event_type = str(payload.get("type") or "")
+                if event_type == "model_metadata":
+                    metadata_events.append(chunk)
+                if event_type == "output_hygiene":
+                    hygiene_events.append(chunk)
+                    hygiene = payload.get("hygiene")
+                    if isinstance(hygiene, dict) and _output_requires_quarantine(hygiene):
+                        quarantined = True
 
-            choices = payload.get("choices")
-            if isinstance(choices, list) and choices:
-                choice = choices[0] if isinstance(choices[0], dict) else {}
-                if choice.get("finish_reason") == "content_filter":
-                    quarantined = True
+                choices = payload.get("choices")
+                if isinstance(choices, list) and choices:
+                    choice = choices[0] if isinstance(choices[0], dict) else {}
+                    if choice.get("finish_reason") == "content_filter":
+                        quarantined = True
+        except asyncio.CancelledError:
+            propagating = True
+            raise
+        except GeneratorExit:
+            propagating = True
+            raise
+        except Exception as exc:
+            source_error = exc
+        finally:
+            cleanup_attempted, cleanup_error = _close_stream_source(source)
+            if source_error is None and cleanup_error is not None and not propagating:
+                source_error = cleanup_error
+
+        outcome = tracker.finalize(
+            source_error=source_error,
+            cleanup_attempted=cleanup_attempted,
+            cleanup_error=cleanup_error,
+        )
 
         if quarantined:
             yield from metadata_events
             yield from hygiene_events
             yield _build_stream_chunk(response_id, model, finish_reason="content_filter")
             yield "data: [DONE]\n\n"
+            return
+
+        if not outcome.ok:
+            yield from metadata_events
+            yield _build_stream_error_event(response_id, model, outcome)
+            yield _build_stream_chunk(response_id, model, finish_reason="error")
             return
 
         buffered.seek(0)

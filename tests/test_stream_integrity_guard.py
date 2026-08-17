@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 from app.api import chat
 
 
@@ -74,3 +78,54 @@ def test_guard_suppresses_contaminated_stream_after_spooling(monkeypatch):
     assert "long-contaminated-output" not in emitted
     assert '"type": "output_hygiene"' in emitted
     assert '"finish_reason": "content_filter"' in emitted
+
+
+def test_guard_terminalizes_upstream_exception_without_success_done():
+    metadata = 'data: {"type":"model_metadata","model":"route"}\n\n'
+
+    def source():
+        yield metadata
+        raise RuntimeError("upstream exploded")
+
+    emitted = "".join(
+        chat._guard_stream_until_integrity(source(), response_id="id", model="model")
+    )
+
+    assert metadata in emitted
+    assert "ERR_PROVIDER_EMPTY_STREAM" in emitted
+    assert '"finish_reason": "error"' in emitted
+    assert not emitted.endswith("data: [DONE]\n\n")
+
+
+def test_guard_rejects_stream_missing_done_sentinel():
+    source = [
+        chat._build_stream_chunk("id", "model", content="partial"),
+        chat._build_stream_chunk("id", "model", finish_reason="stop"),
+    ]
+
+    emitted = "".join(
+        chat._guard_stream_until_integrity(source, response_id="id", model="model")
+    )
+
+    assert "ERR_STREAM_MISSING_DONE" in emitted
+    assert '"finish_reason": "error"' in emitted
+    assert "partial" not in emitted
+    assert not emitted.endswith("data: [DONE]\n\n")
+
+
+def test_guard_preserves_generator_exit():
+    def source():
+        yield chat._build_stream_chunk("id", "model", content="partial")
+        raise GeneratorExit()
+
+    with pytest.raises(GeneratorExit):
+        list(chat._guard_stream_until_integrity(source(), response_id="id", model="model"))
+
+
+def test_guard_preserves_cancellation():
+    def source():
+        yield chat._build_stream_chunk("id", "model", content="partial")
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        list(chat._guard_stream_until_integrity(source(), response_id="id", model="model"))

@@ -8,6 +8,43 @@ window.NotionAI = window.NotionAI || {};
 window.NotionAI.Chat = window.NotionAI.Chat || {};
 
 window.NotionAI.Chat.Streaming = {
+    createTerminalState() {
+        return {
+            finishReason: null,
+            finishCount: 0,
+            done: false,
+            failure: null
+        };
+    },
+
+    streamFailure(message, code = 'ERR_STREAM_INCOMPLETE', detail = '') {
+        const error = new Error(message);
+        error.errorCode = code;
+        error.errorDetail = detail;
+        return error;
+    },
+
+    validateTerminalState(terminalState) {
+        const successfulReasons = new Set(['stop', 'length', 'tool_calls', 'function_call']);
+        if (terminalState.failure) {
+            throw this.streamFailure(
+                terminalState.failure.message || 'The stream reported a terminal error.',
+                terminalState.failure.code || 'ERR_STREAM_TERMINAL',
+                terminalState.failure.detail || ''
+            );
+        }
+        if (
+            !terminalState.done ||
+            terminalState.finishCount !== 1 ||
+            !successfulReasons.has(terminalState.finishReason)
+        ) {
+            throw this.streamFailure(
+                'The stream ended before a valid finish reason and [DONE] receipt.',
+                'ERR_STREAM_INCOMPLETE'
+            );
+        }
+    },
+
     /**
      * Streams chat completion response
      * @param {Object} chat - Current chat object
@@ -134,9 +171,10 @@ window.NotionAI.Chat.Streaming = {
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');
         const modelState = { metadata: null, displayName: null, requestedModel: model };
+        const terminalState = this.createTerminalState();
         let sseBuffer = '';
 
-        while (true) {
+        while (!terminalState.done && !terminalState.failure) {
             const { done, value } = await reader.read();
             if (done) break;
 
@@ -145,13 +183,23 @@ window.NotionAI.Chat.Streaming = {
             sseBuffer = events.pop() || '';
 
             for (const eventBlock of events) {
+                if (terminalState.done || terminalState.failure) break;
                 const lines = eventBlock.split('\n');
                 for (let line of lines) {
+                    if (terminalState.done || terminalState.failure) break;
                     line = line.trim();
                     if (!line.startsWith('data:')) continue;
 
                     const payload = line.slice(5).trim();
-                    const result = this.consumePayload(payload, aiWrapper, searchState, thinkingText, fullAiReply, modelState);
+                    const result = this.consumePayload(
+                        payload,
+                        aiWrapper,
+                        searchState,
+                        thinkingText,
+                        fullAiReply,
+                        modelState,
+                        terminalState
+                    );
 
                     if (result.thinkingText !== undefined) {
                         thinkingText = result.thinkingText;
@@ -164,9 +212,17 @@ window.NotionAI.Chat.Streaming = {
         }
 
         // Process remaining buffer
-        if (sseBuffer.trim().startsWith('data:')) {
+        if (!terminalState.done && !terminalState.failure && sseBuffer.trim().startsWith('data:')) {
             const payload = sseBuffer.trim().slice(5).trim();
-            const result = this.consumePayload(payload, aiWrapper, searchState, thinkingText, fullAiReply, modelState);
+            const result = this.consumePayload(
+                payload,
+                aiWrapper,
+                searchState,
+                thinkingText,
+                fullAiReply,
+                modelState,
+                terminalState
+            );
             if (result.thinkingText !== undefined) {
                 thinkingText = result.thinkingText;
             }
@@ -175,12 +231,22 @@ window.NotionAI.Chat.Streaming = {
             }
         }
 
+        try {
+            this.validateTerminalState(terminalState);
+        } catch (error) {
+            if (fullAiReply) {
+                window.NotionAI.Chat.Renderer.updateAIMessage(aiWrapper, '', false);
+            }
+            throw error;
+        }
+
         return {
             fullAiReply,
             thinkingText,
             searchState,
             modelMetadata: modelState.metadata,
-            modelDisplayName: modelState.displayName
+            modelDisplayName: modelState.displayName,
+            terminalState
         };
     },
 
@@ -193,16 +259,67 @@ window.NotionAI.Chat.Streaming = {
      * @param {string} fullAiReply - Current AI reply
      * @returns {Object} Updated state
      */
-    consumePayload(payload, aiWrapper, searchState, thinkingText, fullAiReply, modelState = null) {
-        if (!payload || payload === '[DONE]') {
-            return { thinkingText, fullAiReply };
+    consumePayload(
+        payload,
+        aiWrapper,
+        searchState,
+        thinkingText,
+        fullAiReply,
+        modelState = null,
+        terminalState = null
+    ) {
+        if (!payload) {
+            return { thinkingText, fullAiReply, terminalState };
+        }
+        if (terminalState?.done) {
+            return { thinkingText, fullAiReply, terminalState };
+        }
+        if (payload === '[DONE]') {
+            if (terminalState) terminalState.done = true;
+            return { thinkingText, fullAiReply, terminalState };
         }
 
         let dataObj;
         try {
             dataObj = JSON.parse(payload);
         } catch (e) {
-            return { thinkingText, fullAiReply };
+            if (terminalState) {
+                terminalState.failure = {
+                    code: 'ERR_STREAM_MALFORMED',
+                    message: 'Malformed SSE payload.'
+                };
+            }
+            return { thinkingText, fullAiReply, terminalState };
+        }
+
+        const finishReason = dataObj?.choices?.[0]?.finish_reason || null;
+        if (terminalState) {
+            const errorPayload = dataObj?.error;
+            if (
+                dataObj?.object === 'error' ||
+                dataObj?.type === 'stream_error' ||
+                errorPayload ||
+                finishReason === 'error' ||
+                finishReason === 'content_filter'
+            ) {
+                terminalState.failure = {
+                    code: errorPayload?.code || 'ERR_STREAM_TERMINAL',
+                    message: errorPayload?.message || dataObj?.message || finishReason || 'Stream failed.',
+                    detail: errorPayload?.detail || ''
+                };
+                return { thinkingText, fullAiReply, terminalState };
+            }
+            if (finishReason) {
+                terminalState.finishCount += 1;
+                terminalState.finishReason = finishReason;
+                if (terminalState.finishCount !== 1) {
+                    terminalState.failure = {
+                        code: 'ERR_STREAM_DUPLICATE_TERMINAL',
+                        message: 'The stream emitted more than one finish reason.'
+                    };
+                }
+                return { thinkingText, fullAiReply, terminalState };
+            }
         }
 
         // Handle actual model metadata. This may arrive after the content stream,
