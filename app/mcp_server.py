@@ -465,11 +465,61 @@ class ChatJobOutput(BaseModel):
         default=False,
         description="Whether a terminal local conversation checkpoint was observed after local cancellation.",
     )
+    recommended_poll_delay_ms: int = Field(
+        default=0,
+        description="Adaptive delay clients should wait before the next get_chat_job poll.",
+    )
+    next_poll_after_ms: int = Field(
+        default=0,
+        description="Unix epoch milliseconds after which the next poll is advised.",
+    )
+    poll_hint: str = Field(
+        default="",
+        description="Human-readable next-poll guidance that preserves stall/cancel semantics.",
+    )
     response: dict[str, Any] | None = Field(default=None, description="Persisted ChatOutput-compatible response, if available.")
     error: str | None = Field(default=None, description="Persisted error summary, if any.")
     raw_job: dict[str, Any] = Field(default_factory=dict, description="Raw persisted job state.")
     last_response: dict[str, Any] | None = Field(default=None, description="Optional latest local assistant response lookup.")
 
+
+def _adaptive_poll_guidance(job: dict[str, Any]) -> dict[str, Any]:
+    """Recommend a poll delay that slows down as work continues and stalls."""
+
+    status = str(job.get("status") or "")
+    now = _now_ms()
+    if status in {"completed", "error", "cancelled", "stale", "indeterminate_output"}:
+        return {
+            "recommended_poll_delay_ms": 0,
+            "next_poll_after_ms": now,
+            "poll_hint": "Job is terminal; further polling is optional.",
+        }
+    poll_count = max(0, int(job.get("poll_count") or 0))
+    stalled = float(job.get("stalled_for_seconds") or 0.0)
+    dead_loop = bool(job.get("dead_loop_suspected"))
+    if dead_loop:
+        delay = 5_000
+        hint = (
+            "No meaningful public progress; cancel_recommended is set. "
+            "Wait before polling again or cancel explicitly."
+        )
+    elif stalled >= 30:
+        delay = 3_000
+        hint = "Progress appears slow; back off polling to avoid storms."
+    elif poll_count >= 20:
+        delay = 2_500
+        hint = "High poll count; use the recommended delay to avoid poll storms."
+    elif poll_count >= 8:
+        delay = 1_500
+        hint = "Continue polling with moderate backoff."
+    else:
+        delay = 750
+        hint = "Poll get_chat_job after the recommended delay."
+    return {
+        "recommended_poll_delay_ms": delay,
+        "next_poll_after_ms": now + delay,
+        "poll_hint": hint,
+    }
 
 
 def prepare_mcp_file_attachments(
@@ -2209,6 +2259,7 @@ def _refresh_chat_job_health(job: dict[str, Any], *, increment_poll: bool = Fals
     now = _now_ms()
     if increment_poll:
         updated["poll_count"] = int(updated.get("poll_count") or 0) + 1
+        updated["last_polled_at"] = now
     active = str(updated.get("status") or "") in {"running", "pending"}
     last_progress_at = int(
         updated.get("last_progress_at")
@@ -2230,6 +2281,8 @@ def _refresh_chat_job_health(job: dict[str, Any], *, increment_poll: bool = Fals
             "cancel_recommended": dead_loop_suspected,
         }
         updated["progress"] = progress
+    guidance = _adaptive_poll_guidance(updated)
+    updated.update(guidance)
     return updated
 
 
@@ -2269,7 +2322,11 @@ def _persist_chat_progress(request_id: str, reasoning: str, content: str, event_
         job = dict(current)
         snapshot = _progress_snapshot(reasoning, content, event_count, complete)
         fingerprint = _progress_fingerprint(snapshot)
-        if fingerprint != str(job.get("progress_fingerprint") or "") or complete:
+        previous_fingerprint = str(job.get("progress_fingerprint") or "")
+        if fingerprint == previous_fingerprint and not complete:
+            # Suppress redundant durable writes when public progress is unchanged.
+            return
+        if fingerprint != previous_fingerprint or complete:
             job["last_progress_at"] = now
         job["progress_fingerprint"] = fingerprint
         job["progress"] = snapshot
@@ -3883,6 +3940,9 @@ def _chat_job_output(
             job.get("dead_loop_suspected_at_cancel")
         ),
         late_completion_detected=bool(job.get("late_completion_detected")),
+        recommended_poll_delay_ms=int(job.get("recommended_poll_delay_ms") or 0),
+        next_poll_after_ms=int(job.get("next_poll_after_ms") or 0),
+        poll_hint=str(job.get("poll_hint") or ""),
         response=projected_response,
         error=job.get("error") if isinstance(job.get("error"), str) else None,
         raw_job=raw_job,
@@ -4956,7 +5016,11 @@ def create_server(
     @server.tool(
         name=_tool_name("notion2api_switch_account"),
         description=_tool_description(
-            "Switch Notion2API to a named account profile. Use mode='pinned' with a profile name, email, user id, or account number; use mode='auto' to restore rotation and failover. Start a new remote chat after changing accounts because existing thread bindings are not migrated."
+            "Switch Notion2API to a named account profile or capacity alias "
+            "(Alpha/Beta/Canary/Dev). Use mode='pinned' with a profile name, alias, "
+            "email, user id, or account number; use mode='auto' for health-aware "
+            "rotation among production peers. Start a new remote chat after changing "
+            "accounts because existing thread bindings are not migrated."
         ),
         structured_output=True,
     )
@@ -4978,6 +5042,107 @@ def create_server(
     )
     async def notion2api_rollback_account_switch() -> dict[str, Any]:
         return await client.post("/v1/notion/accounts/rollback", {})
+
+    @server.tool(
+        name=_tool_name("notion2api_list_cursor_agents"),
+        description=_tool_description(
+            "List Cursor custom-agent registry entries scoped by Notion account_key and workspace_id. Returns metadata and Bitwarden secret references only; never secret values."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_list_cursor_agents(
+        account_key: str = "",
+        workspace_id: str = "",
+    ) -> dict[str, Any]:
+        from app.cursor_agent_registry import get_cursor_agent_registry
+
+        agents = get_cursor_agent_registry().list_agents(
+            account_key=account_key,
+            workspace_id=workspace_id,
+        )
+        return {
+            "ok": True,
+            "count": len(agents),
+            "agents": agents,
+        }
+
+    @server.tool(
+        name=_tool_name("notion2api_select_cursor_agent"),
+        description=_tool_description(
+            "Select a Cursor agent for an account/workspace pairing. Order: explicit agent -> account/workspace match -> repo-compatible healthy agent -> setup_required. Never crosses account/workspace boundaries."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_select_cursor_agent(
+        cursor_agent_key: str = "",
+        account_key: str = "",
+        workspace_id: str = "",
+        repository_url: str = "",
+    ) -> dict[str, Any]:
+        from app.cursor_agent_registry import get_cursor_agent_registry
+
+        decision = get_cursor_agent_registry().select_agent(
+            cursor_agent_key=cursor_agent_key,
+            account_key=account_key,
+            workspace_id=workspace_id,
+            repository_url=repository_url,
+        )
+        return {"ok": True, **decision}
+
+    @server.tool(
+        name=_tool_name("notion2api_upsert_cursor_agent"),
+        description=_tool_description(
+            "Create or update a Cursor agent registry entry for one account/workspace pairing. Provide Bitwarden cursor_api_key_secret_id only; never pass raw API keys."
+        ),
+        structured_output=True,
+    )
+    async def notion2api_upsert_cursor_agent(
+        account_key: str,
+        workspace_id: str,
+        cursor_agent_key: str = "",
+        workspace_key: str = "",
+        base_profile_name: str = "",
+        workflow_id: str = "",
+        connection_id: str = "",
+        friendly_name: str = "",
+        role: str = "",
+        allowed_github_repos: list[str] | None = None,
+        enabled: bool = True,
+        is_default: bool = False,
+        health_state: str = "unknown",
+        setup_status: str = "unknown",
+        cursor_api_key_secret_id: str = "",
+        bitwarden_project_id: str = "",
+    ) -> dict[str, Any]:
+        from app.cursor_agent_registry import get_cursor_agent_registry
+
+        if any(
+            token in str(cursor_api_key_secret_id).casefold()
+            for token in ("key_", "sk-", "bearer ")
+        ):
+            return {
+                "ok": False,
+                "error": "Raw Cursor API keys are rejected; provide a Bitwarden secret id only.",
+            }
+        agent = get_cursor_agent_registry().upsert_agent(
+            account_key=account_key,
+            workspace_id=workspace_id,
+            cursor_agent_key=cursor_agent_key or None,
+            workspace_key=workspace_key,
+            base_profile_name=base_profile_name,
+            workflow_id=workflow_id,
+            connection_id=connection_id,
+            friendly_name=friendly_name,
+            role=role,
+            allowed_github_repos=allowed_github_repos,
+            enabled=enabled,
+            is_default=is_default,
+            health_state=health_state,
+            setup_status=setup_status,
+            cursor_api_key_secret_id=cursor_api_key_secret_id,
+            bitwarden_project_id=bitwarden_project_id,
+        )
+        return {"ok": True, "agent": agent}
 
     @server.tool(name=_tool_name("notion2api_list_models"), description=_tool_description("List Notion2API models from the configured backend."), structured_output=True)
     async def notion2api_list_models() -> ListModelsOutput:
@@ -5338,13 +5503,25 @@ def create_server(
             error=str(exc),
         )
 
-    @server.tool(name=_tool_name("notion2api_hive_create_mission"), description=_tool_description("Create a durable Hive mission with parallel worker lanes and conversation bindings."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_create_mission"), description=_tool_description("Create a durable Hive mission with parallel worker lanes and conversation bindings. workspace_id and user_id are required account-scope fields."), structured_output=True)
     async def notion2api_hive_create_mission(
-        title: str,
-        objective: str,
-        lifecycle_stage: str,
-        workspace_id: str,
-        user_id: str,
+        title: Annotated[str, Field(min_length=1, description="Mission title.")],
+        objective: Annotated[str, Field(min_length=1, description="Mission objective.")],
+        lifecycle_stage: Annotated[str, Field(min_length=1, description="Lifecycle stage for the mission.")],
+        workspace_id: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Required Notion workspace id that owns this mission account binding.",
+            ),
+        ],
+        user_id: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Required Notion user id that owns this mission account binding.",
+            ),
+        ],
         work_units: list[dict[str, Any]] | None = None,
         authority_ceiling: str = "A2",
         parent_context_id: str = "",
@@ -5720,11 +5897,17 @@ def create_server(
             error=str(exc),
         )
 
-    @server.tool(name=_tool_name("notion2api_hive_materialize_invocation"), description=_tool_description("Persist an invocation plan and, when coverage and governance-plan authorization gates pass, create a durable Hive mission with appointed-worker bindings, bounded leases, conversation bindings, and READY dispatch receipts."), structured_output=True)
+    @server.tool(name=_tool_name("notion2api_hive_materialize_invocation"), description=_tool_description("Persist an invocation plan and, when coverage and governance-plan authorization gates pass, create a durable Hive mission with appointed-worker bindings, bounded leases, conversation bindings, and READY dispatch receipts. workspace_id and user_id are required."), structured_output=True)
     async def notion2api_hive_materialize_invocation(
-        objective: str,
-        workspace_id: str,
-        user_id: str,
+        objective: Annotated[str, Field(min_length=1, description="Invocation objective.")],
+        workspace_id: Annotated[
+            str,
+            Field(min_length=1, description="Required Notion workspace id for mission account binding."),
+        ],
+        user_id: Annotated[
+            str,
+            Field(min_length=1, description="Required Notion user id for mission account binding."),
+        ],
         required_competencies: list[str] | None = None,
         writable_domains: list[str] | None = None,
         dependency_count: int = 0,
