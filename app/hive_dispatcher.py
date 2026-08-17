@@ -25,6 +25,7 @@ from app.hive_external_effects import (
     EXTERNAL_IMPLEMENTATION_ID,
     get_hive_external_effect_store,
 )
+from app.hive_agent_memory_loadout import AgentMemoryLoadoutOutcomeUnknown
 from app.hive_materialization import (
     DispatchStatus,
     LeaseStatus,
@@ -59,6 +60,7 @@ class ExecutionStatus(str, Enum):
     FAILED = "FAILED"
     TIMED_OUT = "TIMED_OUT"
     CANCELLED = "CANCELLED"
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
 
 
 TERMINAL_EXECUTION_STATUSES = {
@@ -72,6 +74,7 @@ ACTIVE_EXECUTION_STATUSES = {
     ExecutionStatus.CLAIMED.value,
     ExecutionStatus.RUNNING.value,
     ExecutionStatus.REVIEW_REQUIRED.value,
+    ExecutionStatus.OUTCOME_UNKNOWN.value,
 }
 BLOCKED_PAYLOAD_KEYS = {
     "cmd",
@@ -153,6 +156,17 @@ BUILTIN_ADAPTER_SPECS: dict[str, BuiltinAdapterSpec] = {
         max_timeout_ms=5000,
         max_payload_bytes=65536,
         requires_human_approval=True,
+        requires_independent_review=True,
+    ),
+    "builtin.agent_memory_loadout.v1": BuiltinAdapterSpec(
+        implementation_id="builtin.agent_memory_loadout.v1",
+        display_name="Agent Memory Loadout",
+        capabilities=("agent_memory_loadout",),
+        writable_domains=(),
+        minimum_authority="A1",
+        max_timeout_ms=30000,
+        max_payload_bytes=2048,
+        requires_human_approval=False,
         requires_independent_review=True,
     ),
 }
@@ -239,11 +253,17 @@ class HiveExecutionSnapshot(BaseModel):
 class HiveExecutionDispatcherStore:
     """Fail-closed adapter registry and guarded dispatch execution ledger."""
 
-    def __init__(self, path: str | Path):
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        agent_memory_loadout_runner: Callable[..., tuple[dict[str, Any], dict[str, Any]]] | None = None,
+    ):
         self.path = Path(path).expanduser().resolve()
         self._schema_lock = threading.RLock()
         self.materialization = get_hive_materialization_store(self.path)
         self.workforce = get_hive_workforce_store(self.path)
+        self._agent_memory_loadout_runner = agent_memory_loadout_runner
         self._ensure_schema()
         self._seed_builtin_adapters()
 
@@ -1298,6 +1318,118 @@ class HiveExecutionDispatcherStore:
             "performed_external_effect": False,
         }
 
+    def _agent_memory_loadout_context(self, *, execution_id: str):
+        from app.hive_agent_memory_loadout import AgentMemoryLoadoutContext
+
+        with self._connect() as conn:
+            execution = conn.execute(
+                "SELECT * FROM hive_dispatch_executions WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if not execution:
+                raise HiveNotFoundError(f"Execution not found: {execution_id}")
+            mission = conn.execute(
+                """
+                SELECT mission_id, status, workspace_id, user_id, profile_name
+                FROM hive_missions WHERE mission_id = ?
+                """,
+                (str(execution["mission_id"]),),
+            ).fetchone()
+            unit = conn.execute(
+                """
+                SELECT work_unit_id, mission_id, status, conversation_id
+                FROM hive_work_units WHERE work_unit_id = ?
+                """,
+                (str(execution["work_unit_id"]),),
+            ).fetchone()
+            worker_lease = conn.execute(
+                """
+                SELECT lease_id, mission_id, work_unit_id, worker_id, status,
+                       authority_ceiling, writable_domains_json, source_boundary,
+                       expires_at
+                FROM hive_worker_leases WHERE lease_id = ?
+                """,
+                (str(execution["lease_id"]),),
+            ).fetchone()
+            receipt = conn.execute(
+                """
+                SELECT receipt_id, mission_id, work_unit_id, worker_id,
+                       conversation_id, status
+                FROM hive_dispatch_receipts WHERE receipt_id = ?
+                """,
+                (str(execution["receipt_id"]),),
+            ).fetchone()
+
+        if not mission or str(mission["status"]).upper() != "ACTIVE":
+            raise HiveTransitionError("Agent Memory loadout requires an ACTIVE mission.")
+        if (
+            not unit
+            or str(unit["mission_id"]) != str(execution["mission_id"])
+            or str(unit["status"]).upper() != "ACTIVE"
+        ):
+            raise HiveTransitionError("Agent Memory loadout requires an ACTIVE bound work unit.")
+        expected = (
+            str(execution["mission_id"]),
+            str(execution["work_unit_id"]),
+            str(execution["worker_id"]),
+        )
+        if not worker_lease or (
+            str(worker_lease["mission_id"]),
+            str(worker_lease["work_unit_id"]),
+            str(worker_lease["worker_id"]),
+        ) != expected:
+            raise HiveTransitionError("Agent Memory loadout worker lease binding mismatch.")
+        if str(worker_lease["status"]).upper() != LeaseStatus.ACTIVE.value:
+            raise HiveTransitionError("Agent Memory loadout requires an ACTIVE worker lease.")
+        if int(worker_lease["expires_at"] or 0) <= self._now_ms():
+            raise HiveTransitionError("Agent Memory loadout worker lease has expired.")
+        if not receipt or (
+            str(receipt["mission_id"]),
+            str(receipt["work_unit_id"]),
+            str(receipt["worker_id"]),
+        ) != expected:
+            raise HiveTransitionError("Agent Memory loadout dispatch receipt binding mismatch.")
+        if str(receipt["status"]).upper() not in {
+            DispatchStatus.READY.value,
+            DispatchStatus.ACKNOWLEDGED.value,
+        }:
+            raise HiveTransitionError(
+                "Agent Memory loadout requires a READY or ACKNOWLEDGED dispatch receipt."
+            )
+        conversation_id = str(
+            receipt["conversation_id"] or unit["conversation_id"] or ""
+        ).strip()
+        if not conversation_id:
+            raise HiveTransitionError(
+                "Agent Memory loadout has no materialized worker conversation binding."
+            )
+        try:
+            writable_domains = tuple(
+                str(value).strip()
+                for value in json.loads(
+                    str(worker_lease["writable_domains_json"] or "[]")
+                )
+                if str(value).strip()
+            )
+        except (TypeError, json.JSONDecodeError):
+            writable_domains = ()
+        return AgentMemoryLoadoutContext(
+            execution_id=str(execution["execution_id"]),
+            plan_id=str(execution["plan_id"]),
+            mission_id=expected[0],
+            work_unit_id=expected[1],
+            worker_id=expected[2],
+            conversation_id=conversation_id,
+            hive_worker_lease_id=str(worker_lease["lease_id"]),
+            dispatch_receipt_id=str(receipt["receipt_id"]),
+            authority_ceiling=str(worker_lease["authority_ceiling"]),
+            profile_name=str(mission["profile_name"] or ""),
+            workspace_id=str(mission["workspace_id"] or ""),
+            user_id=str(mission["user_id"] or ""),
+            source_boundary=str(worker_lease["source_boundary"] or ""),
+            writable_domains=writable_domains,
+        )
+
     def _run_adapter(
         self,
         execution_id: str,
@@ -1313,6 +1445,22 @@ class HiveExecutionDispatcherStore:
                 actor=actor,
                 cancelled=cancelled,
             )
+        if implementation_id == "builtin.agent_memory_loadout.v1":
+            from app.hive_agent_memory_loadout import run_agent_memory_loadout
+
+            runner = self._agent_memory_loadout_runner or run_agent_memory_loadout
+            result, extra_evidence = runner(
+                context=self._agent_memory_loadout_context(execution_id=execution_id),
+                payload=payload,
+                cancelled=cancelled,
+            )
+            return {
+                **result,
+                "performed_external_effect": bool(
+                    extra_evidence.get("performed_external_effect", True)
+                ),
+                "loadout_evidence": extra_evidence,
+            }
         runners: dict[
             str,
             Callable[[dict[str, Any], Callable[[], bool]], dict[str, Any]],
@@ -1795,6 +1943,22 @@ class HiveExecutionDispatcherStore:
                 error_message=f"Execution exceeded {current.timeout_ms}ms timeout.",
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
+        except AgentMemoryLoadoutOutcomeUnknown as exc:
+            return self._finalize_execution_error(
+                execution_id=execution_id,
+                actor=actor,
+                status=ExecutionStatus.OUTCOME_UNKNOWN.value,
+                error_code="OUTCOME_UNKNOWN",
+                error_message=str(exc),
+                duration_ms=int((time.monotonic() - started) * 1000),
+                extra_evidence={
+                    "outcome_unknown": True,
+                    "outcome_unknown_stage": exc.stage,
+                    "reconciliation_required": True,
+                    **dict(exc.evidence),
+                },
+                finished=False,
+            )
         except Exception as exc:
             return self._finalize_execution_error(
                 execution_id=execution_id,
@@ -1817,11 +1981,14 @@ class HiveExecutionDispatcherStore:
         error_code: str,
         error_message: str,
         duration_ms: int,
+        extra_evidence: dict[str, Any] | None = None,
+        finished: bool = True,
     ) -> HiveExecutionSnapshot:
         diagnostic_code = {
             "CANCELLED": "HIVE_EXECUTION_CANCELLED",
             "TIMEOUT": "HIVE_EXECUTION_TIMEOUT",
             "ADAPTER_FAILED": "HIVE_ADAPTER_FAILED",
+            "OUTCOME_UNKNOWN": "HIVE_EXECUTION_OUTCOME_UNKNOWN",
         }.get(error_code, f"HIVE_EXECUTION_{error_code or 'FAILED'}")
         emit_diagnostic_event(
             code=diagnostic_code,
@@ -1832,7 +1999,7 @@ class HiveExecutionDispatcherStore:
                 "info"
                 if error_code == "CANCELLED"
                 else "warning"
-                if error_code == "TIMEOUT"
+                if error_code in {"TIMEOUT", "OUTCOME_UNKNOWN"}
                 else "error"
             ),
             kind=(
@@ -1840,6 +2007,8 @@ class HiveExecutionDispatcherStore:
                 if error_code == "CANCELLED"
                 else "timeout"
                 if error_code == "TIMEOUT"
+                else "outcome_unknown"
+                if error_code == "OUTCOME_UNKNOWN"
                 else "adapter_failure"
             ),
             retryable=error_code in {"TIMEOUT", "ADAPTER_FAILED"},
@@ -1851,11 +2020,13 @@ class HiveExecutionDispatcherStore:
                 "status": status,
                 "error_code": error_code,
                 "duration_ms": duration_ms,
+                **dict(extra_evidence or {}),
             },
         )
         evidence = {
             "duration_ms": duration_ms,
             "performed_external_effect": False,
+            **dict(extra_evidence or {}),
         }
         with self._write() as conn:
             self._update_execution(
@@ -1866,7 +2037,7 @@ class HiveExecutionDispatcherStore:
                 evidence=evidence,
                 error_code=error_code,
                 error_message=error_message,
-                finished=True,
+                finished=finished,
             )
             self._execution_event(
                 conn,
@@ -1928,6 +2099,10 @@ class HiveExecutionDispatcherStore:
                 terminal_snapshot = self._execution_snapshot(
                     conn, execution_id=execution_id
                 )
+            elif execution.status == ExecutionStatus.OUTCOME_UNKNOWN.value:
+                raise HiveTransitionError(
+                    "OUTCOME_UNKNOWN executions must be reconciled before cancellation or retry."
+                )
             elif execution.status == ExecutionStatus.RUNNING.value:
                 conn.execute(
                     """
@@ -1980,6 +2155,113 @@ class HiveExecutionDispatcherStore:
             db_path=str(self.path),
             error="Execution cancellation did not produce a snapshot.",
         )
+
+    def reconcile_outcome_unknown(
+        self,
+        *,
+        execution_id: str,
+        actor: str,
+        resolved_status: str,
+        evidence: dict[str, Any],
+        idempotency_key: str | None = None,
+    ) -> HiveExecutionSnapshot:
+        """Resolve an indeterminate remote effect without replaying the adapter."""
+
+        execution_id = self._required(execution_id, "execution_id")
+        actor = self._required(actor, "actor")
+        target = str(resolved_status or "").strip().upper()
+        if target not in {
+            ExecutionStatus.COMPLETED.value,
+            ExecutionStatus.FAILED.value,
+            ExecutionStatus.CANCELLED.value,
+        }:
+            raise HiveTransitionError(
+                "OUTCOME_UNKNOWN reconciliation must resolve to COMPLETED, FAILED, or CANCELLED."
+            )
+        if not isinstance(evidence, dict) or not evidence:
+            raise HiveTransitionError(
+                "OUTCOME_UNKNOWN reconciliation requires non-empty evidence."
+            )
+        request = {
+            "execution_id": execution_id,
+            "actor": actor,
+            "resolved_status": target,
+            "evidence": evidence,
+        }
+        fingerprint = self._fingerprint(request)
+        with self._write() as conn:
+            if idempotency_key:
+                existing = conn.execute(
+                    """
+                    SELECT execution_id, request_sha256
+                    FROM hive_execution_events
+                    WHERE idempotency_key = ?
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (idempotency_key,),
+                ).fetchone()
+                if existing:
+                    if str(existing["request_sha256"]) != fingerprint:
+                        raise HiveIdempotencyConflict(
+                            "Outcome reconciliation idempotency key was reused with different content."
+                        )
+                    return self._execution_snapshot(
+                        conn, execution_id=str(existing["execution_id"])
+                    )
+            row = conn.execute(
+                "SELECT * FROM hive_dispatch_executions WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if not row:
+                raise HiveNotFoundError(f"Execution not found: {execution_id}")
+            execution = self._execution_from_row(row)
+            if execution.status != ExecutionStatus.OUTCOME_UNKNOWN.value:
+                raise HiveTransitionError(
+                    f"Execution is {execution.status}, not OUTCOME_UNKNOWN."
+                )
+            merged_evidence = {
+                **dict(execution.evidence),
+                "outcome_unknown": False,
+                "reconciliation_required": False,
+                "reconciled": True,
+                "reconciled_status": target,
+                "reconciliation_evidence": dict(evidence),
+                "semantic_replay_performed": False,
+            }
+            result = {
+                **dict(execution.result),
+                "status": "RECONCILED",
+                "resolved_status": target,
+                "semantic_replay_performed": False,
+            }
+            self._update_execution(
+                conn,
+                execution_id=execution_id,
+                status=target,
+                actor=actor,
+                result=result,
+                evidence=merged_evidence,
+                error_code="" if target == ExecutionStatus.COMPLETED.value else target,
+                error_message="" if target == ExecutionStatus.COMPLETED.value else "Reconciled remote outcome.",
+                finished=True,
+            )
+            self._execution_event(
+                conn,
+                execution_id=execution_id,
+                event_type="EXECUTION_OUTCOME_RECONCILED",
+                actor=actor,
+                payload={
+                    "resolved_status": target,
+                    "semantic_replay_performed": False,
+                    "evidence": dict(evidence),
+                },
+                fingerprint=fingerprint,
+                idempotency_key=idempotency_key,
+            )
+            snapshot = self._execution_snapshot(conn, execution_id=execution_id)
+        if snapshot.executions:
+            self._reconcile_execution_receipt(snapshot.executions[0])
+        return snapshot
 
     def recover_execution(
         self,

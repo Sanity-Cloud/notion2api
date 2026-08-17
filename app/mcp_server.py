@@ -6738,6 +6738,25 @@ def create_server(
         except (HiveRuntimeError, ValueError) as exc:
             return _execution_error_snapshot(exc, execution_id)
 
+    @server.tool(name=_tool_name("notion2api_hive_reconcile_execution_outcome"), description=_tool_description("Resolve an OUTCOME_UNKNOWN guarded execution from durable provider/worker evidence without replaying the semantic adapter operation. The result may be COMPLETED, FAILED, or CANCELLED; reconciliation is idempotent and synchronizes the Phase 2 dispatch receipt."), structured_output=True)
+    async def notion2api_hive_reconcile_execution_outcome(
+        execution_id: str,
+        actor: str,
+        resolved_status: str,
+        evidence: dict[str, Any],
+        idempotency_key: str | None = None,
+    ) -> HiveExecutionSnapshot:
+        try:
+            return get_hive_execution_dispatcher_store().reconcile_outcome_unknown(
+                execution_id=execution_id,
+                actor=actor,
+                resolved_status=resolved_status,
+                evidence=evidence,
+                idempotency_key=idempotency_key,
+            )
+        except (HiveRuntimeError, ValueError) as exc:
+            return _execution_error_snapshot(exc, execution_id)
+
     @server.tool(name=_tool_name("notion2api_hive_recover_execution"), description=_tool_description("Governance-plan-authorized recovery for a stale CLAIMED or RUNNING guarded execution. Recovery reuses the persisted bounded request, increments the attempt ledger, remains idempotent, and finalizes a pending cancellation instead of rerunning it."), structured_output=True)
     async def notion2api_hive_recover_execution(
         execution_id: str,

@@ -67,7 +67,7 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 60
+    assert len(names) == 61
     assert "aigentbee_hive_create_mission" in names
     assert "aigentbee_hive_delegate_tasks" in names
     assert "aigentbee_hive_transition_task" in names
@@ -104,6 +104,7 @@ def test_aigentbee_profile_exposes_configured_machine_prefix(monkeypatch):
     assert "aigentbee_hive_execute_dispatch" in names
     assert "aigentbee_hive_get_execution" in names
     assert "aigentbee_hive_cancel_execution" in names
+    assert "aigentbee_hive_reconcile_execution_outcome" in names
     assert "aigentbee_hive_recover_execution" in names
     assert "aigentbee_hive_review_execution" in names
     assert "aigentbee_hive_certify_external_adapter" in names
@@ -135,7 +136,7 @@ def test_primary_profile_exposes_bare_machine_methods(monkeypatch):
     )
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert len(names) == 57
+    assert len(names) == 58
     assert "hive_create_mission" in names
     assert "hive_delegate_tasks" in names
     assert "hive_transition_task" in names
@@ -173,6 +174,7 @@ def test_primary_profile_exposes_bare_machine_methods(monkeypatch):
     assert "hive_execute_dispatch" in names
     assert "hive_get_execution" in names
     assert "hive_cancel_execution" in names
+    assert "hive_reconcile_execution_outcome" in names
     assert "hive_recover_execution" in names
     assert "hive_review_execution" in names
     assert "hive_certify_external_adapter" in names
