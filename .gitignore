@@ -70,6 +70,7 @@ tests/fixtures/*
 # Claude Code local settings
 .claude/settings.local.json
 .claude/worktrees/
+.worktrees/
 .codex-test-tmp/
 
 # Docker (Optional to ignore if you want to keep configs in git, usually we keep them)
