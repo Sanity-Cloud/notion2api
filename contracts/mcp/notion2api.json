@@ -3,7 +3,7 @@
   "profile": "notion2api",
   "schema_version": 1,
   "server_name": "notion2api",
-  "tool_count": 57,
+  "tool_count": 58,
   "tools": [
     {
       "description": "Grant Notion's Allow once confirmation for pending connections.web.loadPage calls and resume the interrupted inference through runInferenceTranscript. Resolves the remote thread from a named MCP session unless notion_thread_id is provided.",
@@ -12648,6 +12648,286 @@
           }
         },
         "title": "HiveInvocationPlan",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Resolve an OUTCOME_UNKNOWN guarded execution from durable provider/worker evidence without replaying the semantic adapter operation. The result may be COMPLETED, FAILED, or CANCELLED; reconciliation is idempotent and synchronizes the Phase 2 dispatch receipt.",
+      "inputSchema": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "resolved_status": {
+            "title": "Resolved Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "execution_id",
+          "actor",
+          "resolved_status",
+          "evidence"
+        ],
+        "title": "notion2api_hive_reconcile_execution_outcomeArguments",
+        "type": "object"
+      },
+      "name": "hive_reconcile_execution_outcome",
+      "outputSchema": {
+        "$defs": {
+          "HiveDispatchExecution": {
+            "properties": {
+              "actor": {
+                "title": "Actor",
+                "type": "string"
+              },
+              "adapter_id": {
+                "title": "Adapter Id",
+                "type": "string"
+              },
+              "attempt": {
+                "default": 0,
+                "title": "Attempt",
+                "type": "integer"
+              },
+              "cancellation_requested": {
+                "default": false,
+                "title": "Cancellation Requested",
+                "type": "boolean"
+              },
+              "created_at": {
+                "default": 0,
+                "title": "Created At",
+                "type": "integer"
+              },
+              "error_code": {
+                "default": "",
+                "title": "Error Code",
+                "type": "string"
+              },
+              "error_message": {
+                "default": "",
+                "title": "Error Message",
+                "type": "string"
+              },
+              "evidence": {
+                "additionalProperties": true,
+                "title": "Evidence",
+                "type": "object"
+              },
+              "execution_id": {
+                "title": "Execution Id",
+                "type": "string"
+              },
+              "finished_at": {
+                "default": 0,
+                "title": "Finished At",
+                "type": "integer"
+              },
+              "implementation_id": {
+                "title": "Implementation Id",
+                "type": "string"
+              },
+              "lease_id": {
+                "title": "Lease Id",
+                "type": "string"
+              },
+              "mission_id": {
+                "title": "Mission Id",
+                "type": "string"
+              },
+              "plan_id": {
+                "title": "Plan Id",
+                "type": "string"
+              },
+              "receipt_id": {
+                "title": "Receipt Id",
+                "type": "string"
+              },
+              "request_payload": {
+                "additionalProperties": true,
+                "title": "Request Payload",
+                "type": "object"
+              },
+              "requested_capability": {
+                "title": "Requested Capability",
+                "type": "string"
+              },
+              "requested_writable_domains": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Requested Writable Domains",
+                "type": "array"
+              },
+              "result": {
+                "additionalProperties": true,
+                "title": "Result",
+                "type": "object"
+              },
+              "review_required": {
+                "default": false,
+                "title": "Review Required",
+                "type": "boolean"
+              },
+              "revision": {
+                "default": 0,
+                "title": "Revision",
+                "type": "integer"
+              },
+              "started_at": {
+                "default": 0,
+                "title": "Started At",
+                "type": "integer"
+              },
+              "status": {
+                "title": "Status",
+                "type": "string"
+              },
+              "timeout_ms": {
+                "default": 0,
+                "title": "Timeout Ms",
+                "type": "integer"
+              },
+              "updated_at": {
+                "default": 0,
+                "title": "Updated At",
+                "type": "integer"
+              },
+              "work_unit_id": {
+                "title": "Work Unit Id",
+                "type": "string"
+              },
+              "worker_id": {
+                "title": "Worker Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "execution_id",
+              "plan_id",
+              "mission_id",
+              "work_unit_id",
+              "receipt_id",
+              "lease_id",
+              "worker_id",
+              "adapter_id",
+              "implementation_id",
+              "requested_capability",
+              "status",
+              "actor"
+            ],
+            "title": "HiveDispatchExecution",
+            "type": "object"
+          },
+          "HiveExecutionReview": {
+            "properties": {
+              "actor": {
+                "title": "Actor",
+                "type": "string"
+              },
+              "approved": {
+                "title": "Approved",
+                "type": "boolean"
+              },
+              "created_at": {
+                "default": 0,
+                "title": "Created At",
+                "type": "integer"
+              },
+              "execution_id": {
+                "title": "Execution Id",
+                "type": "string"
+              },
+              "findings": {
+                "additionalProperties": true,
+                "title": "Findings",
+                "type": "object"
+              },
+              "review_id": {
+                "title": "Review Id",
+                "type": "string"
+              },
+              "reviewer_worker_id": {
+                "title": "Reviewer Worker Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "review_id",
+              "execution_id",
+              "reviewer_worker_id",
+              "actor",
+              "approved"
+            ],
+            "title": "HiveExecutionReview",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "count": {
+            "default": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "db_path": {
+            "default": "",
+            "title": "Db Path",
+            "type": "string"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "executions": {
+            "items": {
+              "$ref": "#/$defs/HiveDispatchExecution"
+            },
+            "title": "Executions",
+            "type": "array"
+          },
+          "found": {
+            "default": true,
+            "title": "Found",
+            "type": "boolean"
+          },
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/$defs/HiveExecutionReview"
+            },
+            "title": "Reviews",
+            "type": "array"
+          }
+        },
+        "title": "HiveExecutionSnapshot",
         "type": "object"
       }
     },

@@ -9,7 +9,7 @@ from scripts.generate_mcp_contract_snapshots import build_profile_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_DIR = ROOT / "contracts" / "mcp"
-EXPECTED_COUNTS = {"notion2api": 57, "aigentbee": 60}
+EXPECTED_COUNTS = {"notion2api": 58, "aigentbee": 61}
 WORKBENCH_SUFFIXES = {
     "show_swarm_workbench",
     "get_swarm_workbench",
