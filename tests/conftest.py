@@ -10,6 +10,7 @@ import pytest
 # repository .env cannot alter auth or MCP tool names during test imports.
 os.environ["API_KEY"] = ""
 os.environ["MCP_TOOL_PREFIX"] = ""
+os.environ["ENABLE_ATTACHMENTS"] = "false"
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +27,7 @@ def isolate_notion_runtime_state(tmp_path, monkeypatch):
     # environment dynamically after collection.
     monkeypatch.setenv("API_KEY", "")
     monkeypatch.setenv("MCP_TOOL_PREFIX", "")
+    monkeypatch.setenv("ENABLE_ATTACHMENTS", "false")
     monkeypatch.setenv("NOTION_MODEL_CATALOG_ALLOW_STATIC_SELECTION", "true")
     monkeypatch.setattr(
         notion_admission,
