@@ -13,6 +13,11 @@ def isolate_notion_runtime_state(tmp_path, monkeypatch):
     from app.notion_request_telemetry import NotionRequestTelemetryStore
 
     database = tmp_path / "notion-runtime-state.sqlite3"
+    # Keep unit/integration tests hermetic from the live service shell. These
+    # values alter MCP tool names/auth behavior at import/runtime and otherwise
+    # make local results depend on whichever governed profile launched pytest.
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("MCP_TOOL_PREFIX", raising=False)
     monkeypatch.setenv("NOTION_MODEL_CATALOG_ALLOW_STATIC_SELECTION", "true")
     monkeypatch.setattr(
         notion_admission,
