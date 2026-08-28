@@ -142,8 +142,8 @@ EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES = max(
     min(3, int(os.getenv("EXTERNAL_URL_AUTO_APPROVE_MAX_RETRIES", "1") or "1")),
 )
 
-# APP_MODE: heavytextlite text standard
-APP_MODE = os.getenv("APP_MODE", "heavy").lower().strip()
+# APP_MODE: standard (default), lite, or heavy
+APP_MODE = os.getenv("APP_MODE", "standard").lower().strip()
 
 
 def is_lite_mode() -> bool:
