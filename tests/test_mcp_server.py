@@ -603,6 +603,42 @@ def test_poll_health_is_persisted_durably(monkeypatch):
     assert saves
 
 
+def test_watchdog_health_refresh_does_not_rewrite_unchanged_terminal_job(monkeypatch):
+    state = {
+        "jobs": {
+            "request-1": {
+                "request_id": "request-1",
+                "status": "cancelled",
+                "created_at": 1_000,
+                "updated_at": 2_000,
+                "stalled_for_seconds": 0.0,
+                "dead_loop_suspected": False,
+                "cancel_recommended": False,
+                "recommended_poll_delay_ms": 0,
+                "next_poll_after_ms": 2_000,
+                "poll_hint": "Job is terminal; further polling is optional.",
+            }
+        }
+    }
+    saves = []
+    monkeypatch.setattr(mcp_server, "_load_chat_job_state", lambda: state)
+    monkeypatch.setattr(mcp_server, "_now_ms", lambda: 31_000)
+    monkeypatch.setattr(
+        mcp_server,
+        "_save_chat_job_state",
+        lambda value, *args, **kwargs: saves.append((value, args, kwargs)),
+    )
+
+    job = mcp_server._refresh_and_persist_chat_job_health(
+        "request-1",
+        increment_poll=False,
+    )
+
+    assert job is not None
+    assert job["next_poll_after_ms"] == 31_000
+    assert saves == []
+
+
 def test_cancel_chat_job_marks_persisted_job_cancelled(monkeypatch):
     state = {
         "jobs": {

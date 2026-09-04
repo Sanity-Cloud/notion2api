@@ -2528,7 +2528,12 @@ def _refresh_and_persist_chat_job_health(
             return None
         updated = _refresh_chat_job_health(current, increment_poll=increment_poll)
         jobs[normalized_id] = updated
-        _save_chat_job_state(state, changed_request_ids={normalized_id})
+        durable_current = dict(current)
+        durable_updated = dict(updated)
+        durable_current.pop("next_poll_after_ms", None)
+        durable_updated.pop("next_poll_after_ms", None)
+        if durable_updated != durable_current:
+            _save_chat_job_state(state, changed_request_ids={normalized_id})
         return updated
 
 
