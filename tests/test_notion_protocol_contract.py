@@ -62,7 +62,16 @@ def test_workflow_request_uses_patch_protocol_v2():
         ) == [{"type": "content", "text": "ok"}]
 
     request = client._scraper.post.call_args.kwargs
-    assert request["headers"]["Accept"] == "application/x-ndjson"
+    headers = request["headers"]
+    assert headers["Accept"] == "application/x-ndjson"
+    assert "Chrome/152.0.0.0" in headers["User-Agent"]
+    assert headers["referer"] == "https://www.notion.so/chat"
+    assert headers["sec-fetch-dest"] == "empty"
+    assert headers["sec-fetch-mode"] == "cors"
+    assert headers["sec-fetch-site"] == "same-origin"
+    assert headers["sec-ch-ua-mobile"] == "?0"
+    assert "Google Chrome" in headers["sec-ch-ua"]
+    assert headers["sec-ch-ua-platform"] == '\"Linux\"'
     assert request["json"]["asPatchResponse"] is True
     assert request["json"]["patchResponseVersion"] == 2
     assert request["json"]["createdSource"] == "workflows"
