@@ -75,6 +75,56 @@ def test_mixed_initial_value_array_keeps_thinking_out_of_visible_content():
     ]
 
 
+def test_content_replace_patch_is_authoritative_final_not_duplicate_delta():
+    partial = (
+        "Tasks Tracker (database)\n"
+        "Cursor Tasks (database)\n"
+        "People (database)[^{{notion-9"
+    )
+    replacement = (
+        "Tasks Tracker (database)\n"
+        "Cursor Tasks (database)\n"
+        "People (database)[^https://www.notion.so/archive-root]"
+    )
+    line = json.dumps(
+        {
+            "type": "patch",
+            "v": [
+                {
+                    "o": "a",
+                    "p": "/s/-",
+                    "v": {
+                        "type": "agent-inference",
+                        "value": [{"type": "text", "content": partial}],
+                    },
+                },
+                {
+                    "o": "p",
+                    "p": "/s/0/value/0/content",
+                    "v": replacement,
+                },
+            ],
+        }
+    )
+
+    assert list(parse_stream(DummyResponse([line]))) == [
+        {"type": "content", "text": partial},
+        {
+            "type": "final_content",
+            "text": replacement,
+            "source_type": "content-replace-patch",
+        },
+    ]
+    assert list(stream_parser_safe.parse_stream(DummyResponse([line]))) == [
+        {"type": "content", "text": partial},
+        {
+            "type": "final_content",
+            "text": replacement,
+            "source_type": "content-replace-patch",
+        },
+    ]
+
+
 def test_parser_emits_completion_only_for_finished_at_patch():
     response = DummyResponse(
         [

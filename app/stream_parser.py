@@ -1604,5 +1604,18 @@ def parse_stream(response: requests.Response) -> Generator[dict[str, Any], None,
                 continue
             if seg_owner in (SEG_THINKING, SEG_TOOL):
                 yield {"type": "thinking", "text": cleaned}
+            elif patch_op == "p" and (
+                "/content" in patch_path or "/text" in patch_path
+            ):
+                # Notion uses replace patches to publish the authoritative value
+                # of a text field. Treating that value as another delta duplicates
+                # previously streamed prose and can splice citation fragments into
+                # the answer. Surface it as final content so consumers reconcile
+                # the replacement against the partial stream instead of appending it.
+                yield {
+                    "type": "final_content",
+                    "text": cleaned,
+                    "source_type": "content-replace-patch",
+                }
             else:
                 yield {"type": "content", "text": cleaned}

@@ -245,6 +245,32 @@ def test_stream_generators_preserve_finish_reason(factory):
 
 
 
+def test_clean_content_replacement_beats_contaminated_partial_stream():
+    streamed = (
+        "Tasks Tracker (database)\n"
+        "Cursor Tasks (database)\n"
+        "People (database)[^{{notion-9"
+    )
+    final = (
+        "Tasks Tracker (database)\n"
+        "Cursor Tasks (database)\n"
+        "People (database)[^https://www.notion.so/archive-root]"
+    )
+
+    selected, decision = _select_best_final_reply(
+        streamed,
+        final,
+        "content-replace-patch",
+    )
+    sanitized, _finalize_decision, hygiene = _finalize_visible_reply(selected, "", "")
+
+    assert selected == final
+    assert decision == "final_preferred_over_contaminated_stream"
+    assert sanitized == final
+    assert hygiene["visible_contamination_detected"] is False
+    assert hygiene["output_integrity"]["quarantine_required"] is False
+
+
 def test_final_reply_preserves_streamed_spacing_when_tokens_are_equivalent():
     streamed = (
         "MCP tool inventories have been refreshed.\n\n"
