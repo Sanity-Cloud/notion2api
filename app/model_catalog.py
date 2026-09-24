@@ -122,22 +122,59 @@ def parse_picker_catalog(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ModelCatalogValidationError("Picker response must be an object.")
     raw_models = payload.get("models")
-    if not isinstance(raw_models, list) or not raw_models:
-        raise ModelCatalogValidationError("Picker response contains no models.")
+    if not isinstance(raw_models, list):
+        raise ModelCatalogValidationError("Picker response 'models' must be a list.")
+    if not raw_models:
+        restriction = (
+            " Model selection is restricted for this workspace."
+            if bool(payload.get("modelSelectionRestricted", False))
+            else ""
+        )
+        raise ModelCatalogValidationError(
+            f"Picker response contains no usable models.{restriction}"
+        )
 
     models: list[dict[str, Any]] = []
+    rejected_models: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for raw in raw_models:
+    for index, raw in enumerate(raw_models):
         if not isinstance(raw, dict):
-            raise ModelCatalogValidationError("Picker model entry must be an object.")
-        model = _normalized_model_record(raw)
+            rejected_models.append(
+                {
+                    "index": index,
+                    "canonical_id": "",
+                    "error": "Picker model entry must be an object.",
+                }
+            )
+            continue
+        try:
+            model = _normalized_model_record(raw)
+        except ModelCatalogValidationError as exc:
+            rejected_models.append(
+                {
+                    "index": index,
+                    "canonical_id": _clean_text(raw.get("model")),
+                    "error": str(exc),
+                }
+            )
+            continue
         canonical_id = model["canonical_id"]
         if canonical_id in seen:
-            raise ModelCatalogValidationError(
-                f"Picker response contains duplicate model '{canonical_id}'."
+            rejected_models.append(
+                {
+                    "index": index,
+                    "canonical_id": canonical_id,
+                    "error": f"Duplicate picker model '{canonical_id}'.",
+                }
             )
+            continue
         seen.add(canonical_id)
         models.append(model)
+
+    if not models:
+        raise ModelCatalogValidationError(
+            "Picker response contained models, but none were individually valid."
+        )
 
     restricted: dict[str, dict[str, str]] = {}
     restricted_entries = payload.get("restrictedAccessModelsInPickerConfig")
@@ -175,6 +212,12 @@ def parse_picker_catalog(payload: dict[str, Any]) -> dict[str, Any]:
         "restricted_geo_policy_applied": bool(
             payload.get("restrictedGeoPolicyApplied", False)
         ),
+        "model_selection_restricted": bool(
+            payload.get("modelSelectionRestricted", False)
+        ),
+        "upstream_model_count": len(raw_models),
+        "rejected_model_count": len(rejected_models),
+        "rejected_models": rejected_models,
         "models": models,
         "restricted_models": sorted(restricted),
     }
@@ -208,8 +251,10 @@ class CatalogEnvelope:
     age_seconds: float
     stale: bool
     upstream_error: str = ""
+    stale_policy_exceeded: bool = False
 
     def receipt(self) -> dict[str, Any]:
+        fallback = self.source in {"last_known_good", "static_fallback"}
         return {
             "catalog_source": self.source,
             "catalog_snapshot_sha256": _clean_text(
@@ -219,12 +264,25 @@ class CatalogEnvelope:
             "catalog_expires_at": self.expires_at,
             "catalog_age_seconds": round(max(0.0, self.age_seconds), 3),
             "catalog_stale": self.stale,
+            "catalog_stale_policy_exceeded": self.stale_policy_exceeded,
+            "catalog_fallback": fallback,
+            "catalog_fallback_reason": self.upstream_error if fallback else "",
             "catalog_upstream_error": self.upstream_error,
+            "catalog_model_count": len(self.snapshot.get("models") or []),
+            "catalog_rejected_model_count": int(
+                self.snapshot.get("rejected_model_count") or 0
+            ),
+            "catalog_rejected_models": list(
+                self.snapshot.get("rejected_models") or []
+            ),
+            "catalog_model_selection_restricted": bool(
+                self.snapshot.get("model_selection_restricted", False)
+            ),
         }
 
 
 class ModelCatalogService:
-    """Workspace-global authoritative picker cache with bounded LKG fallback."""
+    """Workspace-global authoritative picker cache with last-known-good fallback."""
 
     def __init__(
         self,
@@ -291,6 +349,7 @@ class ModelCatalogService:
         *,
         source: str,
         upstream_error: str = "",
+        stale_policy_exceeded: bool = False,
     ) -> CatalogEnvelope:
         now = self.clock()
         fetched_at = float(cached.get("fetched_at") or 0.0)
@@ -306,6 +365,7 @@ class ModelCatalogService:
             age_seconds=max(0.0, now - fetched_at),
             stale=expires_at <= now,
             upstream_error=upstream_error,
+            stale_policy_exceeded=stale_policy_exceeded,
         )
 
     def get(
@@ -383,10 +443,14 @@ class ModelCatalogService:
                 source="last_known_good",
                 upstream_error=upstream_error,
             )
-            if envelope.age_seconds <= self._max_stale_seconds():
-                return envelope
-            raise ModelCatalogUnavailable(
-                "Last-known-good model catalog exceeded the configured maximum age."
+            stale_policy_exceeded = (
+                envelope.age_seconds > self._max_stale_seconds()
+            )
+            return self._from_cache(
+                stale,
+                source="last_known_good",
+                upstream_error=upstream_error,
+                stale_policy_exceeded=stale_policy_exceeded,
             )
         if allow_static_fallback:
             return CatalogEnvelope(

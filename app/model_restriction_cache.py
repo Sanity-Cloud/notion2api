@@ -131,6 +131,7 @@ class ModelRestrictionCache:
         ttl_seconds: float = 300.0,
     ) -> bool:
         now = self._clock()
+        serialized_payload = json.dumps(payload, sort_keys=True, default=str)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             lease = conn.execute(
@@ -156,7 +157,7 @@ class ModelRestrictionCache:
                 """,
                 (
                     str(cache_key),
-                    json.dumps(payload, sort_keys=True, default=str),
+                    serialized_payload,
                     now,
                     now + max(1.0, float(ttl_seconds)),
                     now,

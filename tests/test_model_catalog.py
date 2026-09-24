@@ -149,12 +149,26 @@ def test_parse_picker_catalog_preserves_effort_routes_ratings_and_restrictions()
     assert len(catalog["snapshot_sha256"]) == 64
 
 
-def test_parse_picker_catalog_rejects_invalid_default_effort() -> None:
+def test_parse_picker_catalog_isolates_invalid_model_entries() -> None:
     payload = _picker_payload()
     payload["models"][0]["modelConfiguration"]["defaultReasoningEffort"] = "ultra"
+    payload["models"].append("not-a-model-record")
+    payload["models"].append(dict(payload["models"][1]))
 
-    with pytest.raises(ModelCatalogValidationError, match="default effort"):
-        parse_picker_catalog(payload)
+    catalog = parse_picker_catalog(payload)
+
+    assert [model["canonical_id"] for model in catalog["models"]] == [
+        "olive-jellyroll",
+        "acai-budino-high",
+    ]
+    assert catalog["upstream_model_count"] == 5
+    assert catalog["rejected_model_count"] == 3
+    assert catalog["rejected_models"][0]["canonical_id"] == "orchid-muffin"
+    assert "default effort" in catalog["rejected_models"][0]["error"]
+    assert catalog["rejected_models"][1]["canonical_id"] == ""
+    assert "must be an object" in catalog["rejected_models"][1]["error"]
+    assert catalog["rejected_models"][2]["canonical_id"] == "olive-jellyroll"
+    assert "Duplicate" in catalog["rejected_models"][2]["error"]
 
 
 def test_authoritative_catalog_cache_is_global_to_workspace(tmp_path: Path) -> None:
@@ -173,7 +187,7 @@ def test_authoritative_catalog_cache_is_global_to_workspace(tmp_path: Path) -> N
     assert live.snapshot["snapshot_sha256"] == cached.snapshot["snapshot_sha256"]
 
 
-def test_catalog_uses_bounded_last_known_good_then_fails_closed(
+def test_catalog_uses_last_known_good_after_stale_policy_threshold(
     monkeypatch, tmp_path: Path
 ) -> None:
     now = [100.0]
@@ -183,18 +197,107 @@ def test_catalog_uses_bounded_last_known_good_then_fails_closed(
     service = ModelCatalogService(cache, clock=lambda: now[0])
     client = PickerClient()
 
-    assert service.get(client).source == "authoritative_live"
+    live = service.get(client)
+    original_sha = live.snapshot["snapshot_sha256"]
+    assert live.source == "authoritative_live"
+
     now[0] = 106.0
     client.error = RuntimeError("upstream unavailable")
     stale = service.get(client)
     assert stale.source == "last_known_good"
     assert stale.stale is True
+    assert stale.stale_policy_exceeded is False
     assert stale.age_seconds == 6.0
+    assert stale.snapshot["snapshot_sha256"] == original_sha
     assert "upstream unavailable" in stale.upstream_error
 
     now[0] = 121.0
-    with pytest.raises(ModelCatalogUnavailable, match="maximum age"):
-        service.get(client)
+    expired = service.get(client)
+    assert expired.source == "last_known_good"
+    assert expired.stale is True
+    assert expired.stale_policy_exceeded is True
+    assert expired.snapshot["snapshot_sha256"] == original_sha
+    receipt = expired.receipt()
+    assert receipt["catalog_fallback"] is True
+    assert receipt["catalog_stale_policy_exceeded"] is True
+    assert "upstream unavailable" in receipt["catalog_fallback_reason"]
+
+
+def test_empty_restricted_refresh_preserves_last_known_good(
+    monkeypatch, tmp_path: Path
+) -> None:
+    now = [100.0]
+    monkeypatch.setenv("NOTION_MODEL_CATALOG_CACHE_TTL_SECONDS", "1")
+    monkeypatch.setenv("NOTION_MODEL_CATALOG_MAX_STALE_SECONDS", "2")
+    cache = ModelRestrictionCache(tmp_path / "restricted-empty.sqlite3", clock=lambda: now[0])
+    service = ModelCatalogService(cache, clock=lambda: now[0])
+    client = PickerClient()
+
+    live = service.get(client)
+    original_sha = live.snapshot["snapshot_sha256"]
+
+    now[0] = 105.0
+    client.payload = {
+        "modelSelectionRestricted": True,
+        "models": [],
+        "restrictedAccessModelsInPickerConfig": [],
+        "restrictedGeoPolicyApplied": False,
+    }
+    fallback = service.get(client)
+
+    assert fallback.source == "last_known_good"
+    assert fallback.stale is True
+    assert fallback.stale_policy_exceeded is True
+    assert fallback.snapshot["snapshot_sha256"] == original_sha
+    assert "no usable models" in fallback.upstream_error
+    assert "restricted" in fallback.upstream_error.lower()
+
+
+def test_catalog_refresh_atomically_replaces_removed_and_new_models(
+    monkeypatch, tmp_path: Path
+) -> None:
+    now = [100.0]
+    monkeypatch.setenv("NOTION_MODEL_CATALOG_CACHE_TTL_SECONDS", "1")
+    cache = ModelRestrictionCache(tmp_path / "refresh.sqlite3", clock=lambda: now[0])
+    service = ModelCatalogService(cache, clock=lambda: now[0])
+    client = PickerClient()
+
+    first = service.get(client)
+    assert {model["canonical_id"] for model in first.snapshot["models"]} == {
+        "orchid-muffin",
+        "olive-jellyroll",
+        "acai-budino-high",
+    }
+
+    updated = _picker_payload()
+    terra = updated["models"][0]
+    updated["models"] = [
+        terra,
+        {
+            "model": "future-reasoner-v1",
+            "modelMessage": "Future Reasoner 1",
+            "modelFamily": "future-family",
+            "modelProvider": "future-provider",
+            "modelConfiguration": {
+                "supportedReasoningEfforts": ["low", "high"],
+                "defaultReasoningEffort": "low",
+            },
+            "workflow": {"finalModelName": "future-reasoner-v1", "beta": True},
+        },
+    ]
+    now[0] = 102.0
+    client.payload = updated
+
+    refreshed = service.get(client)
+    assert refreshed.source == "authoritative_live"
+    assert {model["canonical_id"] for model in refreshed.snapshot["models"]} == {
+        "orchid-muffin",
+        "future-reasoner-v1",
+    }
+    persisted = cache.get(service.cache_key(client.space_id))
+    assert persisted is not None
+    assert persisted["payload"]["snapshot_sha256"] == refreshed.snapshot["snapshot_sha256"]
+    assert persisted["payload"]["snapshot_sha256"] != first.snapshot["snapshot_sha256"]
 
 
 def test_catalog_without_live_or_lkg_fails_closed(tmp_path: Path) -> None:
@@ -319,6 +422,95 @@ def test_models_endpoint_exposes_catalog_efforts_ratings_routes_and_restrictions
     assert terra["routes"]["workflow"]["supported"] is True
     assert fable["is_disabled"] is True
     assert fable["disabled_reason"] == "business_or_enterprise_plan_required"
+    aliases = response["catalog"]["alias_reconciliation"]
+    assert aliases["active_alias_count"] > 0
+    assert "terra" not in aliases["unavailable_aliases"]
+
+
+def test_models_endpoint_uses_explicit_static_fallback_for_empty_live_catalog(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        model_registry,
+        "_SHARED_RESTRICTION_CACHE",
+        ModelRestrictionCache(tmp_path / "models-static-fallback.sqlite3"),
+    )
+    client = PickerClient(
+        {
+            "modelSelectionRestricted": True,
+            "models": [],
+            "restrictedAccessModelsInPickerConfig": [],
+            "restrictedGeoPolicyApplied": False,
+        }
+    )
+
+    class Pool:
+        def get_client(self, *, wait_if_cooling: bool):
+            assert wait_if_cooling is False
+            return client
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(account_pool=Pool()))
+    )
+    response = asyncio.run(list_models(request))
+
+    assert response["object"] == "list"
+    assert response["data"]
+    assert response["catalog"]["catalog_source"] == "static_fallback"
+    assert response["catalog"]["catalog_fallback"] is True
+    assert response["catalog"]["catalog_stale"] is True
+    assert "no usable models" in response["catalog"]["catalog_fallback_reason"]
+
+
+def test_removed_alias_is_not_silently_substituted(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("NOTION_MODEL_CATALOG_ALLOW_STATIC_SELECTION", raising=False)
+    monkeypatch.setattr(
+        model_registry,
+        "_SHARED_RESTRICTION_CACHE",
+        ModelRestrictionCache(tmp_path / "removed-alias.sqlite3"),
+    )
+    payload = _picker_payload()
+    payload["models"] = [
+        model
+        for model in payload["models"]
+        if model["model"] != "olive-jellyroll"
+    ]
+    client = PickerClient(payload)
+
+    terra = model_registry.resolve_model_selection(client, "terra", "high")
+    assert terra["canonical_id"] == "orchid-muffin"
+
+    envelope = model_registry.get_model_catalog_for_client(client)
+    alias_state = envelope.snapshot["alias_reconciliation"]
+    assert "luna" not in alias_state["active_aliases"]
+    assert alias_state["unavailable_aliases"]["luna"] == "olive-jellyroll"
+
+    with pytest.raises(ModelSelectionError) as error:
+        model_registry.resolve_model_selection(client, "luna", "high")
+    assert error.value.code == "model_not_available"
+
+
+def test_static_selection_fallback_requires_explicit_enablement(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        model_registry,
+        "_SHARED_RESTRICTION_CACHE",
+        ModelRestrictionCache(tmp_path / "explicit-static-selection.sqlite3"),
+    )
+    client = PickerClient()
+    client.error = RuntimeError("offline")
+
+    monkeypatch.delenv("NOTION_MODEL_CATALOG_ALLOW_STATIC_SELECTION", raising=False)
+    with pytest.raises(ModelCatalogUnavailable):
+        model_registry.resolve_model_selection(client, "terra")
+
+    monkeypatch.setenv("NOTION_MODEL_CATALOG_ALLOW_STATIC_SELECTION", "true")
+    selected = model_registry.resolve_model_selection(client, "terra")
+    assert selected["canonical_id"] == "orchid-muffin"
+    assert selected["catalog_source"] == "static_fallback"
 
 
 def test_live_catalog_accepts_new_canonical_route_without_terra_fallback(

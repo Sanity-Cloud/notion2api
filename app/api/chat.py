@@ -32,8 +32,6 @@ from app.diagnostics import emit_diagnostic_event
 from app.model_catalog import ModelCatalogUnavailable, ModelSelectionError
 from app.model_registry import (
     get_model_route_resolution,
-    is_supported_model,
-    list_available_models,
     resolve_model_selection,
 )
 from app.notion_client import NotionUpstreamError

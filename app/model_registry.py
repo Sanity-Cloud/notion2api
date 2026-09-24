@@ -789,6 +789,22 @@ def _upstream_host_for_route(canonical_id: str) -> str:
 
 
 def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
+    catalog_ids = {
+        str(raw.get("canonical_id") or "").strip()
+        for raw in envelope.snapshot.get("models", [])
+        if isinstance(raw, dict) and str(raw.get("canonical_id") or "").strip()
+    }
+    active_aliases = {
+        _normalize_registry_model_name(alias): target
+        for alias, target in MODEL_MAP.items()
+        if target in catalog_ids and _normalize_registry_model_name(alias)
+    }
+    unavailable_aliases = {
+        _normalize_registry_model_name(alias): target
+        for alias, target in MODEL_MAP.items()
+        if target not in catalog_ids and _normalize_registry_model_name(alias)
+    }
+
     enriched_models: list[dict[str, object]] = []
     for raw in envelope.snapshot.get("models", []):
         if not isinstance(raw, dict):
@@ -799,7 +815,7 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
         public_name = NOTION_MODEL_REVERSE_MAP.get(canonical_id, canonical_id)
         aliases = [
             alias
-            for alias, target in MODEL_MAP.items()
+            for alias, target in active_aliases.items()
             if target == canonical_id and alias != canonical_id
         ]
         enriched_models.append(
@@ -816,6 +832,13 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
         )
     snapshot = dict(envelope.snapshot)
     snapshot["models"] = enriched_models
+    snapshot["alias_reconciliation"] = {
+        "configured_alias_count": len(MODEL_MAP),
+        "active_alias_count": len(active_aliases),
+        "unavailable_alias_count": len(unavailable_aliases),
+        "active_aliases": active_aliases,
+        "unavailable_aliases": unavailable_aliases,
+    }
     return CatalogEnvelope(
         snapshot=snapshot,
         source=envelope.source,
@@ -824,6 +847,7 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
         age_seconds=envelope.age_seconds,
         stale=envelope.stale,
         upstream_error=envelope.upstream_error,
+        stale_policy_exceeded=envelope.stale_policy_exceeded,
     )
 
 
@@ -845,7 +869,23 @@ def list_model_metadata_for_request(request) -> tuple[list[dict[str, object]], d
     pool = request.app.state.account_pool
     client = pool.get_client(wait_if_cooling=False)
     envelope = get_model_catalog_for_client(client, allow_static_fallback=True)
-    return list(envelope.snapshot.get("models", [])), envelope.receipt()
+    receipt = envelope.receipt()
+    alias_state = envelope.snapshot.get("alias_reconciliation")
+    if isinstance(alias_state, dict):
+        unavailable = alias_state.get("unavailable_aliases")
+        receipt["alias_reconciliation"] = {
+            "configured_alias_count": int(
+                alias_state.get("configured_alias_count") or 0
+            ),
+            "active_alias_count": int(alias_state.get("active_alias_count") or 0),
+            "unavailable_alias_count": int(
+                alias_state.get("unavailable_alias_count") or 0
+            ),
+            "unavailable_aliases": sorted(
+                unavailable if isinstance(unavailable, dict) else {}
+            ),
+        }
+    return list(envelope.snapshot.get("models", [])), receipt
 
 
 def _catalog_model_for_request(
@@ -854,14 +894,30 @@ def _catalog_model_for_request(
     requested_key = _normalize_registry_model_name(requested_model)
     if not requested_key:
         return None
-    mapped_id = MODEL_MAP.get(requested_key)
     models = [
         model
         for model in snapshot.get("models", [])
         if isinstance(model, dict)
     ]
+    catalog_ids = {
+        str(model.get("canonical_id") or "").strip()
+        for model in models
+        if str(model.get("canonical_id") or "").strip()
+    }
+    alias_state = snapshot.get("alias_reconciliation")
+    active_aliases = (
+        alias_state.get("active_aliases")
+        if isinstance(alias_state, dict)
+        and isinstance(alias_state.get("active_aliases"), dict)
+        else {
+            alias: target
+            for alias, target in MODEL_MAP.items()
+            if target in catalog_ids
+        }
+    )
+    mapped_id = active_aliases.get(requested_key)
     if mapped_id:
-        return model_by_id(snapshot, mapped_id)
+        return model_by_id(snapshot, str(mapped_id))
     for model in models:
         candidates = {
             _normalize_registry_model_name(str(model.get("canonical_id") or "")),
