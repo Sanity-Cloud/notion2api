@@ -916,7 +916,10 @@ class Notion2APIClient:
         self.timeout = timeout
 
     def _headers(self, request_id: str | None = None) -> dict[str, str]:
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "X-Client-Type": "mcp",
+        }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         if request_id:

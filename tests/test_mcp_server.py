@@ -25,6 +25,17 @@ def test_extract_responses_text_from_output_text():
     assert _extract_responses_text(data) == "hello responses"
 
 
+def test_mcp_http_client_identifies_mcp_transport():
+    headers = mcp_server.Notion2APIClient(
+        "http://test",
+        api_key="test-key",
+    )._headers("request-1")
+
+    assert headers["X-Client-Type"] == "mcp"
+    assert headers["Authorization"] == "Bearer test-key"
+    assert headers["X-Request-ID"] == "request-1"
+
+
 def test_create_server_registers_tools():
     server = create_server(
         base_url="http://127.0.0.1:8000",

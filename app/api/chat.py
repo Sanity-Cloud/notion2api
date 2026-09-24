@@ -1198,7 +1198,7 @@ def _emit_visible_stream_correction(
             )
         return assistant_started, sanitized_text, chunks
 
-    if client_type == "web":
+    if client_type in {"web", "mcp"}:
         chunks.append(
             _build_local_ui_chunk(
                 response_id,

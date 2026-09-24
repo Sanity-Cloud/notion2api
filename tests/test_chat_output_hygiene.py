@@ -143,6 +143,42 @@ def test_stream_strips_complete_internal_notion_citation(factory):
     assert "notion-725" not in content
 
 
+def test_mcp_stream_emits_content_replace_for_cross_chunk_mention_cleanup():
+    source = _iter_items(
+        {"type": "content", "text": '- <mention-database url="{{notion-33'},
+        {"type": "content", "text": "Tasks Tracker"},
+        {"type": "content", "text": "</mention-database>"},
+    )
+    first_item = next(source)
+
+    payloads = _parse_sse_chunks(
+        list(
+            _create_standard_stream_generator(
+                "chatcmpl-test",
+                "test-model",
+                first_item,
+                source,
+                client_type="mcp",
+            )
+        )
+    )
+    replacements = [
+        payload
+        for payload in payloads
+        if isinstance(payload, dict) and payload.get("type") == "content_replace"
+    ]
+
+    assert len(replacements) == 1
+    assert replacements[0]["id"] == "chatcmpl-test"
+    assert replacements[0]["model"] == "test-model"
+    assert replacements[0]["type"] == "content_replace"
+    assert replacements[0]["content"] == "- Tasks Tracker"
+    assert replacements[0]["reason"] == "output_hygiene"
+    assert replacements[0]["choices"] == [
+        {"index": 0, "delta": {}, "finish_reason": None}
+    ]
+
+
 def test_standard_stream_keeps_thinking_out_of_content_delta():
     source = _iter_items(
         {"type": "thinking", "text": "Private reasoning."},
