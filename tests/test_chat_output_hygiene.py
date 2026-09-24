@@ -245,6 +245,33 @@ def test_stream_generators_preserve_finish_reason(factory):
 
 
 
+def test_internal_notion_mentions_project_to_labels_without_quarantine():
+    raw = (
+        '- <mention-database url="{{notion-33Tasks Tracker</mention-database>\n'
+        '- <mention-page url="{{notion-44Migration Manifest</mention-page>\n'
+        '- <mention-page url="{{notion-45}}">Complete Mention</mention-page>'
+    )
+
+    sanitized, _decision, hygiene = _finalize_visible_reply(raw, "", "")
+
+    assert sanitized == "- Tasks Tracker\n- Migration Manifest\n- Complete Mention"
+    assert hygiene["internal_notion_mentions_removed"] is True
+    assert hygiene["visible_contamination_detected"] is False
+    assert hygiene["output_integrity"]["quarantine_required"] is False
+
+
+def test_unmatched_internal_notion_mention_still_quarantines():
+    raw = '- <mention-database url="{{notion-33Tasks Tracker'
+
+    sanitized, _decision, hygiene = _finalize_visible_reply(raw, "", "")
+
+    assert sanitized == raw
+    assert hygiene["internal_notion_mentions_removed"] is False
+    assert hygiene["visible_contamination_detected"] is True
+    assert hygiene["output_integrity"]["quarantine_required"] is True
+    assert "malformed_notion_citation" in hygiene["output_integrity"]["reasons"]
+
+
 def test_clean_content_replacement_beats_contaminated_partial_stream():
     streamed = (
         "Tasks Tracker (database)\n"

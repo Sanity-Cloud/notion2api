@@ -33,6 +33,16 @@ CORRUPT_CITATION_OR_HEADING_RE = re.compile(
     r"(?is)(\[\^\{\{[^\]\n]*(?:notion-#{1,6}|#{1,6}\s)|notion-#{1,6}|\[\^\{\{notion-)"
 )
 INTERNAL_NOTION_CITATION_RE = re.compile(r"\[\^\{\{notion-\d+\}\}\]", re.IGNORECASE)
+INTERNAL_NOTION_MENTION_RE = re.compile(
+    r'<mention-(?P<kind>page|database)\b[^>]*?\burl=["\']\{\{notion-\d+\}\}["\'][^>]*>'
+    r'(?P<label>.*?)</mention-(?P=kind)>',
+    re.IGNORECASE | re.DOTALL,
+)
+MALFORMED_INTERNAL_NOTION_MENTION_RE = re.compile(
+    r'<mention-(?P<kind>page|database)\b[^>]*?\burl=["\']\{\{notion-\d+'
+    r'(?P<label>[^<]*?)</mention-(?P=kind)>',
+    re.IGNORECASE | re.DOTALL,
+)
 MODEL_NAME_SPLICE_RE = re.compile(
     r"(?i)(?:\*{2,})?(?:"
     r"grok(?:\s+build\s+0\.1|\s+4\.3)?|"
@@ -162,6 +172,25 @@ def strip_internal_notion_citations(text: Any) -> str:
     return INTERNAL_NOTION_CITATION_RE.sub("", str(text or ""))
 
 
+def strip_internal_notion_mentions(text: Any) -> str:
+    """Project recognized internal Notion mention wrappers to visible labels.
+
+    Research output can expose structured page/database mentions as either a
+    complete tag or a transport-damaged opening tag where the numeric internal
+    placeholder runs directly into the visible label. Both forms still carry a
+    matching closing mention tag, so the label is recoverable without guessing.
+    Unstructured or unmatched ``{{notion-...`` fragments are intentionally left
+    untouched for the integrity layer to quarantine.
+    """
+
+    cleaned = str(text or "")
+    cleaned = INTERNAL_NOTION_MENTION_RE.sub(lambda match: match.group("label"), cleaned)
+    cleaned = MALFORMED_INTERNAL_NOTION_MENTION_RE.sub(
+        lambda match: match.group("label"), cleaned
+    )
+    return cleaned
+
+
 def strip_thinking_blocks_from_chunk(text: Any) -> str:
     """Remove hidden-reasoning markup from one streamed chunk.
 
@@ -210,6 +239,7 @@ def prepare_visible_stream_chunk(previous: str, raw_chunk: Any) -> str:
     if not chunk:
         return ""
     chunk = strip_internal_notion_citations(chunk)
+    chunk = strip_internal_notion_mentions(chunk)
     if not chunk:
         return ""
     if needs_visible_stream_boundary_space(previous, chunk):
@@ -263,6 +293,7 @@ def detect_visible_output_contamination(text: Any) -> bool:
 
     cleaned = strip_thinking_blocks(text)
     cleaned = strip_internal_notion_citations(cleaned)
+    cleaned = strip_internal_notion_mentions(cleaned)
     if not cleaned:
         return False
     legacy_contamination = bool(
@@ -289,6 +320,7 @@ def clean_visible_output(text: Any) -> str:
 
     cleaned = strip_thinking_blocks(text)
     cleaned = strip_internal_notion_citations(cleaned)
+    cleaned = strip_internal_notion_mentions(cleaned)
     cleaned = strip_model_name_splices(cleaned)
     cleaned = repair_missing_inter_word_spaces(cleaned)
     cleaned = LEADING_PARTIAL_TAG_RE.sub("", cleaned).strip()
@@ -310,8 +342,10 @@ def build_hygiene_metadata(raw_text: Any, cleaned_text: Any) -> Dict[str, bool]:
     cleaned = str(cleaned_text or "")
     stripped = strip_thinking_blocks(raw)
     stripped_citations = strip_internal_notion_citations(stripped)
+    stripped_mentions = strip_internal_notion_mentions(stripped_citations)
     hidden_thinking_removed = bool(raw.strip()) and stripped != raw.strip()
     internal_notion_citations_removed = stripped_citations != stripped
+    internal_notion_mentions_removed = stripped_mentions != stripped_citations
     contamination = (
         detect_visible_output_contamination(raw)
         or detect_visible_output_contamination(cleaned)
@@ -319,6 +353,7 @@ def build_hygiene_metadata(raw_text: Any, cleaned_text: Any) -> Dict[str, bool]:
     return {
         "hidden_thinking_removed": hidden_thinking_removed,
         "internal_notion_citations_removed": internal_notion_citations_removed,
+        "internal_notion_mentions_removed": internal_notion_mentions_removed,
         "visible_contamination_detected": contamination,
         "retry_recommended": contamination,
     }
