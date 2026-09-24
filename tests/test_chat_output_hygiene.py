@@ -118,6 +118,31 @@ def test_lite_stream_strips_redacted_thinking_from_visible_content():
     assert "<think>" not in content
 
 
+@pytest.mark.parametrize(
+    "factory",
+    [_create_lite_stream_generator, _create_standard_stream_generator],
+)
+def test_stream_strips_complete_internal_notion_citation(factory):
+    source = _iter_items(
+        {"type": "content", "text": "Evidence[^{{notion-725}}] remains visible."}
+    )
+    first_item = next(source)
+    kwargs = {}
+    if factory is _create_standard_stream_generator:
+        kwargs["client_type"] = "api"
+
+    payloads = _parse_sse_chunks(
+        list(factory("chatcmpl-test", "test-model", first_item, source, **kwargs))
+    )
+    content = "".join(
+        payload["choices"][0]["delta"].get("content", "")
+        for payload in payloads
+        if isinstance(payload, dict) and payload.get("choices")
+    )
+    assert content == "Evidence remains visible."
+    assert "notion-725" not in content
+
+
 def test_standard_stream_keeps_thinking_out_of_content_delta():
     source = _iter_items(
         {"type": "thinking", "text": "Private reasoning."},
@@ -160,6 +185,35 @@ def test_finalize_visible_reply_surfaces_contamination_metadata():
     assert sanitized
     assert hygiene["visible_contamination_detected"] is True
     assert hygiene["retry_recommended"] is True
+
+
+def test_complete_internal_notion_citation_is_stripped_without_quarantine():
+    raw = (
+        "The architecture is documented.[^{{notion-725}}] "
+        "A resolvable source remains.[^https://www.notion.so/example-page]"
+    )
+
+    sanitized, _decision, hygiene = _finalize_visible_reply(raw, "", "")
+
+    assert "[^{{notion-725}}]" not in sanitized
+    assert "[^https://www.notion.so/example-page]" in sanitized
+    assert hygiene["internal_notion_citations_removed"] is True
+    assert hygiene["visible_contamination_detected"] is False
+    assert hygiene["retry_recommended"] is False
+    assert hygiene["output_integrity"]["status"] == "validated"
+    assert hygiene["output_integrity"]["quarantine_required"] is False
+
+
+def test_incomplete_internal_notion_citation_still_quarantines():
+    raw = "The architecture is documented.[^{{notion-725"
+
+    sanitized, _decision, hygiene = _finalize_visible_reply(raw, "", "")
+
+    assert sanitized == raw
+    assert hygiene["internal_notion_citations_removed"] is False
+    assert hygiene["visible_contamination_detected"] is True
+    assert hygiene["output_integrity"]["quarantine_required"] is True
+    assert "malformed_notion_citation" in hygiene["output_integrity"]["reasons"]
 
 
 def test_build_hygiene_metadata_event_omits_clean_output():

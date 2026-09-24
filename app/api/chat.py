@@ -972,7 +972,7 @@ def _finalize_visible_reply(
         else ()
     )
     hygiene["output_integrity"] = assess_output_integrity(
-        raw_reply,
+        sanitized,
         additional_reasons=additional_reasons,
     )
     return sanitized, decision, hygiene

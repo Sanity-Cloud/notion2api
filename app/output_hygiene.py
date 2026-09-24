@@ -32,6 +32,7 @@ VISIBLE_REASONING_TRIM_TARGET_RE = re.compile(
 CORRUPT_CITATION_OR_HEADING_RE = re.compile(
     r"(?is)(\[\^\{\{[^\]\n]*(?:notion-#{1,6}|#{1,6}\s)|notion-#{1,6}|\[\^\{\{notion-)"
 )
+INTERNAL_NOTION_CITATION_RE = re.compile(r"\[\^\{\{notion-\d+\}\}\]", re.IGNORECASE)
 MODEL_NAME_SPLICE_RE = re.compile(
     r"(?i)(?:\*{2,})?(?:"
     r"grok(?:\s+build\s+0\.1|\s+4\.3)?|"
@@ -149,6 +150,18 @@ def strip_thinking_blocks(text: Any) -> str:
     return cleaned.strip()
 
 
+def strip_internal_notion_citations(text: Any) -> str:
+    """Remove complete internal Notion citation placeholders from visible prose.
+
+    Notion research can emit markers such as ``[^{{notion-725}}]`` without a
+    client-resolvable citation map. Complete numeric placeholders are safe to
+    remove; malformed/incomplete markers remain visible so integrity validation
+    can quarantine them.
+    """
+
+    return INTERNAL_NOTION_CITATION_RE.sub("", str(text or ""))
+
+
 def strip_thinking_blocks_from_chunk(text: Any) -> str:
     """Remove hidden-reasoning markup from one streamed chunk.
 
@@ -194,6 +207,9 @@ def prepare_visible_stream_chunk(previous: str, raw_chunk: Any) -> str:
         chunk = strip_thinking_blocks(raw)
     else:
         chunk = strip_thinking_blocks_from_chunk(raw)
+    if not chunk:
+        return ""
+    chunk = strip_internal_notion_citations(chunk)
     if not chunk:
         return ""
     if needs_visible_stream_boundary_space(previous, chunk):
@@ -246,6 +262,7 @@ def detect_visible_output_contamination(text: Any) -> bool:
     """Detect visible reasoning leaks, token corruption, or integrity amplification."""
 
     cleaned = strip_thinking_blocks(text)
+    cleaned = strip_internal_notion_citations(cleaned)
     if not cleaned:
         return False
     legacy_contamination = bool(
@@ -271,6 +288,7 @@ def clean_visible_output(text: Any) -> str:
     """Clean visible output without changing substantive answer content."""
 
     cleaned = strip_thinking_blocks(text)
+    cleaned = strip_internal_notion_citations(cleaned)
     cleaned = strip_model_name_splices(cleaned)
     cleaned = repair_missing_inter_word_spaces(cleaned)
     cleaned = LEADING_PARTIAL_TAG_RE.sub("", cleaned).strip()
@@ -291,15 +309,16 @@ def build_hygiene_metadata(raw_text: Any, cleaned_text: Any) -> Dict[str, bool]:
     raw = str(raw_text or "")
     cleaned = str(cleaned_text or "")
     stripped = strip_thinking_blocks(raw)
-    hidden_thinking_removed = bool(raw.strip()) and (
-        stripped != raw.strip() or cleaned != raw.strip()
-    )
+    stripped_citations = strip_internal_notion_citations(stripped)
+    hidden_thinking_removed = bool(raw.strip()) and stripped != raw.strip()
+    internal_notion_citations_removed = stripped_citations != stripped
     contamination = (
         detect_visible_output_contamination(raw)
         or detect_visible_output_contamination(cleaned)
     )
     return {
         "hidden_thinking_removed": hidden_thinking_removed,
+        "internal_notion_citations_removed": internal_notion_citations_removed,
         "visible_contamination_detected": contamination,
         "retry_recommended": contamination,
     }
