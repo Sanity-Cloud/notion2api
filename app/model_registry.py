@@ -55,6 +55,8 @@ MODEL_MAP: dict[str, str] = {
     "fable5-high": "acai-budino-high",
 
     # OpenAI
+    "gpt-6-astra": "orlando-quinn",
+    "orlando-quinn": "orlando-quinn",
     "gpt-5.6-sol": "orange-mousse",
     "gpt-5.6sol": "orange-mousse",
     "sol": "orange-mousse",
@@ -152,6 +154,7 @@ NOTION_MODEL_REVERSE_MAP: dict[str, str] = {
     "acai-budino-high": "claude-fable5",
 
     # OpenAI
+    "orlando-quinn": "gpt-6-astra",
     "orange-mousse": "gpt-5.6-sol",
     "orchid-muffin": "gpt-5.6-terra",
     "olive-jellyroll": "gpt-5.6-luna",
