@@ -1,5 +1,8 @@
 """Regression tests for targeted upstream Notion HTTP and model parity."""
 
+# Intentional: exercise private header-construction methods as protocol contracts.
+# pylint: disable=protected-access
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +24,7 @@ def _client() -> NotionOpusAPI:
 
 
 def test_endpoint_defaults_preserve_existing_host_split(monkeypatch):
+    """Unconfigured clients retain previously validated host assignments."""
     monkeypatch.delenv("NOTION_INFERENCE_BASE_URL", raising=False)
     monkeypatch.delenv("NOTION_API_BASE_URL", raising=False)
     client = _client()
@@ -34,7 +38,8 @@ def test_endpoint_defaults_preserve_existing_host_split(monkeypatch):
     "https://app.notion.com/path",
     "https://mirror.example",
 ])
-def test_untrusted_or_invalid_notions_hosts_fail_closed(monkeypatch, url):
+def test_untrusted_or_invalid_notion_hosts_fail_closed(monkeypatch, url):
+    """An accidental mirror cannot receive authenticated session headers."""
     monkeypatch.delenv("NOTION_ALLOW_CUSTOM_HOSTS", raising=False)
     monkeypatch.setenv("NOTION_INFERENCE_BASE_URL", url)
     with pytest.raises(ValueError):
@@ -42,12 +47,14 @@ def test_untrusted_or_invalid_notions_hosts_fail_closed(monkeypatch, url):
 
 
 def test_explicit_custom_origin_requires_https_and_opt_in(monkeypatch):
+    """The operator must explicitly authorize a non-Notion HTTPS origin."""
     monkeypatch.setenv("NOTION_ALLOW_CUSTOM_HOSTS", "true")
     monkeypatch.setenv("NOTION_INFERENCE_BASE_URL", "https://mirror.example")
     assert _client().url == "https://mirror.example/api/v3/runInferenceTranscript"
 
 
 def test_history_browser_profile_is_opt_in_and_has_single_accept(monkeypatch):
+    """History defaults are stable and opt-in headers allow an Accept override."""
     client = _client()
     monkeypatch.delenv("NOTION_HISTORY_BROWSER_HEADERS", raising=False)
     original = client._build_chat_history_headers()
@@ -67,6 +74,7 @@ def test_history_browser_profile_is_opt_in_and_has_single_accept(monkeypatch):
 
 
 def test_gpt6_alias_requires_an_available_catalog_model():
+    """A static alias never creates a model missing from the live catalog."""
     assert MODEL_MAP["gpt-6-astra"] == "orlando-quinn"
     assert get_notion_model("gpt-6-astra") == "orlando-quinn"
     record = {"canonical_id": "orlando-quinn", "display_name": "GPT-6 Astra"}
@@ -86,6 +94,7 @@ def test_gpt6_alias_requires_an_available_catalog_model():
     ([{"type": "content", "text": "partial"}], "missing_finishedAt"),
 ])
 def test_http_200_stream_errors_are_diagnostic_and_non_replayable(events, expected_reason):
+    """Incomplete inference responses are surfaced without automatic replay."""
     client = _client()
     response = MagicMock(status_code=200, text="")
     response.headers = {"Content-Type": "application/x-ndjson"}
