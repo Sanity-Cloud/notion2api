@@ -17,16 +17,11 @@ def configured_notion_origin(env_name: str, default: str) -> str:
     """Accept HTTPS origins only; require explicit opt-in for non-Notion hosts."""
     value = (os.getenv(env_name) or default).strip().rstrip("/")
     parsed = urlsplit(value)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError(f"{env_name} must be an HTTPS origin without path or credentials")
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError(f"{env_name} must use HTTPS and have a valid hostname")
+    if any((parsed.username is not None, parsed.password is not None,
+            parsed.path, parsed.query, parsed.fragment)):
+        raise ValueError(f"{env_name} must be an origin without path or credentials")
     allow_custom = (os.getenv("NOTION_ALLOW_CUSTOM_HOSTS") or "").lower() in {
         "1", "true", "yes", "on",
     }
