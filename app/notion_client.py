@@ -11,6 +11,7 @@ import requests
 import urllib3
 
 from app.logger import logger
+from app.notion_browser_headers import browser_request_headers, configured_notion_origin
 from app.attachments.notion_upload import NotionAttachmentUploader, NotionAttachmentUploadError
 from app.attachments.models import UploadedAttachment
 from app.model_registry import get_notion_model
@@ -304,9 +305,15 @@ class NotionOpusAPI:
             self.cookies = {}
         self.cookies["token_v2"] = self.token_v2
 
-        self.url = "https://www.notion.so/api/v3/runInferenceTranscript"
-        self.delete_url = "https://app.notion.com/api/v3/saveTransactions"
-        self.thread_title_url = "https://app.notion.com/api/v3/saveTransactionsFanout"
+        self.inference_base_url = configured_notion_origin(
+            "NOTION_INFERENCE_BASE_URL", "https://www.notion.so"
+        )
+        self.api_base_url = configured_notion_origin(
+            "NOTION_API_BASE_URL", "https://app.notion.com"
+        )
+        self.url = f"{self.inference_base_url}/api/v3/runInferenceTranscript"
+        self.delete_url = f"{self.api_base_url}/api/v3/saveTransactions"
+        self.thread_title_url = f"{self.api_base_url}/api/v3/saveTransactionsFanout"
         self.account_key = self.user_email or self.user_id or "unknown-account"
         self.request_idempotency_key = ""
         self.request_trace_id = ""
@@ -323,7 +330,7 @@ class NotionOpusAPI:
 
     def get_ai_model_picker_config(self) -> dict[str, Any]:
         """Fetch space AI model picker config from Notion v3 API."""
-        endpoint = "https://app.notion.com/api/v3/getAvailableModels"
+        endpoint = f"{self.api_base_url}/api/v3/getAvailableModels"
         payload = {"spaceId": self.space_id}
         resp = self._scraper.post(endpoint, headers=self._build_chat_history_headers(), json=payload, timeout=30)
         resp.raise_for_status()
@@ -512,17 +519,31 @@ class NotionOpusAPI:
         }
 
     def _build_chat_history_headers(self) -> dict[str, str]:
-        return {
+        """Use the original stable profile by default; opt into the new browser
+        profile only after the history endpoints have been smoke-tested.
+        """
+        headers = {
             "content-type": "application/json",
-            "accept": "application/json",
             "cookie": self._build_cookie_header(),
             "x-notion-active-user-header": self.user_id,
             "x-notion-space-id": self.space_id,
             "notion-client-version": NOTION_CLIENT_VERSION,
-            "origin": "https://www.notion.so",
-            "referer": "https://www.notion.so/ai",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
         }
+        if _env_flag("NOTION_HISTORY_BROWSER_HEADERS", False):
+            headers.update(
+                browser_request_headers(self.api_base_url, accept="application/json")
+            )
+        else:
+            headers.update({
+                "accept": "application/json",
+                "origin": "https://www.notion.so",
+                "referer": "https://www.notion.so/ai",
+                "user-agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+                ),
+            })
+        return headers
 
     def iter_continue_confirmed_tool_steps(
         self,
@@ -2163,24 +2184,17 @@ class NotionOpusAPI:
         # textcookie jar text Cloudflare challenge text ASCII text cookietext
         cookie_header = self._build_cookie_header()
 
-        # Mirror the current browser request fingerprint. Notion can return an
-        # empty inference stream when these browser-origin headers drift.
+        # Mirror browser-origin metadata for the inference request. Only the
+        # inference host is used here, so sec-fetch-site stays same-origin.
         headers = {
             "Content-Type": "application/json",
-            "Accept": "application/x-ndjson",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+            **browser_request_headers(
+                self.inference_base_url, accept="application/x-ndjson"
+            ),
             "x-notion-space-id": self.space_id,
             "x-notion-active-user-header": self.user_id,
             "notion-audit-log-platform": "web",
             "notion-client-version": NOTION_CLIENT_VERSION,
-            "origin": "https://www.notion.so",
-            "referer": "https://www.notion.so/chat",
-            "sec-ch-ua": '\"Chromium\";v=\"152\", \"Not?A_Brand\";v=\"24\", \"Google Chrome\";v=\"152\"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '\"Linux\"',
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-origin",
             "cookie": cookie_header,
         }
 
@@ -2294,6 +2308,10 @@ class NotionOpusAPI:
                     response_excerpt=excerpt,
                 )
 
+            # Retain only safe response metadata for diagnosing HTTP 200/empty body.
+            inference_status = response.status_code
+            inference_content_type = str(response.headers.get("Content-Type", ""))[:120]
+
             # The thread exists once inference is accepted. Apply the explicit
             # title before consuming a potentially long model stream so the UI
             # never exposes Notion's prompt-derived placeholder for minutes.
@@ -2386,19 +2404,38 @@ class NotionOpusAPI:
                     except Exception:
                         pass
 
+            if not emitted:
+                logger.warning(
+                    "Notion inference produced no stream events",
+                    extra={"request_info": {
+                        "event": "notion_inference_empty_stream",
+                        "http_status": inference_status,
+                        "content_type": inference_content_type,
+                    }},
+                )
+                raise NotionUpstreamError(
+                    "Notion upstream returned an empty inference stream.",
+                    status_code=502,
+                    # Notion may have processed the request before dropping
+                    # its body. Automatic replay risks duplicate inference.
+                    retriable=False,
+                    response_excerpt="empty_stream_after_http_200",
+                )
+
             if not stream_completed:
+                logger.warning(
+                    "Notion inference ended without completion metadata",
+                    extra={"request_info": {
+                        "event": "notion_inference_missing_completion",
+                        "http_status": inference_status,
+                        "content_type": inference_content_type,
+                    }},
+                )
                 raise NotionUpstreamError(
                     "Notion upstream stream ended before completion metadata.",
                     status_code=502,
-                    retriable=True,
+                    retriable=False,
                     response_excerpt="missing_finishedAt",
-                )
-
-            if not emitted:
-                raise NotionUpstreamError(
-                    "Notion upstream returned an empty stream.",
-                    status_code=502,
-                    retriable=True,
                 )
 
             if thread_persistence["delete_after_stream"]:
