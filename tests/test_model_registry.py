@@ -15,6 +15,7 @@ from app.model_registry import (
 
 def test_captured_notion_backend_mappings_are_registered():
     expected = {
+        "gpt-6-astra": "orlando-quinn",
         "gpt-5.6-sol": "orange-mousse",
         "gpt-5.6-terra": "orchid-muffin",
         "gpt-5.6-luna": "olive-jellyroll",
@@ -56,6 +57,8 @@ def test_captured_notion_backend_mappings_are_registered():
 
 
 def test_captured_display_names_are_registered():
+    assert get_display_name("gpt-6-astra") == "GPT-6 Astra"
+    assert get_display_name("orlando-quinn") == "GPT-6 Astra"
     assert get_display_name("gpt-5.6-sol") == "GPT-5.6 Sol"
     assert get_display_name("orange-mousse") == "GPT-5.6 Sol"
     assert get_display_name("gpt-5.6-terra") == "GPT-5.6 Terra"
@@ -84,8 +87,10 @@ def test_gemini_3_5_flash_no_longer_uses_markdown_chat_route():
 def test_available_models_expose_only_canonical_notion_ids():
     models = list_available_models()
 
-    assert len(models) == 28
+    assert len(models) == 29
     assert len(models) == len(set(models))
+    assert "orlando-quinn" in models
+    assert "gpt-6-astra" not in models
     assert "orange-mousse" in models
     assert "orchid-muffin" in models
     assert "olive-jellyroll" in models
