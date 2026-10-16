@@ -533,6 +533,8 @@ class NotionOpusAPI:
             headers.update(
                 browser_request_headers(self.api_base_url, accept="application/json")
             )
+            # Keep a single casing so callers can override the accept type.
+            headers["accept"] = headers.pop("Accept")
         else:
             headers.update({
                 "accept": "application/json",
@@ -2310,7 +2312,8 @@ class NotionOpusAPI:
 
             # Retain only safe response metadata for diagnosing HTTP 200/empty body.
             inference_status = response.status_code
-            inference_content_type = str(response.headers.get("Content-Type", ""))[:120]
+            response_headers = getattr(response, "headers", {})
+            inference_content_type = str(response_headers.get("Content-Type", ""))[:120]
 
             # The thread exists once inference is accepted. Apply the explicit
             # title before consuming a potentially long model stream so the UI
