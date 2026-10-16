@@ -200,6 +200,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "claude-fable5-high": "Fable 5",
     "claude-fable-5-high": "Fable 5",
     "fable5-high": "Fable 5",
+    "gpt-6-astra": "GPT-6 Astra",
     "gpt-5.6-sol": "GPT-5.6 Sol",
     "gpt-5.6-terra": "GPT-5.6 Terra",
     "gpt-5.6-luna": "GPT-5.6 Luna",
@@ -231,6 +232,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "glm-5.2": "GLM 5.2",
 
     # Backend Model IDs
+    "orlando-quinn": "GPT-6 Astra",
     "orange-mousse": "GPT-5.6 Sol",
     "orchid-muffin": "GPT-5.6 Terra",
     "olive-jellyroll": "GPT-5.6 Luna",
@@ -273,6 +275,7 @@ EXPOSED_MODEL_IDS: tuple[str, ...] = tuple(
 )
 
 MODEL_DISPLAY_GROUPS: dict[str, str] = {
+    "orlando-quinn": "intelligent",
     "orange-mousse": "intelligent",
     "orchid-muffin": "intelligent",
     "olive-jellyroll": "fast",
@@ -303,6 +306,7 @@ MODEL_DISPLAY_GROUPS: dict[str, str] = {
 }
 
 MODEL_CARD_ATTRIBUTES: dict[str, dict[str, int]] = {
+    "orlando-quinn": {"speed": 4, "intelligence": 4, "cost": 3},
     "orange-mousse": {"speed": 3, "intelligence": 5, "cost": 5},
     "orchid-muffin": {"speed": 4, "intelligence": 4, "cost": 4},
     "olive-jellyroll": {"speed": 5, "intelligence": 3, "cost": 2},
@@ -332,6 +336,7 @@ MODEL_CARD_ATTRIBUTES: dict[str, dict[str, int]] = {
 }
 
 MODEL_FAMILIES: dict[str, str] = {
+    "orlando-quinn": "openai",
     "almond-croissant-low": "anthropic",
     "angel-cake-high": "anthropic",
     "avocado-froyo-medium": "anthropic",
@@ -374,6 +379,7 @@ MODEL_ICONS: dict[str, str] = {
     "claude-haiku4.5": "✳️",
     "claude-fable5": "✳️",
     # OpenAI
+    "gpt-6-astra": "⚙",
     "gpt-5.6-sol": "⚙",
     "gpt-5.6-terra": "⚙",
     "gpt-5.6-luna": "⚙",
@@ -414,6 +420,7 @@ MODEL_ICONS: dict[str, str] = {
     "agave-flan": "✳️",
     "anthropic-haiku-4.5": "✳️",
     "acai-budino-high": "✳️",
+    "orlando-quinn": "⚙",
     "orange-mousse": "⚙",
     "orchid-muffin": "⚙",
     "olive-jellyroll": "⚙",
