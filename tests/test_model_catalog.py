@@ -11,6 +11,7 @@ from app.api.chat import _validate_request_model_selection
 from app.api.models import list_models
 from app.conversation import apply_notion_ai_options, build_lite_transcript
 from app.model_catalog import (
+    CatalogEnvelope,
     ModelCatalogService,
     ModelCatalogUnavailable,
     ModelCatalogValidationError,
@@ -353,6 +354,32 @@ def test_registry_selection_enforces_disabled_surface_and_effort(
     with pytest.raises(ModelSelectionError) as effort_error:
         model_registry.resolve_model_selection(client, "terra", "minimal")
     assert effort_error.value.code == "reasoning_effort_not_supported"
+
+
+def test_selection_refuses_overage_last_known_good_catalog(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # Listing may retain historical metadata, but an out-of-policy fallback
+    # cannot authorize new model execution.
+    cache = ModelRestrictionCache(tmp_path / "catalog-age-selection.sqlite3")
+    initial = ModelCatalogService(cache).get(PickerClient())
+    expired = CatalogEnvelope(
+        snapshot=initial.snapshot,
+        source="last_known_good",
+        fetched_at=1.0,
+        expires_at=2.0,
+        age_seconds=100_000.0,
+        stale=True,
+        stale_policy_exceeded=True,
+        upstream_error="offline provider",
+    )
+    monkeypatch.setattr(
+        model_registry, "get_model_catalog_for_client", lambda *_, **__: expired
+    )
+    with pytest.raises(ModelCatalogUnavailable, match="freshness policy"):
+        model_registry.resolve_model_selection(PickerClient(), "terra", "high")
+    # The original receipt is still available for offline diagnostics.
+    assert expired.receipt()["catalog_stale_policy_exceeded"] is True
 
 
 def test_transcript_config_carries_validated_reasoning_effort() -> None:

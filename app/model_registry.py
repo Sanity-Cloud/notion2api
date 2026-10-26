@@ -10,6 +10,7 @@ from app.model_restriction_cache import ModelRestrictionCache
 from app.model_catalog import (
     CatalogEnvelope,
     ModelCatalogService,
+    ModelCatalogUnavailable,
     ModelSelectionError,
     model_by_id,
     resolve_reasoning_effort,
@@ -956,6 +957,13 @@ def resolve_model_selection(
     envelope = get_model_catalog_for_client(
         client, allow_static_fallback=allow_static
     )
+    # An expired fallback is useful for listing historical model metadata,
+    # not as an assertion that a model is still selectable on this workspace.
+    if envelope.stale_policy_exceeded:
+        raise ModelCatalogUnavailable(
+            "The last-known-good model catalog exceeds its freshness policy; "
+            "model selection requires a successful authoritative refresh."
+        )
     model = _catalog_model_for_request(envelope.snapshot, requested_model)
     if model is None:
         raise ModelSelectionError(
