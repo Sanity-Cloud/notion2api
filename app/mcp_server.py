@@ -5513,11 +5513,11 @@ def create_server(
         pagination: dict[str, Any] = {}
 
         if normalized_action == "status":
-            data = await client.get("/chat-history/status")
+            data = await client.get("/v1/chat-history/status")
             result = {key: value for key, value in data.items() if key not in {"ok", "status_code"}}
         elif normalized_action == "list_threads":
             data = await client.get(
-                "/chat-history/threads",
+                "/v1/chat-history/threads",
                 params={"limit": limit, "offset": offset},
             )
             threads = data.get("threads") if isinstance(data.get("threads"), list) else []
@@ -5532,14 +5532,14 @@ def create_server(
         elif normalized_action == "get_thread":
             from urllib.parse import quote
 
-            data = await client.get(f"/chat-history/threads/{quote(clean_thread_id, safe='')}")
+            data = await client.get(f"/v1/chat-history/threads/{quote(clean_thread_id, safe='')}")
             result = _bounded_chat_history_thread(
                 {key: value for key, value in data.items() if key not in {"ok", "status_code"}},
                 message_limit=message_limit,
             )
         elif normalized_action == "search":
             data = await client.get(
-                "/chat-history/search",
+                "/v1/chat-history/search",
                 params={"q": clean_query, "limit": limit, "offset": offset},
             )
             results = data.get("results") if isinstance(data.get("results"), list) else []
@@ -5555,7 +5555,7 @@ def create_server(
             from urllib.parse import quote
 
             data = await client.get_text(
-                f"/chat-history/threads/{quote(clean_thread_id, safe='')}/markdown",
+                f"/v1/chat-history/threads/{quote(clean_thread_id, safe='')}/markdown",
                 max_chars=content_limit,
             )
             result = {
@@ -5565,11 +5565,11 @@ def create_server(
                 "content_truncated": bool(data.get("truncated")),
             }
         elif normalized_action == "model_stats":
-            data = await client.get("/chat-history/model-stats")
+            data = await client.get("/v1/chat-history/model-stats")
             result = {key: value for key, value in data.items() if key not in {"ok", "status_code"}}
         elif normalized_action == "sync_from_notion":
             data = await client.post(
-                "/chat-history/sync/notion",
+                "/v1/chat-history/sync/notion",
                 {
                     "account_index": account_index,
                     "limit": limit,
@@ -5582,7 +5582,7 @@ def create_server(
             from urllib.parse import quote
 
             data = await client.post(
-                f"/chat-history/threads/{quote(clean_thread_id, safe='')}/hydrate",
+                f"/v1/chat-history/threads/{quote(clean_thread_id, safe='')}/hydrate",
                 {"account_index": account_index},
             )
             result = {key: value for key, value in data.items() if key not in {"ok", "status_code"}}

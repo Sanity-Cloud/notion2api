@@ -74,7 +74,7 @@ def test_chat_history_search_routes_with_pagination_and_redacted_provenance(monk
         calls.append((path, params))
         if path == "/v1/notion/accounts":
             return _account_response()
-        assert path == "/chat-history/search"
+        assert path == "/v1/chat-history/search"
         return {
             "ok": True,
             "status_code": 200,
@@ -88,7 +88,7 @@ def test_chat_history_search_routes_with_pagination_and_redacted_provenance(monk
     )
 
     assert calls[-1] == (
-        "/chat-history/search",
+        "/v1/chat-history/search",
         {"q": "governance", "limit": 10, "offset": 5},
     )
     assert result["ok"] is True
@@ -129,7 +129,7 @@ def test_chat_history_get_thread_bounds_messages_and_process_steps(monkeypatch):
     async def fake_get(self, path, params=None):
         if path == "/v1/notion/accounts":
             return _account_response()
-        assert path == "/chat-history/threads/thread-1"
+        assert path == "/v1/chat-history/threads/thread-1"
         return {
             "ok": True,
             "status_code": 200,
@@ -182,7 +182,7 @@ def test_chat_history_sync_routes_account_and_reports_partial_results(monkeypatc
 
     assert posts == [
         (
-            "/chat-history/sync/notion",
+            "/v1/chat-history/sync/notion",
             {"account_index": 0, "limit": 75, "max_pages": 3, "hydrate": True},
         )
     ]
@@ -219,7 +219,7 @@ def test_chat_history_markdown_export_is_content_bounded(monkeypatch):
         },
     )
 
-    assert calls == [("/chat-history/threads/thread%2Fwith%20spaces/markdown", 25_000)]
+    assert calls == [("/v1/chat-history/threads/thread%2Fwith%20spaces/markdown", 25_000)]
     assert result["result"]["markdown"] == "# Bounded"
     assert result["result"]["content_chars"] == 120_000
     assert result["result"]["content_truncated"] is True
@@ -292,3 +292,40 @@ def test_chat_history_partial_receipt_detects_unhydrated_thread():
             "thread": {"id": "thread-1", "hydrated": False},
         }
     ) is True
+
+def test_chat_history_mcp_routes_match_v1_http_contract(monkeypatch):
+    """Exercise every previously mismatched MCP route without remote writes."""
+    seen = []
+
+    async def fake_get(self, path, params=None):
+        if path == "/v1/notion/accounts":
+            return _account_response()
+        seen.append(("GET", path))
+        return {"ok": True, "status_code": 200, "threads": [], "results": []}
+
+    async def fake_post(self, path, payload):
+        seen.append(("POST", path))
+        return {"ok": True, "status_code": 200, "threads": [], "results": []}
+
+    async def fake_get_text(self, path, params=None, *, max_chars=50_000):
+        seen.append(("GET_TEXT", path))
+        return {"ok": True, "status_code": 200, "text": "# Test", "text_chars": 6, "truncated": False}
+
+    monkeypatch.setattr(mcp_server.Notion2APIClient, "get", fake_get)
+    monkeypatch.setattr(mcp_server.Notion2APIClient, "post", fake_post)
+    monkeypatch.setattr(mcp_server.Notion2APIClient, "get_text", fake_get_text)
+    cases = (
+        ({"action": "status"}, ("GET", "/v1/chat-history/status")),
+        ({"action": "list_threads"}, ("GET", "/v1/chat-history/threads")),
+        ({"action": "get_thread", "thread_id": "thread-1"}, ("GET", "/v1/chat-history/threads/thread-1")),
+        ({"action": "search", "query": "test"}, ("GET", "/v1/chat-history/search")),
+        ({"action": "export_markdown", "thread_id": "thread-1"}, ("GET_TEXT", "/v1/chat-history/threads/thread-1/markdown")),
+        ({"action": "model_stats"}, ("GET", "/v1/chat-history/model-stats")),
+        ({"action": "sync_from_notion", "account_index": 0}, ("POST", "/v1/chat-history/sync/notion")),
+        ({"action": "hydrate_thread", "thread_id": "thread-1", "account_index": 0}, ("POST", "/v1/chat-history/threads/thread-1/hydrate")),
+    )
+    for args, expected in cases:
+        seen.clear()
+        result = _call(_server(), args)
+        assert result["ok"] is True, (args, result)
+        assert seen == [expected], (args, seen)
