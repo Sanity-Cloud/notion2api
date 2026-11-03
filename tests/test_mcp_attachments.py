@@ -161,3 +161,23 @@ def test_prepare_mcp_file_attachments_rejects_executable_by_default():
             assert exc_info.value.code == "unsupported_attachment_type"
         finally:
             os.unlink(tmp_name)
+
+
+
+def test_responses_required_attachments_returns_typed_error_without_duplicate_keywords():
+    """Missing required attachments must fail closed rather than raise TypeError."""
+    server = create_server(
+        base_url="http://127.0.0.1:8120",
+        api_key="test-key",
+        timeout=1,
+        host="127.0.0.1",
+        port=8130,
+        mcp_path="/mcp",
+    )
+    _content, structured = asyncio.run(
+        server.call_tool("responses", {"input_text": "test", "require_attachments": True})
+    )
+    assert structured["ok"] is False
+    assert structured["status_code"] == 422
+    assert structured["requested_model"] == "terra"
+    assert structured["raw"]["code"] == "required_attachments_missing"

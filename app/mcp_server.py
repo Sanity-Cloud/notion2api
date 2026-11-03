@@ -5908,7 +5908,6 @@ def create_server(
                 ok=False,
                 status_code=422,
                 model=model,
-                requested_model=model,
                 **_runtime_audit(client, model),
                 error="This request required attachments, but no file bytes were verified before submission.",
                 **provenance,

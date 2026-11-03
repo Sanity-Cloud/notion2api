@@ -53,7 +53,9 @@ def test_capacity_alias_selector_pins_without_renaming_credentials() -> None:
     assert first["profile_name"] == "personaltouch"
 
 
-def test_auto_mode_excludes_dev_and_rotates_production_peers() -> None:
+def test_auto_mode_excludes_dev_and_rotates_production_peers(monkeypatch) -> None:
+    # Canary traffic is separately tested; disable the intentional 10% draw here.
+    monkeypatch.setenv("NOTION_CANARY_ROUTE_FRACTION", "0")
     accounts = [
         _account("a@example.com", "user-1"),
         _account("b@example.com", "user-2"),
