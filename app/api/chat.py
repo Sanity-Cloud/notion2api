@@ -2435,7 +2435,7 @@ def _handle_lite_request(
 
             if first_item is None:
                 raise NotionUpstreamError(
-                    "Notion upstream returned empty content.", retriable=True
+                    "Notion upstream returned empty content.", retriable=False
                 )
 
             # text
@@ -2508,7 +2508,7 @@ def _handle_lite_request(
 
             if not full_text.strip():
                 raise NotionUpstreamError(
-                    "Notion upstream returned empty content.", retriable=True
+                    "Notion upstream returned empty content.", retriable=False
                 )
 
             response_text = (
@@ -2838,7 +2838,7 @@ def _handle_standard_request(
 
             if first_item is None:
                 raise NotionUpstreamError(
-                    "Notion upstream returned empty content.", retriable=True
+                    "Notion upstream returned empty content.", retriable=False
                 )
 
             # text
@@ -2924,7 +2924,7 @@ def _handle_standard_request(
 
             if not full_text.strip():
                 raise NotionUpstreamError(
-                    "Notion upstream returned empty content.", retriable=True
+                    "Notion upstream returned empty content.", retriable=False
                 )
 
             response_text = (
@@ -3462,7 +3462,7 @@ async def create_chat_completion(
 
             if first_item is None:
                 raise NotionUpstreamError(
-                    "Notion upstream returned empty content.", retriable=True
+                    "Notion upstream returned empty content.", retriable=False
                 )
 
             first_stream_item = first_item
@@ -3944,7 +3944,7 @@ async def create_chat_completion(
             merged_thinking = "".join(thinking_parts).strip()
             if not full_text.strip() and not merged_thinking:
                 raise NotionUpstreamError(
-                    "Notion upstream returned empty content.", retriable=True
+                    "Notion upstream returned empty content.", retriable=False
                 )
             if _output_requires_quarantine(hygiene_meta):
                 _raise_output_contaminated(hygiene_meta)

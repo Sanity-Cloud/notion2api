@@ -14,7 +14,6 @@ from app.model_catalog import (
     CatalogEnvelope,
     ModelCatalogService,
     ModelCatalogUnavailable,
-    ModelCatalogValidationError,
     ModelSelectionError,
     parse_picker_catalog,
     resolve_reasoning_effort,
@@ -609,3 +608,44 @@ def test_restricted_codename_disables_suffixed_route_even_without_inline_flag() 
     assert normalized["restricted_access_model_codename"] == "acai-budino"
     assert normalized["is_disabled"] is True
     assert normalized["disabled_reason"] == "business_or_enterprise_plan_required"
+
+
+def test_gpt_6_astra_resolves_only_from_live_catalog(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("NOTION_MODEL_CATALOG_ALLOW_STATIC_SELECTION", raising=False)
+    monkeypatch.setattr(
+        model_registry,
+        "_SHARED_RESTRICTION_CACHE",
+        ModelRestrictionCache(tmp_path / "gpt-6-astra.sqlite3"),
+    )
+    missing = PickerClient(space_id="space-without-astra")
+    with pytest.raises(ModelSelectionError) as error:
+        model_registry.resolve_model_selection(missing, "gpt-6-astra")
+    assert error.value.code == "model_not_available"
+
+    payload = _picker_payload()
+    payload["models"].append(
+        {
+            "model": "orlando-quinn",
+            "modelMessage": "GPT-6 Astra",
+            "modelFamily": "openai",
+            "modelProvider": "openai",
+            "displayGroup": "intelligent",
+            "modelConfiguration": {
+                "supportedReasoningEfforts": ["medium", "high"],
+                "defaultReasoningEffort": "medium",
+            },
+            "isDisabled": False,
+            "workflow": {"finalModelName": "orlando-quinn", "beta": False},
+        }
+    )
+    client = PickerClient(payload, space_id="space-with-astra")
+    selected = model_registry.resolve_model_selection(client, "gpt-6-astra")
+
+    assert selected["canonical_id"] == "orlando-quinn"
+    assert selected["catalog_source"] == "authoritative_live"
+    assert selected["canonical_id"] != "orchid-muffin"
+    envelope = model_registry.get_model_catalog_for_client(client)
+    aliases = envelope.snapshot["alias_reconciliation"]["active_aliases"]
+    assert aliases["gpt-6-astra"] == "orlando-quinn"

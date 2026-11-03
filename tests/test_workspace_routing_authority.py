@@ -4,6 +4,7 @@ import pytest
 
 from app.workspace_routing import (
     SANITY_MANAGEMENT,
+    SANITY_MONKEY,
     SANITYCLOUD_HQ,
     configured_workspace_definitions,
     default_workspace_definition,
@@ -18,16 +19,16 @@ def _clear_workspace_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SANITYCLOUD_DEFAULT_WORKSPACE", raising=False)
 
 
-def test_sanity_management_is_the_only_default_workspace(
+def test_sanity_monkey_is_the_only_default_workspace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_workspace_env(monkeypatch)
 
-    assert configured_workspace_definitions() == (SANITY_MANAGEMENT,)
-    assert default_workspace_definition() is SANITY_MANAGEMENT
-    assert workspace_descriptors() == [SANITY_MANAGEMENT.descriptor()]
-    assert SANITY_MANAGEMENT.authoritative is True
-    assert SANITY_MANAGEMENT.deprecated is False
+    assert configured_workspace_definitions() == (SANITY_MONKEY,)
+    assert default_workspace_definition() is SANITY_MONKEY
+    assert workspace_descriptors() == [SANITY_MONKEY.descriptor()]
+    assert SANITY_MONKEY.authoritative is True
+    assert SANITY_MONKEY.deprecated is False
 
 
 def test_legacy_hq_matches_the_renamed_deprecated_teamspace() -> None:
@@ -93,7 +94,31 @@ def test_default_account_expansion_uses_only_authoritative_scope(
     expanded = expand_accounts_for_workspaces(accounts)
 
     assert len(expanded) == 1
-    assert expanded[0]["workspace_key"] == "sanity-management"
-    assert expanded[0]["workspace_name"] == "Sanity Management"
-    assert expanded[0]["teamspace_name"] == "Sanity-Cloud-InScene"
-    assert expanded[0]["space_id"] == "fe8b13aa-3ad2-811e-8292-0003b78a02f9"
+    assert expanded[0]["workspace_key"] == "sanity-monkey"
+    assert expanded[0]["workspace_name"] == "Sanity Monkey"
+    assert expanded[0]["teamspace_name"] == "Sanity-Monk"
+    assert expanded[0]["space_id"] == "d6b4f527-e627-8130-9f4b-0003742d8be6"
+
+
+def test_sanity_monkey_contract_uses_verified_destination_ids() -> None:
+    assert SANITY_MONKEY.name == "Sanity Monkey"
+    assert SANITY_MONKEY.teamspace_name == "Sanity-Monk"
+    assert SANITY_MONKEY.contract.workspace_id == "d6b4f527-e627-8130-9f4b-0003742d8be6"
+    assert SANITY_MONKEY.contract.teamspace_id == "3d14f527-e627-8141-ad57-0042fe5872c1"
+    assert SANITY_MONKEY.contract.authority_page_id == "9444f527-e627-82aa-a146-81b63c534c18"
+
+
+def test_account_workspace_keys_limit_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_workspace_env(monkeypatch)
+    monkeypatch.setenv("SANITYCLOUD_ENABLED_WORKSPACES", "sanity-management,sanity-monkey")
+    accounts = [
+        {"profile_name": "management", "user_id": "user-1", "workspace_keys": ["sanity-management"]},
+        {"profile_name": "monkey", "user_id": "user-2", "workspace_keys": ["sanity-monkey"]},
+    ]
+
+    expanded = expand_accounts_for_workspaces(accounts)
+
+    assert [(item["profile_name"], item["workspace_key"]) for item in expanded] == [
+        ("management", "sanity-management"),
+        ("monkey", "sanity-monkey"),
+    ]

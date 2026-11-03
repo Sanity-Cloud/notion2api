@@ -86,6 +86,7 @@ from app.hive_workforce_lifecycle import (
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
+from starlette.responses import Response
 
 try:
     from dotenv import load_dotenv
@@ -133,6 +134,46 @@ DEFAULT_CHAT_JOB_DB_PATH = Path(
 DEFAULT_CHAT_STALL_SECONDS = 180.0
 DEFAULT_CHAT_JOB_WATCHDOG_SECONDS = 5.0
 MAX_PROGRESS_REASONING_CHARS = 200_000
+
+
+class _McpProbeCompatibilityMiddleware:
+    """Normalize browser-style MCP probes without changing real MCP traffic.
+
+    The SDK's Streamable HTTP handler returns 406 for a GET that does not
+    advertise ``text/event-stream``. Some remote MCP clients interpret that as
+    failed content negotiation and immediately retry OAuth discovery plus a new
+    MCP initialization. For a server that only wants SSE GETs, a plain GET/HEAD
+    probe is better represented as 405 Method Not Allowed.
+    """
+
+    def __init__(self, app: Any, mcp_path: str) -> None:
+        self.app = app
+        self.mcp_path = "/" + str(mcp_path or DEFAULT_MCP_PATH).strip("/")
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") == "http" and scope.get("path") == self.mcp_path:
+            method = str(scope.get("method") or "").upper()
+            headers = {
+                bytes(key).lower(): bytes(value)
+                for key, value in scope.get("headers", [])
+            }
+            accept = headers.get(b"accept", b"").lower()
+            browser_style_get = method == "GET" and b"text/event-stream" not in accept
+            if method == "HEAD" or browser_style_get:
+                response = Response(status_code=405, headers={"Allow": "POST, GET"})
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+class Notion2APIFastMCP(FastMCP):
+    """FastMCP with a small compatibility shim for remote-client probes."""
+
+    def streamable_http_app(self):
+        app = super().streamable_http_app()
+        return _McpProbeCompatibilityMiddleware(app, self.settings.streamable_http_path)
+
+
 MAX_CHAT_JOB_RESPONSE_PREVIEW_CHARS = 4_000
 MAX_CHAT_JOB_PROMPT_CHARS = 20_000
 DEFAULT_STAGED_FILE_TTL_SECONDS = 24 * 60 * 60
@@ -4744,7 +4785,7 @@ def create_server(
         identity_instruction = f"Human invocation alias: {invocation_alias}. "
     if tool_namespace:
         identity_instruction += f"SanityCloud smart-tool namespace: {tool_namespace}. "
-    server = FastMCP(
+    server = Notion2APIFastMCP(
         name=server_name,
         instructions=(
             identity_instruction

@@ -100,11 +100,28 @@ def latest_allowance(
 @router.post("/allowance/refresh")
 async def refresh_allowance(
     request: Request,
-    profile_name: str = Query(min_length=1, max_length=160),
+    profile_name: str = Query(default="", max_length=160),
+    account_key: str = Query(default="", max_length=160),
 ) -> dict[str, Any]:
-    """Fetch and persist one profile's provider-reported plan allowance percentages."""
+    """Fetch and persist one account's provider-reported plan allowance percentages."""
     try:
-        client = request.app.state.account_pool.get_client_for_selector(profile_name)
+        profile_selector = str(profile_name or "").strip()
+        canonical_key = str(account_key or "").strip()
+        if bool(profile_selector) == bool(canonical_key):
+            raise ValueError("Provide exactly one of profile_name or account_key")
+
+        pool = request.app.state.account_pool
+        if canonical_key:
+            parts = canonical_key.split(":")
+            if len(parts) != 2 or not _compact_id(parts[0]) or not _compact_id(parts[1]):
+                raise ValueError("account_key must be '<workspace_id>:<user_id>'")
+            client = pool.get_client_for_binding(
+                workspace_id=parts[0],
+                user_id=parts[1],
+            )
+        else:
+            client = pool.get_client_for_selector(profile_selector)
+
         provider_payload = await run_in_threadpool(client.get_ai_allowance_status)
         normalized = normalize_notion_ai_allowance(provider_payload)
         observation = get_notion_usage_store().record_allowance_observation(

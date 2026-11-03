@@ -45,6 +45,7 @@ def test_captured_notion_backend_mappings_are_registered():
         "claude-haiku4.5": "anthropic-haiku-4.5",
         "gemini-3flash": "gingerbread",
         "claude-fable5": "acai-budino-high",
+        "gpt-6-astra": "orlando-quinn",
     }
 
     for public_name, notion_name in expected.items():

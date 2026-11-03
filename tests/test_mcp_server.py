@@ -48,6 +48,30 @@ def test_create_server_registers_tools():
     assert server is not None
 
 
+def test_plain_http_mcp_probes_return_method_not_allowed():
+    server = create_server(
+        base_url="http://127.0.0.1:8000",
+        api_key=None,
+        timeout=1,
+        host="127.0.0.1",
+        port=8130,
+        mcp_path="/mcp",
+    )
+
+    async def probe() -> tuple[httpx.Response, httpx.Response]:
+        transport = httpx.ASGITransport(app=server.streamable_http_app())
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            get_response = await client.get("/mcp", headers={"Accept": "application/json, */*"})
+            head_response = await client.head("/mcp")
+            return get_response, head_response
+
+    get_response, head_response = asyncio.run(probe())
+    assert get_response.status_code == 405
+    assert head_response.status_code == 405
+    assert get_response.headers["allow"] == "POST, GET"
+    assert head_response.headers["allow"] == "POST, GET"
+
+
 def test_create_server_supports_profile_identity(monkeypatch):
     monkeypatch.setenv("MCP_SERVER_NAME", "AIgentBee")
     monkeypatch.setenv("SANITYCLOUD_TOOL_NAMESPACE", "A!")

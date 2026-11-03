@@ -49,8 +49,30 @@ SANITY_MANAGEMENT = WorkspaceDefinition(
         documented_output_parent_page_id="3acb13aa-3ad2-8161-b851-f9bb30c31ecc",
         procedural_feedback_parent_page_id="3acb13aa-3ad2-813f-81c9-c659c579c093",
     ).validated(),
+    authoritative=False,
+)
+
+SANITY_MONKEY = WorkspaceDefinition(
+    key="sanity-monkey",
+    name="Sanity Monkey",
+    teamspace_name="Sanity-Monk",
+    aliases=(
+        "sanity-monkey",
+        "sanity monkey",
+        "monkey",
+        "d6b4f527-e627-8130-9f4b-0003742d8be6",
+    ),
+    contract=GovernanceContract(
+        version="sanitycloud-governance-v3-sanity-monkey",
+        workspace_id="d6b4f527-e627-8130-9f4b-0003742d8be6",
+        teamspace_id="3d14f527-e627-8141-ad57-0042fe5872c1",
+        authority_page_id="9444f527-e627-82aa-a146-81b63c534c18",
+        documented_output_parent_page_id="9444f527-e627-82aa-a146-81b63c534c18",
+        procedural_feedback_parent_page_id="9444f527-e627-82aa-a146-81b63c534c18",
+    ).validated(),
     authoritative=True,
 )
+
 
 SANITYCLOUD_HQ = WorkspaceDefinition(
     key="sanitycloud-hq",
@@ -73,8 +95,8 @@ SANITYCLOUD_HQ = WorkspaceDefinition(
     deprecated=True,
 )
 
-KNOWN_WORKSPACES = (SANITY_MANAGEMENT, SANITYCLOUD_HQ)
-DEFAULT_WORKSPACES = (SANITY_MANAGEMENT,)
+KNOWN_WORKSPACES = (SANITY_MANAGEMENT, SANITY_MONKEY, SANITYCLOUD_HQ)
+DEFAULT_WORKSPACES = (SANITY_MONKEY,)
 
 
 def _normalize(value: Any) -> str:
@@ -118,7 +140,7 @@ def configured_workspace_definitions() -> tuple[WorkspaceDefinition, ...]:
 
 
 def default_workspace_definition() -> WorkspaceDefinition:
-    selector = os.getenv("SANITYCLOUD_DEFAULT_WORKSPACE", SANITY_MANAGEMENT.key)
+    selector = os.getenv("SANITYCLOUD_DEFAULT_WORKSPACE", SANITY_MONKEY.key)
     selected = resolve_workspace_definition(selector)
     if selected.deprecated:
         raise ValueError(
@@ -146,6 +168,18 @@ def expand_accounts_for_workspaces(
         workspace_accounts: list[dict[str, Any]] = []
         for source in accounts:
             account = dict(source)
+            raw_workspace_keys = account.get("workspace_keys")
+            if raw_workspace_keys:
+                selectors = (
+                    [item.strip() for item in raw_workspace_keys.split(",") if item.strip()]
+                    if isinstance(raw_workspace_keys, str)
+                    else list(raw_workspace_keys)
+                )
+                allowed_workspace_keys = {
+                    resolve_workspace_definition(selector).key for selector in selectors
+                }
+                if workspace.key not in allowed_workspace_keys:
+                    continue
             base_profile = str(account.get("base_profile_name") or account.get("profile_name") or "").strip()
             user_id = str(account.get("user_id") or "").strip()
             account.update(

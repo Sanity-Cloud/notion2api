@@ -8,7 +8,7 @@ import uuid
 
 from app.chat_history.extractor import collect_hydration_message_ids
 from app.chat_history.har_importer import import_chat_object
-from app.chat_history.notion_sync import HYDRATE_ENDPOINT, _post_json
+from app.chat_history.notion_sync import hydrate_endpoint, _post_json
 from app.identity_scope import identity_scope_from_client
 from app.logger import logger
 
@@ -393,7 +393,7 @@ def discover_pending_unsafe_url_steps(
             }
         ]
     }
-    thread_obj = _post_json(client, HYDRATE_ENDPOINT, thread_payload)
+    thread_obj = _post_json(client, hydrate_endpoint(), thread_payload)
     found = {item["tool_step_id"]: item for item in find_pending_unsafe_url_steps(thread_obj)}
     message_ids = collect_hydration_message_ids(thread_obj)
     thread_bundle = import_chat_object(thread_obj)
@@ -404,7 +404,7 @@ def discover_pending_unsafe_url_steps(
         batch = message_ids[start:start + batch_size]
         message_obj = _post_json(
             client,
-            HYDRATE_ENDPOINT,
+            hydrate_endpoint(),
             {
                 "requests": [
                     {

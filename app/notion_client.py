@@ -16,6 +16,14 @@ from app.attachments.notion_upload import NotionAttachmentUploader, NotionAttach
 from app.attachments.models import UploadedAttachment
 from app.model_registry import get_notion_model
 from app.notion_admission import admitted_session
+from app.notion_hosts import (
+    notion_app_api,
+    notion_app_origin,
+    notion_web_api,
+    notion_web_origin,
+    referer_path_for_endpoint,
+    sec_fetch_site,
+)
 from app.stream_parser_safe import parse_stream
 
 # text SSL text
@@ -59,6 +67,37 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 def _attachment_descriptor_debug_enabled() -> bool:
     return _env_flag("ATTACHMENT_DESCRIPTOR_DEBUG", False)
+
+
+def _inference_stream_facts(response: Any, details: dict[str, Any]) -> str:
+    """Describe an inference stream without cookies, tokens, or body text."""
+
+    headers = getattr(response, "headers", {}) or {}
+
+    def header(name: str) -> str:
+        try:
+            value = str(headers.get(name) or "")
+        except Exception:
+            value = ""
+        return value.split(";", 1)[0].strip()[:80]
+
+    content_length = header("content-length")
+    if content_length and not content_length.isdigit():
+        content_length = ""
+    return json.dumps(
+        {
+            "http_status": getattr(response, "status_code", None),
+            "content_type": header("content-type"),
+            "content_length": content_length,
+            "emitted": bool(details.get("emitted")),
+            "stream_completed": bool(details.get("stream_completed")),
+            "chunk_count": int(details.get("chunk_count") or 0),
+            "trace_id": str(details.get("trace_id") or "")[:80],
+            "thread_id": str(details.get("thread_id") or "")[:80],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _redact_response_excerpt(text: str) -> str:
@@ -305,11 +344,17 @@ class NotionOpusAPI:
             self.cookies = {}
         self.cookies["token_v2"] = self.token_v2
 
-        self.inference_base_url = configured_notion_origin(
-            "NOTION_INFERENCE_BASE_URL", "https://www.notion.so"
+        # Retain explicit legacy endpoint overrides without weakening the
+        # validated modern NOTION_URL / NOTION_DOMAIN defaults.
+        self.inference_base_url = (
+            configured_notion_origin("NOTION_INFERENCE_BASE_URL", notion_web_origin())
+            if os.getenv("NOTION_INFERENCE_BASE_URL")
+            else notion_web_origin()
         )
-        self.api_base_url = configured_notion_origin(
-            "NOTION_API_BASE_URL", "https://app.notion.com"
+        self.api_base_url = (
+            configured_notion_origin("NOTION_API_BASE_URL", notion_app_origin())
+            if os.getenv("NOTION_API_BASE_URL")
+            else notion_app_origin()
         )
         self.url = f"{self.inference_base_url}/api/v3/runInferenceTranscript"
         self.delete_url = f"{self.api_base_url}/api/v3/saveTransactions"
@@ -330,18 +375,23 @@ class NotionOpusAPI:
 
     def get_ai_model_picker_config(self) -> dict[str, Any]:
         """Fetch space AI model picker config from Notion v3 API."""
-        endpoint = f"{self.api_base_url}/api/v3/getAvailableModels"
+        endpoint = notion_app_api("getAvailableModels")
         payload = {"spaceId": self.space_id}
-        resp = self._scraper.post(endpoint, headers=self._build_chat_history_headers(), json=payload, timeout=30)
+        resp = self._scraper.post(
+            endpoint,
+            headers=self._build_chat_history_headers(endpoint),
+            json=payload,
+            timeout=30,
+        )
         resp.raise_for_status()
         return resp.json()
 
     def get_ai_usage_eligibility(self) -> dict[str, Any]:
         """Fetch Notion's provider-reported AI credit usage and limits."""
-        endpoint = "https://app.notion.com/api/v3/getAIUsageEligibilityV2"
+        endpoint = notion_app_api("getAIUsageEligibilityV2")
         response = self._scraper.post(
             endpoint,
-            headers=self._build_chat_history_headers(),
+            headers=self._build_chat_history_headers(endpoint),
             json={"spaceId": self.space_id},
             timeout=30,
         )
@@ -353,10 +403,10 @@ class NotionOpusAPI:
 
     def get_ai_allowance_status(self) -> dict[str, Any]:
         """Fetch Notion's rolling and billing-period AI allowance status."""
-        endpoint = "https://app.notion.com/api/v3/getCreditRateLimitStatus"
+        endpoint = notion_app_api("getCreditRateLimitStatus")
         response = self._scraper.post(
             endpoint,
-            headers=self._build_chat_history_headers(),
+            headers=self._build_chat_history_headers(endpoint),
             json={"spaceId": self.space_id},
             timeout=30,
         )
@@ -510,30 +560,68 @@ class NotionOpusAPI:
             "include_debug_overrides": True,
         }
 
-    def _build_thread_headers(self) -> dict[str, str]:
-        return {
-            "content-type": "application/json",
-            "cookie": self._build_cookie_header(),
-            "x-notion-active-user-header": self.user_id,
-            "x-notion-space-id": self.space_id,
-        }
+    def _build_browser_headers(
+        self,
+        endpoint: str,
+        *,
+        accept: str = "application/json",
+        referer_path: str | None = None,
+        extra: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Build the shared browser fingerprint for one Notion endpoint.
 
-    def _build_chat_history_headers(self) -> dict[str, str]:
-        """Use the original stable profile by default; opt into the new browser
-        profile only after the history endpoints have been smoke-tested.
+        Origin stays the web page origin. ``sec-fetch-site`` follows the
+        endpoint host. ``extra`` preserves request-specific headers without
+        dropping credentials.
         """
+        origin = notion_web_origin()
+        path = referer_path if referer_path is not None else referer_path_for_endpoint(endpoint)
+        if not path.startswith("/"):
+            path = f"/{path}"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": accept,
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+            ),
+            "x-notion-space-id": self.space_id,
+            "x-notion-active-user-header": self.user_id,
+            "notion-client-version": NOTION_CLIENT_VERSION,
+            "origin": origin,
+            "referer": f"{origin}{path}",
+            "sec-ch-ua": '"Chromium";v="152", "Not?A_Brand";v="24", "Google Chrome";v="152"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Linux"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": sec_fetch_site(origin, endpoint),
+            "cookie": self._build_cookie_header(),
+        }
+        for key, value in (extra or {}).items():
+            if value is None:
+                headers.pop(key, None)
+            else:
+                headers[str(key)] = str(value)
+        return headers
+
+    def _build_thread_headers(self, endpoint: str | None = None) -> dict[str, str]:
+        target = endpoint or self.delete_url
+        return self._build_browser_headers(target, referer_path="/chat")
+
+    def _build_chat_history_headers(self, endpoint: str | None = None) -> dict[str, str]:
+        # An explicit endpoint opts into the modern endpoint-aware profile.
+        # Older history callers that omit it keep their verified legacy profile.
+        if endpoint is not None:
+            return self._build_browser_headers(endpoint)
         headers = {
             "content-type": "application/json",
             "cookie": self._build_cookie_header(),
             "x-notion-active-user-header": self.user_id,
-            "x-notion-space-id": self.space_id,
             "notion-client-version": NOTION_CLIENT_VERSION,
         }
         if _env_flag("NOTION_HISTORY_BROWSER_HEADERS", False):
-            headers.update(
-                browser_request_headers(self.api_base_url, accept="application/json")
-            )
-            # Keep a single casing so callers can override the accept type.
+            headers.update(browser_request_headers(self.api_base_url, accept="application/json"))
             headers["accept"] = headers.pop("Accept")
         else:
             headers.update({
@@ -587,8 +675,12 @@ class NotionOpusAPI:
             "isSpaceSalesAssisted": False,
             "supportsCustomAgentNudgeTranscriptStep": True,
         }
-        headers = self._build_chat_history_headers()
-        headers["accept"] = "application/x-ndjson"
+        headers = self._build_browser_headers(
+            self.url,
+            accept="application/x-ndjson",
+            referer_path="/chat",
+            extra={"notion-audit-log-platform": "web"},
+        )
         try:
             response = self._scraper.post(
                 self.url,
@@ -744,7 +836,7 @@ class NotionOpusAPI:
         Returns a dict containing at least one of: upload_url, file_id, attachment_url, and optional fields.
         Raises NotionUpstreamError on HTTP or response failures.
         """
-        endpoint = "https://www.notion.so/api/v3/getUploadFileUrlForAssistantChatTranscriptUpload"
+        endpoint = notion_web_api("getUploadFileUrlForAssistantChatTranscriptUpload")
         notion_content_type = _notion_upload_content_type(name, content_type)
         upload_name = _notion_attachment_upload_name(name, content_type)
         payload = {
@@ -780,7 +872,12 @@ class NotionOpusAPI:
                 },
             )
         try:
-            resp = self._scraper.post(endpoint, headers=self._build_chat_history_headers(), json=payload, timeout=30)
+            resp = self._scraper.post(
+                endpoint,
+                headers=self._build_chat_history_headers(endpoint),
+                json=payload,
+                timeout=30,
+            )
         except Exception as exc:
             raise NotionUpstreamError("Failed to request upload descriptor", status_code=None, retriable=True, response_excerpt=str(exc)) from exc
 
@@ -874,7 +971,7 @@ class NotionOpusAPI:
 
     def enqueue_attachment_processing(self, *, attachment_url: str, thread_id: str) -> str:
         """Ask Notion to enqueue processing of a staged attachment and return a task id."""
-        endpoint = "https://www.notion.so/api/v3/enqueueTask"
+        endpoint = notion_web_api("enqueueTask")
         payload = {
             "task": {
                 "eventName": "processAgentAttachment",
@@ -895,7 +992,12 @@ class NotionOpusAPI:
             },
         }
         try:
-            resp = self._scraper.post(endpoint, headers=self._build_chat_history_headers(), json=payload, timeout=30)
+            resp = self._scraper.post(
+                endpoint,
+                headers=self._build_chat_history_headers(endpoint),
+                json=payload,
+                timeout=30,
+            )
         except Exception as exc:
             raise NotionUpstreamError("Failed to enqueue attachment processing", retriable=True, response_excerpt=str(exc)) from exc
 
@@ -913,10 +1015,15 @@ class NotionOpusAPI:
         return str(task_id)
 
     def get_task_status(self, task_id: str) -> dict[str, Any]:
-        endpoint = "https://www.notion.so/api/v3/getTasks"
+        endpoint = notion_web_api("getTasks")
         payload = {"taskIds": [task_id]}
         try:
-            resp = self._scraper.post(endpoint, headers=self._build_chat_history_headers(), json=payload, timeout=30)
+            resp = self._scraper.post(
+                endpoint,
+                headers=self._build_chat_history_headers(endpoint),
+                json=payload,
+                timeout=30,
+            )
         except Exception as exc:
             raise NotionUpstreamError("Failed to fetch task status", retriable=True, response_excerpt=str(exc)) from exc
 
@@ -976,7 +1083,7 @@ class NotionOpusAPI:
         permission_table: str = "thread",
         permission_id: str = "",
     ) -> str:
-        endpoint = "https://app.notion.com/api/v3/getSignedFileUrls"
+        endpoint = notion_app_api("getSignedFileUrls")
         resolved_permission_id = str(permission_id or thread_id or "").strip()
         if not resolved_permission_id:
             raise ValueError("A permission record id is required for signed file access.")
@@ -995,7 +1102,12 @@ class NotionOpusAPI:
             ]
         }
         try:
-            resp = self._scraper.post(endpoint, headers=self._build_chat_history_headers(), json=payload, timeout=30)
+            resp = self._scraper.post(
+                endpoint,
+                headers=self._build_chat_history_headers(endpoint),
+                json=payload,
+                timeout=30,
+            )
         except Exception as exc:
             raise NotionUpstreamError("Failed to request signed read URL", retriable=True, response_excerpt=str(exc)) from exc
 
@@ -1024,12 +1136,12 @@ class NotionOpusAPI:
 
     def warm_script_agent_cache(self) -> None:
         """Prime Notion's script-agent module cache before workflow ZIP reviews."""
-        endpoint = "https://app.notion.com/api/v3/warmScriptAgentDynamicModuleCache"
+        endpoint = notion_app_api("warmScriptAgentDynamicModuleCache")
         payload = {"spaceId": self.space_id}
         try:
             resp = self._scraper.post(
                 endpoint,
-                headers=self._build_chat_history_headers(),
+                headers=self._build_chat_history_headers(endpoint),
                 json=payload,
                 timeout=20,
             )
@@ -1202,7 +1314,7 @@ class NotionOpusAPI:
             0.05,
             float(os.getenv("NOTION_ATTACHMENT_THREAD_READY_POLL_SECONDS", "0.5")),
         )
-        endpoint = "https://app.notion.com/api/v3/syncRecordValuesSpaceInitial"
+        endpoint = notion_app_api("syncRecordValuesSpaceInitial")
         payload = {
             "requests": [
                 {
@@ -1222,7 +1334,7 @@ class NotionOpusAPI:
             try:
                 response = self._scraper.post(
                     endpoint,
-                    headers=self._build_chat_history_headers(),
+                    headers=self._build_chat_history_headers(endpoint),
                     json=payload,
                     timeout=30,
                 )
@@ -1353,7 +1465,7 @@ class NotionOpusAPI:
         try:
             response = self._scraper.post(
                 self.thread_title_url,
-                headers=self._build_chat_history_headers(),
+                headers=self._build_chat_history_headers(self.thread_title_url),
                 json=payload,
                 timeout=30,
             )
@@ -1427,7 +1539,7 @@ class NotionOpusAPI:
 
     def fetch_chat_history(self, limit: int = 100, max_pages: int = 5) -> dict[str, Any]:
         """Best-effort pull of Notion AI chat transcripts for the current user."""
-        endpoint = "https://www.notion.so/api/v3/getInferenceTranscriptsForUser"
+        endpoint = notion_web_api("getInferenceTranscriptsForUser")
         collected: dict[str, Any] = {}
         page_cursor: str | None = None
 
@@ -1452,7 +1564,7 @@ class NotionOpusAPI:
                 try:
                     candidate_response = self._scraper.post(
                         endpoint,
-                        headers=self._build_chat_history_headers(),
+                        headers=self._build_chat_history_headers(endpoint),
                         json=payload,
                         timeout=(15, 60),
                     )
@@ -1547,7 +1659,7 @@ class NotionOpusAPI:
             resp = requests.post(
                 self.delete_url,
                 json=payload,
-                headers=self._build_thread_headers(),
+                headers=self._build_thread_headers(self.delete_url),
                 timeout=20,
             )
             if resp.status_code == 200:
@@ -1624,7 +1736,7 @@ class NotionOpusAPI:
             resp = requests.post(
                 self.delete_url,
                 json=payload,
-                headers=self._build_thread_headers(),
+                headers=self._build_thread_headers(self.delete_url),
                 timeout=30,
             )
         except requests.exceptions.RequestException as exc:
@@ -1700,7 +1812,7 @@ class NotionOpusAPI:
             response = requests.post(
                 self.thread_title_url,
                 json=payload,
-                headers=self._build_thread_headers(),
+                headers=self._build_thread_headers(self.thread_title_url),
                 timeout=20,
             )
         except requests.exceptions.RequestException as exc:
@@ -2182,23 +2294,13 @@ class NotionOpusAPI:
             # text is_partial_transcript=Truetext Notion text
             request_profile["is_partial_transcript"] = True
 
-        # Build an explicit cookie header for the isolated Requests session.
-        # textcookie jar text Cloudflare challenge text ASCII text cookietext
-        cookie_header = self._build_cookie_header()
-
-        # Mirror browser-origin metadata for the inference request. Only the
-        # inference host is used here, so sec-fetch-site stays same-origin.
-        headers = {
-            "Content-Type": "application/json",
-            **browser_request_headers(
-                self.inference_base_url, accept="application/x-ndjson"
-            ),
-            "x-notion-space-id": self.space_id,
-            "x-notion-active-user-header": self.user_id,
-            "notion-audit-log-platform": "web",
-            "notion-client-version": NOTION_CLIENT_VERSION,
-            "cookie": cookie_header,
-        }
+        # One shared browser fingerprint. Inference stays on the chat referer.
+        headers = self._build_browser_headers(
+            self.url,
+            accept="application/x-ndjson",
+            referer_path="/chat",
+            extra={"notion-audit-log-platform": "web"},
+        )
 
         created_source = (
             "full_page_chat"
@@ -2275,22 +2377,6 @@ class NotionOpusAPI:
                 stream=True,
                 timeout=(NOTION_UPSTREAM_CONNECT_TIMEOUT, NOTION_UPSTREAM_READ_TIMEOUT),
             )
-            if response.status_code == 403:
-                # Cloudflare challenge text scraper text
-                response.close()
-                logger.warning(
-                    "Got 403, rebuilding the Notion HTTP session for one retry",
-                    extra={"request_info": {"event": "notion_http_session_refresh", "account": self.account_key}},
-                )
-                raw_scraper = _create_notion_http_session()
-                scraper = admitted_session(raw_scraper, self)
-                response = scraper.post(
-                    self.url,
-                    headers=headers,
-                    json=payload,
-                    stream=True,
-                    timeout=(NOTION_UPSTREAM_CONNECT_TIMEOUT, NOTION_UPSTREAM_READ_TIMEOUT),
-                )
             if response.status_code != 200:
                 excerpt = (response.text or "").strip().replace("\n", " ")[:300]
                 retriable = response.status_code >= 500 or response.status_code == 429
@@ -2325,6 +2411,7 @@ class NotionOpusAPI:
 
             emitted = False
             stream_completed = False
+            chunk_count = 0
             from app.unsafe_url_continuation import (
                 remember_pending_unsafe_url_steps,
                 should_auto_continue_external_url_confirmations,
@@ -2399,8 +2486,19 @@ class NotionOpusAPI:
                         break
 
                     emitted = True
+                    chunk_count += 1
                     yield chunk
             finally:
+                stream_facts = _inference_stream_facts(
+                    active_response,
+                    {
+                        "trace_id": trace_id,
+                        "thread_id": thread_id,
+                        "emitted": emitted,
+                        "stream_completed": stream_completed,
+                        "chunk_count": chunk_count,
+                    },
+                )
                 if active_response is not None:
                     try:
                         active_response.close()
@@ -2409,36 +2507,36 @@ class NotionOpusAPI:
 
             if not emitted:
                 logger.warning(
-                    "Notion inference produced no stream events",
-                    extra={"request_info": {
-                        "event": "notion_inference_empty_stream",
-                        "http_status": inference_status,
-                        "content_type": inference_content_type,
-                    }},
+                    "Notion upstream returned an empty inference stream",
+                    extra={
+                        "request_info": {
+                            "event": "notion_empty_inference_stream",
+                            "stream_facts": stream_facts,
+                        }
+                    },
                 )
                 raise NotionUpstreamError(
-                    "Notion upstream returned an empty inference stream.",
+                    "Notion upstream returned an empty stream.",
                     status_code=502,
-                    # Notion may have processed the request before dropping
-                    # its body. Automatic replay risks duplicate inference.
                     retriable=False,
-                    response_excerpt="empty_stream_after_http_200",
+                    response_excerpt=stream_facts,
                 )
 
             if not stream_completed:
                 logger.warning(
                     "Notion inference ended without completion metadata",
-                    extra={"request_info": {
-                        "event": "notion_inference_missing_completion",
-                        "http_status": inference_status,
-                        "content_type": inference_content_type,
-                    }},
+                    extra={
+                        "request_info": {
+                            "event": "notion_inference_missing_completion",
+                            "stream_facts": stream_facts,
+                        }
+                    },
                 )
                 raise NotionUpstreamError(
                     "Notion upstream stream ended before completion metadata.",
                     status_code=502,
                     retriable=False,
-                    response_excerpt="missing_finishedAt",
+                    response_excerpt=stream_facts,
                 )
 
             if thread_persistence["delete_after_stream"]:
@@ -2630,8 +2728,8 @@ class NotionOpusAPI:
 
         try:
             response = self._scraper.post(
-                "https://app.notion.com/api/v3/getSpaces",
-                headers=self._build_chat_history_headers(),
+                notion_app_api("getSpaces"),
+                headers=self._build_chat_history_headers(notion_app_api("getSpaces")),
                 json={},
                 timeout=30,
             )
@@ -2893,7 +2991,7 @@ class NotionOpusAPI:
             try:
                 return self._scraper.post(
                     self.thread_title_url,
-                    headers=self._build_chat_history_headers(),
+                    headers=self._build_chat_history_headers(self.thread_title_url),
                     json=transaction_payload,
                     timeout=30,
                 )
@@ -2965,7 +3063,7 @@ class NotionOpusAPI:
     def check_page_access(self, page_id: str) -> dict[str, Any]:
         """Check whether this Notion account can read a page through the v3 API."""
         normalized_page_id = self._normalize_notion_id(page_id, field_name="page_id")
-        endpoint = "https://www.notion.so/api/v3/loadPageChunk"
+        endpoint = notion_web_api("loadPageChunk")
         payload = {
             "pageId": normalized_page_id,
             "limit": 20,
@@ -2976,7 +3074,7 @@ class NotionOpusAPI:
         try:
             response = self._scraper.post(
                 endpoint,
-                headers=self._build_chat_history_headers(),
+                headers=self._build_chat_history_headers(endpoint),
                 json=payload,
                 timeout=30,
             )
@@ -3044,7 +3142,7 @@ class NotionOpusAPI:
         try:
             resp = self._scraper.post(
                 self.delete_url,
-                headers=self._build_chat_history_headers(),
+                headers=self._build_chat_history_headers(self.delete_url),
                 json=payload,
                 timeout=30,
             )
@@ -3065,16 +3163,17 @@ class NotionOpusAPI:
     @staticmethod
     def _page_url(page_id: str) -> str:
         clean = str(page_id or "").replace("-", "")
-        return f"https://www.notion.so/{clean}"
+        return f"{notion_web_origin()}/{clean}"
 
     @staticmethod
     def _page_app_url(page_id: str) -> str:
         clean = str(page_id or "").replace("-", "")
-        return f"notion://www.notion.so/{clean}"
+        host = urlparse(notion_web_origin()).hostname or "www.notion.so"
+        return f"notion://{host}/{clean}"
 
     def _load_page_chunk(self, page_id: str) -> dict[str, Any]:
         normalized_page_id = self._normalize_notion_id(page_id, field_name="page_id")
-        endpoint = "https://www.notion.so/api/v3/loadPageChunk"
+        endpoint = notion_web_api("loadPageChunk")
         payload = {
             "pageId": normalized_page_id,
             "limit": 100,
@@ -3085,7 +3184,7 @@ class NotionOpusAPI:
         try:
             response = self._scraper.post(
                 endpoint,
-                headers=self._build_chat_history_headers(),
+                headers=self._build_chat_history_headers(endpoint),
                 json=payload,
                 timeout=30,
             )
@@ -3380,7 +3479,7 @@ class NotionOpusAPI:
         """Request an upload descriptor bound to the existing parent page."""
         normalized_page_id = self._normalize_notion_id(page_id, field_name="page_id")
         notion_content_type = _notion_upload_content_type(name, content_type)
-        endpoint = "https://www.notion.so/api/v3/getUploadFileUrl"
+        endpoint = notion_web_api("getUploadFileUrl")
         payload = {
             "bucket": "secure",
             "name": name,
@@ -3397,7 +3496,7 @@ class NotionOpusAPI:
         try:
             resp = self._scraper.post(
                 endpoint,
-                headers=self._build_chat_history_headers(),
+                headers=self._build_chat_history_headers(endpoint),
                 json=payload,
                 timeout=30,
             )
@@ -3546,8 +3645,8 @@ class NotionOpusAPI:
         }
         try:
             resp = self._scraper.post(
-                "https://www.notion.so/api/v3/saveTransactions",
-                headers=self._build_chat_history_headers(),
+                notion_web_api("saveTransactions"),
+                headers=self._build_chat_history_headers(notion_web_api("saveTransactions")),
                 json=payload,
                 timeout=30,
             )

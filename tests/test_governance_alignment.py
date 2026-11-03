@@ -251,7 +251,7 @@ def test_non_persistent_stream_metadata_preserves_governance_receipt(generator) 
     assert '"aligned": true' in metadata_chunks[0]
 
 
-def test_governance_defaults_to_sanity_management(monkeypatch) -> None:
+def test_governance_defaults_to_sanity_monkey(monkeypatch) -> None:
     for key in (
         "SANITYCLOUD_GOVERNANCE_CONTRACT_VERSION",
         "SANITYCLOUD_NOTION_WORKSPACE_ID",
@@ -264,9 +264,9 @@ def test_governance_defaults_to_sanity_management(monkeypatch) -> None:
 
     contract = GovernanceContract.from_env()
 
-    assert contract.version == "sanitycloud-governance-v2-sanity-management"
-    assert contract.workspace_id == "fe8b13aa-3ad2-811e-8292-0003b78a02f9"
-    assert contract.teamspace_id == "3acb13aa-3ad2-8176-9ff3-004220d4868f"
-    assert contract.authority_page_id == "3acb13aa-3ad2-816c-b6ec-d4930a87e12e"
-    assert contract.documented_output_parent_page_id == "3acb13aa-3ad2-8161-b851-f9bb30c31ecc"
-    assert contract.procedural_feedback_parent_page_id == "3acb13aa-3ad2-813f-81c9-c659c579c093"
+    assert contract.version == "sanitycloud-governance-v3-sanity-monkey"
+    assert contract.workspace_id == "d6b4f527-e627-8130-9f4b-0003742d8be6"
+    assert contract.teamspace_id == "3d14f527-e627-8141-ad57-0042fe5872c1"
+    assert contract.authority_page_id == "9444f527-e627-82aa-a146-81b63c534c18"
+    assert contract.documented_output_parent_page_id == "9444f527-e627-82aa-a146-81b63c534c18"
+    assert contract.procedural_feedback_parent_page_id == "9444f527-e627-82aa-a146-81b63c534c18"

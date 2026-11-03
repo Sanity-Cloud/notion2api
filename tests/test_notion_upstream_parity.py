@@ -3,6 +3,7 @@
 # Intentional: exercise private header-construction methods as protocol contracts.
 # pylint: disable=protected-access
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -121,5 +122,10 @@ def test_http_200_stream_errors_are_diagnostic_and_non_replayable(events, expect
 
     assert caught.value.retriable is False
     assert caught.value.status_code == 502
-    assert caught.value.response_excerpt == expected_reason
+    # Diagnostic facts supersede opaque string-only error excerpts.
+    facts = json.loads(caught.value.response_excerpt)
+    assert facts["http_status"] == 200
+    assert facts["emitted"] is (expected_reason == "missing_finishedAt")
+    assert facts["stream_completed"] is (expected_reason == "empty_stream_after_http_200")
+    assert "token" not in caught.value.response_excerpt
     assert scraper.post.call_count == 1

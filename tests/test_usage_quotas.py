@@ -436,7 +436,7 @@ def test_notion_usage_retrieval_uses_har_endpoint_and_space_binding() -> None:
     notion_client = NotionOpusAPI.__new__(NotionOpusAPI)
     notion_client.space_id = "synthetic-space"
     notion_client._scraper = Scraper()
-    notion_client._build_chat_history_headers = lambda: {
+    notion_client._build_chat_history_headers = lambda *_args, **_kwargs: {
         "x-notion-space-id": "synthetic-space"
     }
 
@@ -483,7 +483,7 @@ def test_notion_allowance_retrieval_uses_credit_rate_limit_status_endpoint() -> 
     notion_client = NotionOpusAPI.__new__(NotionOpusAPI)
     notion_client.space_id = "synthetic-space"
     notion_client._scraper = Scraper()
-    notion_client._build_chat_history_headers = lambda: {
+    notion_client._build_chat_history_headers = lambda *_args, **_kwargs: {
         "x-notion-space-id": "synthetic-space"
     }
 
@@ -539,6 +539,78 @@ def test_refresh_allowance_records_provider_percentages_for_profile(monkeypatch,
     assert allowance["monthly"]["resets_at"] == 2_000_100_000.0
     assert allowance["source"] == "notion_settings_api"
     assert "account_key" not in allowance
+
+
+def test_refresh_allowance_accepts_canonical_account_key(monkeypatch, tmp_path) -> None:
+    provider_payload = {
+        "status": "within_limit",
+        "window": {"window": "6h", "used": 7, "limit": 100},
+        "billingPeriodWindow": {
+            "cadence": "billing_period",
+            "used": 21,
+            "limit": 100,
+            "periodEndMs": 2_000_100_000_000,
+        },
+    }
+    fake_client = SimpleNamespace(
+        space_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        user_id="11111111-2222-3333-4444-555555555555",
+        get_ai_allowance_status=lambda: provider_payload,
+    )
+    calls: list[tuple[str, str]] = []
+
+    def get_client_for_binding(*, workspace_id: str, user_id: str):
+        calls.append((workspace_id, user_id))
+        return fake_client
+
+    fake_pool = SimpleNamespace(
+        get_client_for_binding=get_client_for_binding,
+        get_client_for_selector=lambda selector: (_ for _ in ()).throw(
+            AssertionError(f"unexpected profile selector: {selector}")
+        ),
+    )
+    store = NotionRequestTelemetryStore(tmp_path / "allowance-account-key.sqlite3")
+    monkeypatch.setattr(notion_admission, "_REQUEST_TELEMETRY", store)
+
+    with TestClient(app) as client:
+        app.state.account_pool = fake_pool
+        response = client.post(
+            "/v1/usage/allowance/refresh",
+            params={
+                "account_key": (
+                    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:"
+                    "11111111-2222-3333-4444-555555555555"
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    assert calls == [
+        (
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "11111111-2222-3333-4444-555555555555",
+        )
+    ]
+    allowance = response.json()["allowance"]
+    assert allowance["rolling"]["used_percent"] == 7
+    assert allowance["monthly"]["used_percent"] == 21
+
+
+def test_refresh_allowance_rejects_ambiguous_selector(monkeypatch, tmp_path) -> None:
+    store = NotionRequestTelemetryStore(tmp_path / "allowance-selector.sqlite3")
+    monkeypatch.setattr(notion_admission, "_REQUEST_TELEMETRY", store)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/usage/allowance/refresh",
+            params={
+                "profile_name": "legacy-profile",
+                "account_key": "workspace:user",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Provide exactly one of profile_name or account_key"
 
 
 def test_quota_exception_handler_returns_retry_contract() -> None:

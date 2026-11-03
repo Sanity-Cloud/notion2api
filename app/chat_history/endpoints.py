@@ -1,4 +1,8 @@
-API_BASE = "https://www.notion.so/api/v3"
+"""Notion chat-history endpoint names."""
+
+from app.notion_hosts import notion_web_api_base
+
+API_BASE = notion_web_api_base()
 
 GET_TRANSCRIPTS = "/getInferenceTranscriptsForUser"
 SYNC_RECORD_VALUES_SPACE_INITIAL = "/syncRecordValuesSpaceInitial"

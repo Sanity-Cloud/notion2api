@@ -9,6 +9,7 @@ from app.account_scope import canonical_account_key
 from app.chat_history.extractor import collect_hydration_message_ids, record_versions
 from app.chat_history.har_importer import import_chat_object
 from app.notion_client import NotionOpusAPI, NotionUpstreamError
+from app.notion_hosts import notion_web_api
 
 ExistingMessageIdsLookup = Callable[[list[str]], set[str]]
 FreshMessageIdsLookup = Callable[[dict[str, int | None]], set[str]]
@@ -76,8 +77,20 @@ def _resolve_skip_message_ids(
     return skip
 
 
-TRANSCRIPTS_ENDPOINT = "https://www.notion.so/api/v3/getInferenceTranscriptsForUser"
-HYDRATE_ENDPOINT = "https://www.notion.so/api/v3/syncRecordValuesSpaceInitial"
+def transcripts_endpoint() -> str:
+    """Notion transcript list URL, using the safe web host."""
+
+    return notion_web_api("getInferenceTranscriptsForUser")
+
+
+def hydrate_endpoint() -> str:
+    """Notion record hydration URL, using the safe web host."""
+
+    return notion_web_api("syncRecordValuesSpaceInitial")
+
+
+TRANSCRIPTS_ENDPOINT = transcripts_endpoint()
+HYDRATE_ENDPOINT = hydrate_endpoint()
 
 
 def _merge_bundle(target: dict[str, Any], source: dict[str, Any]) -> None:
@@ -123,7 +136,7 @@ def _post_json(client: NotionOpusAPI, url: str, payload: dict[str, Any]) -> dict
     response = client._scraper.post(  # noqa: SLF001 - reusing the client transport and auth headers
         url,
         # pylint: disable-next=protected-access
-        headers=client._build_chat_history_headers(),  # noqa: SLF001 - shared header shape already exists on the client
+        headers=client._build_chat_history_headers(url),  # noqa: SLF001
         json=payload,
         timeout=(15, 60),
     )
@@ -241,7 +254,7 @@ def hydrate_message_ids_from_notion(
                 for message_id in batch
             ]
         }
-        hydrate_obj = _post_json(client, HYDRATE_ENDPOINT, hydrate_payload)
+        hydrate_obj = _post_json(client, hydrate_endpoint(), hydrate_payload)
         bundle["endpoint_counts"]["syncRecordValuesSpaceInitial"] += 1
         hydration_batches += 1
         hydrate_bundle = import_chat_object(hydrate_obj)
@@ -326,7 +339,7 @@ def hydrate_thread_ids_from_notion(
                 for thread_id in batch
             ]
         }
-        hydrate_obj = _post_json(client, HYDRATE_ENDPOINT, payload)
+        hydrate_obj = _post_json(client, hydrate_endpoint(), payload)
         hydration_batches += 1
         bundle["endpoint_counts"]["syncRecordValuesSpaceInitial"] += 1
         hydrated = import_chat_object(hydrate_obj)
@@ -366,7 +379,7 @@ def hydrate_thread_record_from_notion(client: NotionOpusAPI, thread_id: str) -> 
             }
         ]
     }
-    hydrate_obj = _post_json(client, HYDRATE_ENDPOINT, payload)
+    hydrate_obj = _post_json(client, hydrate_endpoint(), payload)
     bundle = import_chat_object(hydrate_obj)
     for raw_record in bundle.get("raw_records") or []:
         if isinstance(raw_record, dict):
@@ -564,7 +577,7 @@ def sync_chat_history_from_notion(
             if cursor:
                 payload["cursor"] = cursor
 
-            page_obj = _post_json(client, TRANSCRIPTS_ENDPOINT, payload)
+            page_obj = _post_json(client, transcripts_endpoint(), payload)
             pages_scanned += 1
             bundle["endpoint_counts"]["getInferenceTranscriptsForUser"] += 1
 
