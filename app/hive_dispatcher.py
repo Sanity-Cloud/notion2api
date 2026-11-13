@@ -30,6 +30,7 @@ from app.hive_chatgpt_review import (
     ReviewerCancelled,
     ReviewerOutcomeUnknown,
     ReviewerTransport,
+    reconcile_chatgpt_review,
     run_chatgpt_review,
 )
 from app.hive_materialization import (
@@ -1337,7 +1338,9 @@ class HiveExecutionDispatcherStore:
             "performed_external_effect": False,
         }
 
-    def _agent_memory_loadout_context(self, *, execution_id: str):
+    def _agent_memory_loadout_context(
+        self, *, execution_id: str, readonly_recovery: bool = False,
+    ):
         from app.hive_agent_memory_loadout import AgentMemoryLoadoutContext
 
         with self._connect() as conn:
@@ -1379,12 +1382,14 @@ class HiveExecutionDispatcherStore:
                 (str(execution["receipt_id"]),),
             ).fetchone()
 
-        if not mission or str(mission["status"]).upper() != "ACTIVE":
+        if not mission or (
+            not readonly_recovery and str(mission["status"]).upper() != "ACTIVE"
+        ):
             raise HiveTransitionError("Agent Memory loadout requires an ACTIVE mission.")
         if (
             not unit
             or str(unit["mission_id"]) != str(execution["mission_id"])
-            or str(unit["status"]).upper() != "ACTIVE"
+            or (not readonly_recovery and str(unit["status"]).upper() != "ACTIVE")
         ):
             raise HiveTransitionError("Agent Memory loadout requires an ACTIVE bound work unit.")
         expected = (
@@ -1398,9 +1403,9 @@ class HiveExecutionDispatcherStore:
             str(worker_lease["worker_id"]),
         ) != expected:
             raise HiveTransitionError("Agent Memory loadout worker lease binding mismatch.")
-        if str(worker_lease["status"]).upper() != LeaseStatus.ACTIVE.value:
+        if not readonly_recovery and str(worker_lease["status"]).upper() != LeaseStatus.ACTIVE.value:
             raise HiveTransitionError("Agent Memory loadout requires an ACTIVE worker lease.")
-        if int(worker_lease["expires_at"] or 0) <= self._now_ms():
+        if not readonly_recovery and int(worker_lease["expires_at"] or 0) <= self._now_ms():
             raise HiveTransitionError("Agent Memory loadout worker lease has expired.")
         if not receipt or (
             str(receipt["mission_id"]),
@@ -1408,7 +1413,7 @@ class HiveExecutionDispatcherStore:
             str(receipt["worker_id"]),
         ) != expected:
             raise HiveTransitionError("Agent Memory loadout dispatch receipt binding mismatch.")
-        if str(receipt["status"]).upper() not in {
+        if not readonly_recovery and str(receipt["status"]).upper() not in {
             DispatchStatus.READY.value,
             DispatchStatus.ACKNOWLEDGED.value,
         }:
@@ -1505,6 +1510,62 @@ class HiveExecutionDispatcherStore:
                 f"Compiled adapter implementation is unavailable: {implementation_id}"
             )
         return runner(payload, cancelled)
+
+    def inspect_chatgpt_review_reconciliation(
+        self, *, execution_id: str, actor: str,
+        governance_authorization: dict[str, Any] | None = None,
+        human_approval: bool = False, stale_after_ms: int = 30000,
+    ) -> dict[str, Any]:
+        """A2 read-only recovery; never invokes submit or upgrades task status.
+
+        A crashed worker may have posted a provider turn before the job ID was
+        returned. Read its original key from the persisted Hive execution and
+        locate the provider operation through the qualified transport. Review
+        completion or resolution remains a distinct governed step.
+        """
+        try:
+            require_governed_authorization(
+                governance_authorization, required_authority="A2",
+                legacy_human_approval=human_approval,
+            )
+        except GovernedAuthorizationError as exc:
+            raise HiveTransitionError(str(exc)) from exc
+        self._required(actor, "actor")
+        if self._chatgpt_review_transport is None:
+            raise HiveTransitionError(
+                "Qualified owner-bound ChatGPT reviewer transport is not configured."
+            )
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM hive_dispatch_executions WHERE execution_id = ?",
+                (self._required(execution_id, "execution_id"),),
+            ).fetchone()
+            if not row:
+                raise HiveNotFoundError(f"Execution not found: {execution_id}")
+            execution = self._execution_from_row(row)
+        if execution.implementation_id != "builtin.aigentai_chatgpt_review.v1":
+            raise HiveTransitionError("Execution is not a ChatGPT review.")
+        if execution.status not in {
+            ExecutionStatus.CLAIMED.value, ExecutionStatus.RUNNING.value,
+            ExecutionStatus.OUTCOME_UNKNOWN.value,
+        }:
+            raise HiveTransitionError(
+                f"Review execution cannot be inspected from {execution.status}."
+            )
+        if (execution.status != ExecutionStatus.OUTCOME_UNKNOWN.value
+                and self._now_ms() - execution.updated_at
+                < max(0, int(stale_after_ms))):
+            raise HiveTransitionError(
+                "Review execution is not stale; do not race an active worker."
+            )
+        context = self._agent_memory_loadout_context(
+            execution_id=execution_id, readonly_recovery=True,
+        )
+        result = reconcile_chatgpt_review(
+            context=context, payload=execution.request_payload,
+            transport=self._chatgpt_review_transport,
+        )
+        return {**result, "inspection_only": True}
 
     def _update_execution(
         self,

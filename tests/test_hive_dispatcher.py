@@ -1053,3 +1053,73 @@ def test_chatgpt_reviewer_stale_claim_is_never_resubmitted(tmp_path, monkeypatch
     assert dispatcher.get_execution(
         execution_id=execution.execution_id
     ).executions[0].status == ExecutionStatus.CLAIMED.value
+
+def test_chatgpt_reconciliation_probe_is_readonly_and_never_replays(
+    tmp_path, monkeypatch,
+):
+    dispatcher, materialization, workforce, _runtime = _stores(tmp_path)
+    worker = _appoint(
+        workforce, worker_id="copilot-review-inspector",
+        competencies=["chatgpt_review"], authority="A1",
+    )
+    plan = _materialize_one(
+        materialization, worker.worker_id, plan_id="review-probe",
+        competency="chatgpt_review", authority="A1",
+    )
+    adapter = _enable(dispatcher, "builtin.aigentai_chatgpt_review.v1")
+    assert adapter.requires_independent_review
+
+    def crash(_execution_id, *, actor):
+        raise RuntimeError(f"pre-provider-interrupted:{actor}")
+
+    monkeypatch.setattr(dispatcher, "_execute_existing", crash)
+    with pytest.raises(RuntimeError, match="pre-provider-interrupted"):
+        dispatcher.execute_dispatch(
+            plan_id=plan.plan_id, work_unit_id=plan.work_unit_ids[0],
+            adapter_id=adapter.adapter_id,
+            requested_capability="chatgpt_review",
+            payload={"lane": "AG002", "evidence_sha256": "a" * 64},
+            requested_writable_domains=[], timeout_ms=500,
+            actor=worker.worker_id, human_approval=True,
+            idempotency_key="review-probe-accepted-once",
+        )
+    execution = dispatcher.get_execution(plan_id=plan.plan_id).executions[0]
+    assert execution.status == ExecutionStatus.CLAIMED.value
+    dispatcher._chatgpt_review_transport = object()
+    with pytest.raises(HiveTransitionError, match="Governance-plan authorization"):
+        dispatcher.inspect_chatgpt_review_reconciliation(
+            execution_id=execution.execution_id, actor="unauthorized",
+        )
+    with pytest.raises(HiveTransitionError, match="not stale"):
+        dispatcher.inspect_chatgpt_review_reconciliation(
+            execution_id=execution.execution_id, actor="governance",
+            human_approval=True, stale_after_ms=99999999,
+        )
+    with sqlite3.connect(dispatcher.path) as conn:
+        conn.execute(
+            "UPDATE hive_worker_leases SET expires_at = 1 WHERE lease_id = ?",
+            (execution.lease_id,),
+        )
+        conn.commit()
+    captured = []
+
+    def read_only_reconcile(*, context, payload, transport):
+        captured.append((context, payload, transport))
+        return {"job_id": "existing-native-job-101",
+                "reconciled_without_replay": True, "submission_attempts": 0}
+
+    monkeypatch.setattr(
+        "app.hive_dispatcher.reconcile_chatgpt_review", read_only_reconcile,
+    )
+    result = dispatcher.inspect_chatgpt_review_reconciliation(
+        execution_id=execution.execution_id, actor="governance",
+        human_approval=True, stale_after_ms=0,
+    )
+    assert result["inspection_only"] is True
+    assert result["submission_attempts"] == 0
+    assert len(captured) == 1
+    assert captured[0][0].worker_id == worker.worker_id
+    assert captured[0][1]["lane"] == "AG002"
+    assert dispatcher.get_execution(
+        execution_id=execution.execution_id
+    ).executions[0].status == ExecutionStatus.CLAIMED.value

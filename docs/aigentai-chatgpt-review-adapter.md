@@ -27,17 +27,33 @@ are validated using the existing Agent Memory context check. The adapter
 binds the original workspace, user, profile, worker, work unit, execution ID
 and evidence hash to a deterministic provider idempotency key.
 
-The trusted transport must submit exactly once and read back the same durable
-job. Completion requires a matching provider `chatgpt`, account profile,
-verified native conversation ID, and SHA-256 of the bounded response text.
-Any missing proof, readback timeout, post-submit cancellation or scope mismatch
-becomes `OUTCOME_UNKNOWN` without a semantic retry.
+The trusted transport must first resolve a bounded source excerpt and manifest
+from the user's evidence SHA-256. The source bytes, repository, PR number,
+exact head/base commits, canonicalization version and governed source boundary
+are checked before creating a provider effect. The source excerpt is included
+in the compiled prompt rather than asking a reviewer to assess a bare hash.
+
+The transport must durably reserve the original operation ID and prompt/manifest
+hashes **before** any provider effect, submit at most once, and support
+`lookup_by_idempotency_key` without submitting. This is an interface
+requirement, not yet an accepted real transport implementation. Completion
+requires a matching original job and operation ID, provider, immutable owner/
+workspace/user/profile/lease/receipt binding, native conversation ID, compiled
+prompt hash, exact source manifest hash, and bounded response-text SHA-256.
+Missing proof or uncertain results remain `OUTCOME_UNKNOWN` without replay.
+The trusted transport receives only an immutable, allowlisted identity snapshot,
+not the unrestricted mission object or browser credentials.
 
 Hive execution deadline expiration is also `OUTCOME_UNKNOWN` for this
 adapter rather than generic retryable `TIMED_OUT`. Generic stale
 `CLAIMED` or `RUNNING` recovery is explicitly denied for this
-adapter, even with A2 recovery authorization. Only read-only reconciliation
-of the original provider job is permitted.
+adapter. A separately A2-authorized
+`inspect_chatgpt_review_reconciliation` path can inspect even an expired
+original worker lease using its persisted identity and the original idempotency
+key, **read-only**, never submitting or automatically marking the task complete.
+A distinct governed reconciliation decision and independent review remain
+necessary before accepting any outcome. Concurrency and late worker finalization
+remain release-qualification tests; a fake transport does not establish them.
 
 ## Gates before any activation
 
@@ -47,10 +63,14 @@ of the original provider job is permitted.
    of the four requisitioned read-only specialist roles and a distinct
    independent governance reviewer. Requisition is not appointment.
 3. Review and implement a fixed-loopback, owner-bound transport with
-   server-held credentials and separate ChatGPT CDP/turn scope. Do not use
-   arbitrary shell/network execution or transfer Copilot/Arena credentials.
-4. Verify an original-gateway job ID, native user/assistant turn identity,
-   result hash, idempotency and unknown-outcome nonreplay across restart.
+   server-held credentials and separate ChatGPT CDP/turn scope. It must resolve
+   a trusted source manifest/excerpt, durably reserve the original operation
+   before submission, and locate original jobs by idempotency key after crash.
+   Do not use arbitrary shell/network execution or transfer credentials.
+4. Prove real durable reservation, native user/assistant turn identity,
+   result hash, account/worker/source binding, no duplicate turns under
+   concurrent requests, late-completion race safety, and read-only recovery
+   after losing a returned job ID. Existing tests are mock-only.
 5. Independently approve/enable the adapter, read its persisted enabled
    revision, materialize an appointed Hive lease and test **one** new bounded
    smoke. The earlier platform-rejected direct dispatch must not be retried
