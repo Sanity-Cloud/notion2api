@@ -27,11 +27,23 @@ are validated using the existing Agent Memory context check. The adapter
 binds the original workspace, user, profile, worker, work unit, execution ID
 and evidence hash to a deterministic provider idempotency key.
 
-The trusted transport must first resolve a bounded source excerpt and manifest
-from the user's evidence SHA-256. The source bytes, repository, PR number,
-exact head/base commits, canonicalization version and governed source boundary
-are checked before creating a provider effect. The source excerpt is included
-in the compiled prompt rather than asking a reviewer to assess a bare hash.
+The trusted transport must resolve a bounded source excerpt and manifest
+from the supplied evidence SHA-256. **Expected** repository, PR number, exact
+head/base commits, Git tree label, source mode, paths, excerpt ranges and hashes
+come from the previously governed worker-lease `source_boundary` JSON, not
+from the resolver that returns source bytes. A mismatched but syntactically
+valid resolver manifest fails before reservation or submission. The source
+excerpt is included as JSON-encoded **untrusted evidence**, separated from
+review instructions; source comments cannot grant permissions or supply
+test/approval claims.
+
+The allowlisted governed JSON currently fits only within a 1,280-character
+source-boundary field; larger full-diff/file manifests require a separately
+approved immutable evidence-reference scheme. This is **claim consistency**,
+not independent Git blob/tree verification: a real source-fetch qualification
+must prove completeness for `full_diff`, `full_files`, or exact `excerpt`
+path/ranges, and must independently bind the claimed commit/tree IDs. No
+unit test or self-reported manifest substitutes for that proof.
 
 The transport must durably reserve the original operation ID and prompt/manifest
 hashes **before** any provider effect, submit at most once, and support
