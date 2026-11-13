@@ -26,7 +26,7 @@ jobs:
       - name: Install application dependencies and test tools
         run: |
           python -m pip install -r requirements.txt
-          python -m pip install pytest pylint ruff
+          python -m pip install pytest==9.0.3 pylint==4.1.3 ruff==0.15.21
       - name: Credential-free source and recovery tests
         run: |
           python -m pytest -q tests/test_hive_dispatcher.py tests/test_hive_agent_memory_loadout.py tests/test_hive_external_effects.py tests/test_hive_chatgpt_review.py tests/test_file_discovery_routing.py
