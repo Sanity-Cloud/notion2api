@@ -179,6 +179,7 @@ def test_schema_is_additive_and_builtin_adapters_start_disabled(tmp_path):
         "builtin.bounded_delay.v1",
         "builtin.sandbox_artifact.v1",
         "builtin.agent_memory_loadout.v1",
+        "builtin.aigentai_chatgpt_review.v1",
     }
     assert {item.status for item in adapters} == {AdapterStatus.DISABLED.value}
 
@@ -1002,3 +1003,53 @@ def test_idempotent_recovery_replay_resumes_after_second_crash(tmp_path, monkeyp
         materialization.get_materialization(plan_id=plan.plan_id).status
         == MaterializationStatus.READY_FOR_FAN_IN.value
     )
+
+def test_chatgpt_reviewer_stale_claim_is_never_resubmitted(tmp_path, monkeypatch):
+    dispatcher, materialization, workforce, _runtime = _stores(tmp_path)
+    worker = _appoint(
+        workforce, worker_id="review-no-replay",
+        competencies=["chatgpt_review"], authority="A1",
+    )
+    plan = _materialize_one(
+        materialization, worker.worker_id,
+        plan_id="review-no-replay", competency="chatgpt_review",
+        authority="A1",
+    )
+    adapter = _enable(dispatcher, "builtin.aigentai_chatgpt_review.v1")
+    assert adapter.requires_independent_review
+    assert adapter.requires_human_approval
+
+    def interrupted(_execution_id, *, actor):
+        raise RuntimeError(f"crash-before-durable-status:{actor}")
+
+    monkeypatch.setattr(dispatcher, "_execute_existing", interrupted)
+    with pytest.raises(RuntimeError, match="crash-before-durable-status"):
+        dispatcher.execute_dispatch(
+            plan_id=plan.plan_id,
+            work_unit_id=plan.work_unit_ids[0],
+            adapter_id=adapter.adapter_id,
+            requested_capability="chatgpt_review",
+            payload={"lane": "AG002", "evidence_sha256": "a" * 64},
+            requested_writable_domains=[],
+            timeout_ms=500,
+            actor=worker.worker_id,
+            human_approval=True,
+            idempotency_key="review-no-replay",
+        )
+    execution = dispatcher.get_execution(plan_id=plan.plan_id).executions[0]
+    assert execution.status == ExecutionStatus.CLAIMED.value
+    with sqlite3.connect(dispatcher.path) as conn:
+        conn.execute(
+            "UPDATE hive_dispatch_executions SET updated_at = 0 WHERE execution_id = ?",
+            (execution.execution_id,),
+        )
+        conn.commit()
+    with pytest.raises(HiveTransitionError, match="cannot be re-executed"):
+        dispatcher.recover_execution(
+            execution_id=execution.execution_id,
+            actor="test-governance", reason="Stale unknown provider effect.",
+            stale_after_ms=0, human_approval=True,
+        )
+    assert dispatcher.get_execution(
+        execution_id=execution.execution_id
+    ).executions[0].status == ExecutionStatus.CLAIMED.value
