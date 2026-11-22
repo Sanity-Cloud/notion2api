@@ -16,12 +16,13 @@ import webbrowser
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 import requests
 from websocket import create_connection
 
-from app.notion_hosts import notion_cookie_domain, notion_web_origin
+from app.notion_hosts import notion_app_origin, notion_cookie_domain, notion_web_origin
 
 
 BASE_URL = notion_web_origin()
@@ -199,6 +200,25 @@ class _CDPClient:
             pass
 
 
+def _looks_like_notion_url(url: str) -> bool:
+    """Match official Notion hosts or the configured endpoint, never URL substrings."""
+    try:
+        parsed = urlsplit(str(url or ""))
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if parsed.scheme not in {"http", "https"} or not hostname:
+            return False
+        configured_hosts = {
+            (urlsplit(origin).hostname or "").lower()
+            for origin in (BASE_URL, notion_app_origin())
+        }
+        return hostname in configured_hosts or any(
+            hostname == domain or hostname.endswith("." + domain)
+            for domain in ("notion.so", "notion.com", "notion.site")
+        )
+    except ValueError:
+        return False
+
+
 def _find_debug_target(port: int) -> dict[str, Any] | None:
     try:
         targets = _get_json(f"http://127.0.0.1:{port}/json/list")
@@ -209,13 +229,13 @@ def _find_debug_target(port: int) -> dict[str, Any] | None:
     if not isinstance(items, list):
         return None
 
-    for item in items:
-        if not isinstance(item, dict):
-            continue
+    # Prefer a real Notion page, never a chrome:// browser_ui target.
+    pages = [item for item in items if isinstance(item, dict) and item.get("type") == "page"]
+    for item in pages:
         url = str(item.get("url") or "")
-        if "notion.so" in url or "accounts.google.com" in url:
+        if _looks_like_notion_url(url) or (urlsplit(url).hostname or "").lower() == "accounts.google.com":
             return item
-    return items[0] if items else None
+    return pages[0] if pages else None
 
 
 def _parse_cookie_string(cookie_string: str) -> dict[str, str]:
@@ -248,7 +268,7 @@ def _extract_cookies_from_cdp(port: int) -> dict[str, str]:
         try:
             current_url = client.call("Runtime.evaluate", {"expression": "location.href", "returnByValue": True})
             current_href = str(current_url.get("result", {}).get("value") or "") if isinstance(current_url, dict) else ""
-            if "notion.so" not in current_href:
+            if not _looks_like_notion_url(current_href):
                 client.call("Page.navigate", {"url": AI_URL})
                 time.sleep(2)
         except Exception:
@@ -268,17 +288,28 @@ def _extract_cookies_from_cdp(port: int) -> dict[str, str]:
         except Exception:
             pass
 
-        cookie_result = client.call("Network.getCookies", {"urls": [BASE_URL, AI_URL]})
-        cookies_list = cookie_result.get("cookies", [])
-        if not isinstance(cookies_list, list):
-            return cookies
-        for item in cookies_list:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name") or "").strip()
-            value = str(item.get("value") or "").strip()
-            if name:
-                cookies[name] = value
+        def _collect_notion_cookies(items: Any) -> None:
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                domain = str(item.get("domain") or "").lstrip(".").lower()
+                if not _looks_like_notion_url(f"https://{domain}/"):
+                    continue
+                name = str(item.get("name") or "").strip()
+                value = str(item.get("value") or "").strip()
+                if name:
+                    cookies[name] = value
+
+        cookie_urls = list(dict.fromkeys((BASE_URL, AI_URL, notion_app_origin())))
+        cookie_result = client.call("Network.getCookies", {"urls": cookie_urls})
+        _collect_notion_cookies(cookie_result.get("cookies", []))
+        if not cookies.get("token_v2"):
+            try:
+                _collect_notion_cookies(client.call("Network.getAllCookies").get("cookies", []))
+            except Exception:
+                pass
         return cookies
     finally:
         client.close()
