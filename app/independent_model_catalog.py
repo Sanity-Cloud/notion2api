@@ -82,7 +82,9 @@ def curated_ui_envelope(
     for label in OBSERVED_LABELS:
         historical = records.get(_normalize_label(label), {})
         previous_id = str(historical.get("canonical_id") or "").strip()
-        model_id = previous_id or _unknown_id(label)
+        # A historical route ID is evidence, not a currently authorized model ID.
+        # Expose only a deliberately non-routable identifier until verified.
+        model_id = _unknown_id(label)
         if model_id in used_ids:
             raise ValueError(f"Duplicate catalog candidate ID: {model_id}")
         used_ids.add(model_id)

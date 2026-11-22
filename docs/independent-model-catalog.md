@@ -31,17 +31,26 @@ prove any submission worked or reveal GPT-6.2 Sol's internal route ID.
 
 ## Implementation and activation
 
-`NOTION_MODEL_CATALOG_SOURCE=curated_ui` switches discovery to the
-local, versioned `app/independent_model_catalog.py` evidence snapshot.
-It does **not** invoke Notion's `getAvailableModels`. Entries carry
-`route_verified=false`, `selectable=false`, and source provenance;
-unknown names use `unverified:<slug>`, never a fabricated provider ID.
-The resolver rejects these routes with `model_route_unverified` until a
-separately approved, receipt-backed route-verification mechanism is added.
+`NOTION_MODEL_CATALOG_DISCOVERY_SOURCE=curated_ui` switches **only model
+listing** to the versioned `app/independent_model_catalog.py` evidence
+snapshot, without calling Notion's `getAvailableModels`. Chat selection
+continues to use its separately configured route source. The legacy
+`NOTION_MODEL_CATALOG_SOURCE=curated_ui` also exists for isolated tests,
+but is *not* a production route-activation option.
 
-The previous `notion_picker` mode remains the code default for compatibility
-until migration gates pass. Do **not** switch production to the curated mode
-until active routes are verified, because the snapshot is display-only.
+All UI catalog entries carry `route_verified=false`, `selectable=false`,
+and non-routable public IDs `unverified:<slug>`. Any historical provider ID
+is exposed only as `previously_observed_route_id` for later investigation.
+The resolver refuses unverified entries with `model_route_unverified` until
+a separately approved, receipt-backed route-verification mechanism exists.
+
+The previous `notion_picker` route mode remains the default while routes
+are unverified. The independent UI listing is allowed only for the canonical
+**Sanity Monkey workspace ID**, with a fail-closed cross-workspace guard.
+Listing obtains a non-routing metadata client, rather than performing an
+account health/cooldown selection, and does not contact the model-picker API.
+Do **not** switch production chat selection to curated mode before routes are
+verified, because the snapshot is display-only.
 
 Source freshness is **date-granular** (2026-11-22, not a falsely precise
 capture timestamp); it expires for route authority after seven days.

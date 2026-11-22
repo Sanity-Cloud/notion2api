@@ -7,7 +7,8 @@ import uuid
 
 from app.logger import logger
 from app.model_restriction_cache import ModelRestrictionCache
-from app.independent_model_catalog import curated_ui_envelope
+from app.independent_model_catalog import WORKSPACE_KEY, curated_ui_envelope
+from app.workspace_routing import SANITY_MONKEY
 from app.model_catalog import (
     CatalogEnvelope,
     ModelCatalogService,
@@ -898,10 +899,19 @@ def get_model_catalog_for_client(
     client,
     *,
     allow_static_fallback: bool = False,
+    source_override: str | None = None,
 ) -> CatalogEnvelope:
-    catalog_source = os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker").strip().lower()
+    catalog_source = (
+        source_override or os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker")
+    ).strip().lower()
     if catalog_source == "curated_ui":
-        # This read-only catalog does not call Notion's broken model picker.
+        # Never present one workspace's UI observations in another workspace.
+        space_id = str(getattr(client, "space_id", "") or "").replace("-", "").casefold()
+        expected_id = SANITY_MONKEY.contract.workspace_id.replace("-", "").casefold()
+        if WORKSPACE_KEY != SANITY_MONKEY.key or space_id != expected_id:
+            raise ModelCatalogUnavailable(
+                "The independent model catalog is not verified for this workspace."
+            )
         envelope = curated_ui_envelope(_static_catalog_records())
     elif catalog_source == "notion_picker":
         service = ModelCatalogService(_SHARED_RESTRICTION_CACHE)
@@ -917,8 +927,18 @@ def get_model_catalog_for_client(
 
 def list_model_metadata_for_request(request) -> tuple[list[dict[str, object]], dict[str, object]]:
     pool = request.app.state.account_pool
-    client = pool.get_client(wait_if_cooling=False)
-    envelope = get_model_catalog_for_client(client, allow_static_fallback=True)
+    discovery_source = os.getenv("NOTION_MODEL_CATALOG_DISCOVERY_SOURCE", "").strip()
+    # A read-only UI evidence catalog must not depend on healthy account routing,
+    # queue admission, or cursor rotation. The metadata client provides a bound
+    # workspace identity without submitting a Notion model-picker request.
+    client = (
+        pool.get_metadata_client()
+        if discovery_source.lower() == "curated_ui"
+        else pool.get_client(wait_if_cooling=False)
+    )
+    envelope = get_model_catalog_for_client(
+        client, allow_static_fallback=True, source_override=discovery_source or None
+    )
     receipt = envelope.receipt()
     if envelope.source == "curated_ui":
         receipt.update({
