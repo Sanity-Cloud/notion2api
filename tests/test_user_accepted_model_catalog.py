@@ -9,9 +9,15 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from app import model_registry
-from app.api.chat import _apply_notion_request_options
+from app.api.chat import (
+    _apply_notion_request_options,
+    _validate_request_model_selection,
+    _validate_final_model_surface,
+)
 from app.conversation import build_standard_transcript
 from app.notion_client import NotionOpusAPI, NotionUpstreamError
 from app.schemas import ChatCompletionRequest, ChatMessage
@@ -161,8 +167,12 @@ def test_accepted_cache_missing_does_not_fall_back_to_static(tmp_path, monkeypat
     assert client.calls == 0
 
 
-def test_accepted_unknown_static_model_preserves_exact_outbound_route(accepted_cache):
+@pytest.mark.parametrize("mode", ["accepted_cache", " ACCEPTED_CACHE ", "Accepted_Cache"])
+def test_accepted_unknown_static_model_preserves_exact_outbound_route(
+    accepted_cache, monkeypatch, mode
+):
     """Request -> legacy builder -> accepted binder must not become Terra."""
+    monkeypatch.setenv("NOTION_MODEL_CATALOG_SOURCE", mode)
     _cache, client = accepted_cache
     selection = model_registry.resolve_model_selection(client, "Future Routed 1")
     assert selection["canonical_id"] == "future-routed-v1"
@@ -251,9 +261,6 @@ def test_accepted_pin_concurrent_workers(accepted_cache):
 
 
 def test_attachment_surface_fails_with_client_error(accepted_cache):
-    from fastapi import HTTPException
-    from app.api.chat import _validate_final_model_surface
-
     _cache, client = accepted_cache
     request = ChatCompletionRequest(
         model="future-routed-v1", messages=[ChatMessage(role="user", content="check")]
@@ -281,7 +288,11 @@ def test_accepted_cache_rejects_colliding_display_names(accepted_cache, monkeypa
         model_registry.get_model_catalog_for_client(client)
 
 
-def test_http_dispatch_payload_uses_exact_accepted_route(accepted_cache):
+@pytest.mark.parametrize("mode", ["accepted_cache", " ACCEPTED_CACHE ", "Accepted_Cache"])
+def test_http_dispatch_payload_uses_exact_accepted_route(
+    accepted_cache, monkeypatch, mode
+):
+    monkeypatch.setenv("NOTION_MODEL_CATALOG_SOURCE", mode)
     """Inspect the final HTTP JSON, not only catalog resolution."""
     _cache, accepted_client = accepted_cache
     client = NotionOpusAPI({
@@ -317,3 +328,82 @@ def test_http_dispatch_payload_uses_exact_accepted_route(accepted_cache):
     assert request_payload["threadType"] == "workflow"
     assert config["value"]["model"] == "provider-special-v1"
     assert config["value"]["model"] != "orchid-muffin"
+
+
+@pytest.mark.parametrize("value", ["", "unknown", "  ACCEPTED_CACHE_X  "])
+def test_catalog_source_unknown_values_fail_closed(accepted_cache, monkeypatch, value):
+    _cache, client = accepted_cache
+    monkeypatch.setenv("NOTION_MODEL_CATALOG_SOURCE", value)
+    with pytest.raises(ModelCatalogUnavailable, match="Unrecognized"):
+        model_registry.get_model_catalog_for_client(client)
+    assert client.calls == 0
+
+
+def test_accepted_alias_cannot_shadow_another_canonical_id(
+    accepted_cache, monkeypatch
+):
+    cache, client = accepted_cache
+    key = ModelCatalogService.cache_key(client.space_id)
+    snapshot = cache.get(key, allow_stale=True)["payload"]
+    # 'terra' is already a configured alias for orchid-muffin.
+    snapshot["models"][2]["canonical_id"] = "terra"
+    payload = dict(snapshot)
+    payload.pop("snapshot_sha256", None)
+    new_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    snapshot["snapshot_sha256"] = new_hash
+    lease = cache.claim_refresh(key, owner_id="alias-collision")
+    assert cache.store(key, snapshot, lease_token=lease)
+    monkeypatch.setattr(model_registry, "ACCEPTED_CACHE_SHA256", new_hash)
+    with pytest.raises(ModelCatalogUnavailable, match="conflicting model lookup"):
+        model_registry.get_model_catalog_for_client(client)
+    assert client.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("scenario", "status", "code"),
+    [
+        ("missing", 503, "model_catalog_unavailable"),
+        ("sha_mismatch", 503, "model_catalog_unavailable"),
+        ("wrong_workspace", 503, "model_catalog_unavailable"),
+        ("disabled", 400, "model_disabled"),
+        ("unsupported_attachment", 400, "model_surface_not_supported"),
+    ],
+)
+def test_fastapi_model_error_contract_without_remote_effects(
+    accepted_cache, monkeypatch, tmp_path, scenario, status, code
+):
+    _cache, client = accepted_cache
+    if scenario == "missing":
+        monkeypatch.setattr(
+            model_registry, "_SHARED_RESTRICTION_CACHE",
+            ModelRestrictionCache(tmp_path / "missing-accepted.sqlite3"),
+        )
+    elif scenario == "sha_mismatch":
+        monkeypatch.setattr(model_registry, "ACCEPTED_CACHE_SHA256", "0" * 64)
+    elif scenario == "wrong_workspace":
+        client = OfflinePickerClient(SANITY_MANAGEMENT.contract.workspace_id)
+
+    app = FastAPI()
+
+    @app.post("/model-selection")
+    def selection_endpoint(request: ChatCompletionRequest):
+        _validate_request_model_selection(request, client)
+        if scenario == "unsupported_attachment":
+            _validate_final_model_surface(
+                request, client, [{"filename": "sample.txt"}],
+            )
+        return {"selected": request.model}
+
+    requested = "orlando-quinn" if scenario == "disabled" else "future-routed-v1"
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/model-selection",
+            json={"model": requested, "messages": [
+                {"role": "user", "content": "probe"}
+            ]},
+        )
+    assert response.status_code == status
+    assert response.json()["detail"]["error"]["code"] == code
+    assert client.calls == 0

@@ -180,3 +180,37 @@ validate the managed launcher and rollback state, and perform one
 authorized native model canary with verified outbound identity and
 provider response. No provider authorization claim follows merely
 from a successful local resolver test.
+
+
+## Independent Copilot review — 2026-11-22 (HEAD `2175987`)
+
+AiGentAI Copilot Think Deeper completed a source-grounded review and
+persisted job `chatjob-61983de2035d443b93fa96c3`. It confirmed the
+previous Terra fallback, immutable snapshot, and attachment-surface fixes
+in the literal `accepted_cache` execution path, but returned **NO-GO**
+on that head for a configuration-normalization split.
+
+The review identified that `model_registry.py` used `.strip().lower()`,
+while chat construction and Notion transport required exact raw
+`accepted_cache`. Case or surrounding whitespace could therefore cause
+the registry to approve the pinned model while the transport substituted
+the legacy Terra fallback. It also requested consistent API error
+classification and lookup-key collision protection.
+
+The successor patch introduces one shared catalog-source parser,
+one normalized selectable-key rule across canonical IDs, display names,
+public names and aliases, and maps late model-catalog failures to the
+same 503 OpenAI-compatible error instead of POOL_COOLING. Invalid modes
+fail closed; tests cover mixed case, whitespace, erroneous modes,
+exact HTTP payload route IDs and controlled failure responses.
+
+AiGentAI ChatGPT's separate pinned job
+`chatjob-cc8ff8d7a5c84defafd17bad` timed out at
+`send_action_started` with an **unknown outcome** and no result receipt.
+It was not resent; no ChatGPT review is claimed. The Copilot verdict
+applies to the *reviewed* head only, not to a successor until separately
+reviewed. Context7 FastAPI error guidance was consulted against
+installed FastAPI 0.136.1 and Pydantic 2.13.3.
+
+The corrected source remains a **draft / release NO-GO** until final
+tests, exact-head independent review and authorized native canary.

@@ -72,7 +72,12 @@ def test_curated_mode_does_not_contact_notions_model_picker(monkeypatch):
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                account_pool=SimpleNamespace(get_client=lambda **_: client)
+                account_pool=SimpleNamespace(
+                    get_metadata_client=lambda: client,
+                    get_client=lambda **_: (_ for _ in ()).throw(
+                        AssertionError("UI discovery must not rotate accounts")
+                    ),
+                )
             )
         )
     )

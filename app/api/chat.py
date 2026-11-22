@@ -29,7 +29,11 @@ from app.conversation import (
 from app.config import is_lite_mode
 from app.logger import logger
 from app.diagnostics import emit_diagnostic_event
-from app.model_catalog import ModelCatalogUnavailable, ModelSelectionError
+from app.model_catalog import (
+    ModelCatalogUnavailable,
+    ModelSelectionError,
+    get_model_catalog_source,
+)
 from app.model_registry import (
     get_model_route_resolution,
     resolve_model_selection,
@@ -232,7 +236,7 @@ def _apply_notion_request_options(
         instructions=instructions,
         reasoning_effort=req_body.reasoning_effort,
     )
-    if os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker") == "accepted_cache":
+    if get_model_catalog_source() == "accepted_cache":
         # The transcript builders still know only legacy static routes. Preserve
         # the already-validated canonical model until the client binds the
         # precise accepted-cache route for the final execution surface.
@@ -608,7 +612,7 @@ def _validate_final_model_surface(
     attachments: list[Any] | None,
 ) -> None:
     """Fail before any remote side effects when attachments change surface."""
-    if os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker") != "accepted_cache":
+    if get_model_catalog_source() != "accepted_cache":
         return
     if _request_computer_use_review(req_body):
         openai_error(
@@ -2612,6 +2616,14 @@ def _handle_lite_request(
                 retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
             ):
                 return _upstream_error_response(exc)
+        except ModelCatalogUnavailable as exc:
+            # A post-validation cache/route failure is not account cooldown.
+            # Preserve the 503 catalog error before a response is committed.
+            openai_error(
+                str(exc), "model_catalog_unavailable", status_code=503, param="model"
+            )
+        except ModelSelectionError as exc:
+            openai_error(str(exc), exc.code, status_code=400, param=exc.param)
         except RuntimeError as exc:
             _record_chat_runtime_diagnostic(
                 mode="lite",
@@ -3032,6 +3044,14 @@ def _handle_standard_request(
                 retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
             ):
                 return _upstream_error_response(exc)
+        except ModelCatalogUnavailable as exc:
+            # A post-validation cache/route failure is not account cooldown.
+            # Preserve the 503 catalog error before a response is committed.
+            openai_error(
+                str(exc), "model_catalog_unavailable", status_code=503, param="model"
+            )
+        except ModelSelectionError as exc:
+            openai_error(str(exc), exc.code, status_code=400, param=exc.param)
         except RuntimeError as exc:
             _record_chat_runtime_diagnostic(
                 mode="standard",
@@ -4055,6 +4075,14 @@ async def create_chat_completion(
                 retriable=exc.retriable, attempt=attempt, max_attempts=max_retries
             ):
                 return _upstream_error_response(exc)
+        except ModelCatalogUnavailable as exc:
+            # A post-validation cache/route failure is not account cooldown.
+            # Preserve the 503 catalog error before a response is committed.
+            openai_error(
+                str(exc), "model_catalog_unavailable", status_code=503, param="model"
+            )
+        except ModelSelectionError as exc:
+            openai_error(str(exc), exc.code, status_code=400, param=exc.param)
         except RuntimeError as exc:
             _record_chat_runtime_diagnostic(
                 mode="full",

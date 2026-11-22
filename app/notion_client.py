@@ -15,6 +15,7 @@ from app.notion_browser_headers import browser_request_headers, configured_notio
 from app.attachments.notion_upload import NotionAttachmentUploader, NotionAttachmentUploadError
 from app.attachments.models import UploadedAttachment
 from app.model_registry import get_notion_model
+from app.model_catalog import get_model_catalog_source
 from app.notion_admission import admitted_session
 from app.notion_hosts import (
     notion_app_api,
@@ -435,7 +436,7 @@ class NotionOpusAPI:
 
             notion_block = dict(block)
             notion_value = dict(value)
-            if os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker") == "accepted_cache":
+            if get_model_catalog_source() == "accepted_cache":
                 # A static registry fallback here silently replaced unknown
                 # accepted models with Terra. Bind the authorized route later.
                 notion_value["model"] = str(value.get("model", "") or "").strip()
@@ -2188,7 +2189,7 @@ class NotionOpusAPI:
             # a workflow and reference-image uploads must not downgrade it.
             thread_type = "markdown-chat"
             notion_transcript = self._with_thread_type(notion_transcript, thread_type)
-        if os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker") == "accepted_cache":
+        if get_model_catalog_source() == "accepted_cache":
             # Must occur before thread creation, attachment uploads, or inference.
             # The final surface, not the original workflow assumption, wins.
             notion_transcript = self._bind_accepted_model_route(notion_transcript, thread_type)

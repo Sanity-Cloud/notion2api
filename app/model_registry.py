@@ -1,6 +1,5 @@
-from app.core.models import normalize_model_id
+from app.core.models import normalize_model_lookup_key
 import os
-import re
 import threading
 import time
 import uuid
@@ -14,6 +13,7 @@ from app.model_catalog import (
     ModelCatalogService,
     ModelCatalogUnavailable,
     ModelSelectionError,
+    get_model_catalog_source,
     model_by_id,
     resolve_reasoning_effort,
 )
@@ -468,10 +468,7 @@ DEFAULT_MODEL = "terra"
 
 
 def _normalize_registry_model_name(model_name: str) -> str:
-    normalized = normalize_model_id(model_name)
-    candidate = str(normalized or "").strip().lower()
-    candidate = re.sub(r"[\s_]+", "-", candidate)
-    return re.sub(r"-+", "-", candidate).strip("-")
+    return normalize_model_lookup_key(model_name)
 
 
 def get_notion_model(model_name: str) -> str:
@@ -823,15 +820,22 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
         for raw in envelope.snapshot.get("models", [])
         if isinstance(raw, dict) and str(raw.get("canonical_id") or "").strip()
     }
-    active_aliases = (
-        {}
-        if envelope.source == "curated_ui"
-        else {
-            _normalize_registry_model_name(alias): target
-            for alias, target in MODEL_MAP.items()
-            if target in catalog_ids and _normalize_registry_model_name(alias)
-        }
-    )
+    active_aliases: dict[str, str] = {}
+    if envelope.source != "curated_ui":
+        for alias, target in MODEL_MAP.items():
+            key = _normalize_registry_model_name(alias)
+            if not key or target not in catalog_ids:
+                continue
+            existing = active_aliases.get(key)
+            if (
+                envelope.source == "user_accepted_cache"
+                and existing is not None
+                and existing != target
+            ):
+                raise ModelCatalogUnavailable(
+                    "The accepted model catalog has conflicting static aliases."
+                )
+            active_aliases[key] = target
     unavailable_aliases = {
         _normalize_registry_model_name(alias): target
         for alias, target in MODEL_MAP.items()
@@ -878,6 +882,32 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
                 ),
             }
         )
+    if envelope.source == "user_accepted_cache":
+        # A request can match any of these keys. Every normalized key must
+        # resolve unambiguously to one canonical ID, regardless of record order.
+        key_owners: dict[str, str] = {}
+        for model in enriched_models:
+            canonical_id = str(model["canonical_id"])
+            labels = [
+                canonical_id,
+                model.get("public_name"),
+                model.get("display_name"),
+                *(model.get("aliases") or []),
+            ]
+            for label in labels:
+                key = normalize_model_lookup_key(str(label or ""))
+                if not key:
+                    continue
+                owner = key_owners.setdefault(key, canonical_id)
+                if owner != canonical_id:
+                    raise ModelCatalogUnavailable(
+                        "The accepted catalog has conflicting model lookup keys."
+                    )
+        for alias, target in active_aliases.items():
+            if key_owners.get(alias, target) != target:
+                raise ModelCatalogUnavailable(
+                    "The accepted catalog has conflicting static alias targets."
+                )
     snapshot = dict(envelope.snapshot)
     snapshot["models"] = enriched_models
     snapshot["alias_reconciliation"] = {
@@ -908,9 +938,7 @@ def get_model_catalog_for_client(
     allow_static_fallback: bool = False,
     source_override: str | None = None,
 ) -> CatalogEnvelope:
-    catalog_source = (
-        source_override or os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker")
-    ).strip().lower()
+    catalog_source = get_model_catalog_source(source_override)
     if catalog_source == "curated_ui":
         # Never present one workspace's UI observations in another workspace.
         space_id = str(getattr(client, "space_id", "") or "").replace("-", "").casefold()
@@ -949,23 +977,16 @@ def get_model_catalog_for_client(
 def list_model_metadata_for_request(request) -> tuple[list[dict[str, object]], dict[str, object]]:
     pool = request.app.state.account_pool
     discovery_source = os.getenv("NOTION_MODEL_CATALOG_DISCOVERY_SOURCE", "").strip()
-    # A read-only UI evidence catalog must not depend on healthy account routing,
-    # queue admission, or cursor rotation. The metadata client provides a bound
-    # workspace identity without submitting a Notion model-picker request.
+    catalog_source = get_model_catalog_source(discovery_source or None)
+    # Static / accepted catalog reads use a non-routing metadata client;
+    # neither account rotation nor picker calls are needed for those sources.
     client = (
         pool.get_metadata_client()
-        if (
-            discovery_source.lower() in {"curated_ui", "accepted_cache"}
-            or (
-                not discovery_source
-                and os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker").strip().lower()
-                == "accepted_cache"
-            )
-        )
+        if catalog_source in {"curated_ui", "accepted_cache"}
         else pool.get_client(wait_if_cooling=False)
     )
     envelope = get_model_catalog_for_client(
-        client, allow_static_fallback=True, source_override=discovery_source or None
+        client, allow_static_fallback=True, source_override=catalog_source
     )
     receipt = envelope.receipt()
     if envelope.source == "user_accepted_cache":

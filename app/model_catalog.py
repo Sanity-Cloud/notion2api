@@ -3,13 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import threading
 import time
 import uuid
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
+from app.core.models import normalize_model_lookup_key
 from app.model_restriction_cache import ModelRestrictionCache
 
 CATALOG_SCHEMA_VERSION = 1
@@ -29,6 +29,22 @@ class ModelCatalogUnavailable(ModelCatalogError):
 
 class ModelCatalogValidationError(ModelCatalogError):
     """Raised when an upstream picker response is structurally invalid."""
+
+
+def get_model_catalog_source(source_override: str | None = None) -> str:
+    """Normalize one catalog mode for registry, API, and outbound transport.
+
+    Fail closed on unknown or empty configurations; no layer may quietly
+    fall back to the static Terra route when another selected accepted_cache.
+    """
+    source = (
+        source_override if source_override is not None
+        else os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker")
+    )
+    mode = str(source).strip().lower()
+    if mode not in {"notion_picker", "accepted_cache", "curated_ui"}:
+        raise ModelCatalogUnavailable("Unrecognized model catalog source configuration.")
+    return mode
 
 
 class ModelSelectionError(ModelCatalogError):
@@ -422,9 +438,7 @@ class ModelCatalogService:
             if not identifier or identifier in ids or not isinstance(model.get("is_disabled"), bool):
                 raise ModelCatalogUnavailable("The accepted catalog contains ambiguous model entries.")
             ids.add(identifier)
-            display_name = re.sub(
-                r"-+", "-", re.sub(r"[\s_]+", "-", str(model.get("display_name") or "").casefold())
-            ).strip("-")
+            display_name = normalize_model_lookup_key(str(model.get("display_name") or ""))
             if not display_name or display_name in display_names:
                 raise ModelCatalogUnavailable(
                     "The accepted catalog has ambiguous or missing model display names."
