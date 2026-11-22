@@ -1123,6 +1123,10 @@ def resolve_model_selection(
         "canonical_id": canonical_id,
         "public_name": model.get("public_name") or canonical_id,
         "surface": surface,
+        "outbound_final_model_name": (
+            str(route.get("final_model_name") or "") if isinstance(route, dict)
+            else ""
+        ),
         "model_metadata": model,
         **effort,
         **envelope.receipt(),

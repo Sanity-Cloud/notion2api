@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -393,8 +394,9 @@ class ModelCatalogService:
         Acceptance permits trying historically mapped routes; it is not a
         claim of successful current provider execution or new entitlement.
         """
-        cached = self.cache.get(
-            self.cache_key(getattr(client, "space_id", "")), allow_stale=True
+        cached = self.cache.get_or_pin_accepted(
+            self.cache_key(getattr(client, "space_id", "")),
+            expected_sha256=expected_sha256,
         )
         if cached is None:
             raise ModelCatalogUnavailable("The accepted model snapshot is missing.")
@@ -412,6 +414,7 @@ class ModelCatalogService:
         if not isinstance(models, list) or len(models) != expected_model_count:
             raise ModelCatalogUnavailable("The accepted model snapshot inventory has changed.")
         ids: set[str] = set()
+        display_names: set[str] = set()
         for model in models:
             if not isinstance(model, dict):
                 raise ModelCatalogUnavailable("The accepted catalog contains invalid model metadata.")
@@ -419,6 +422,14 @@ class ModelCatalogService:
             if not identifier or identifier in ids or not isinstance(model.get("is_disabled"), bool):
                 raise ModelCatalogUnavailable("The accepted catalog contains ambiguous model entries.")
             ids.add(identifier)
+            display_name = re.sub(
+                r"-+", "-", re.sub(r"[\s_]+", "-", str(model.get("display_name") or "").casefold())
+            ).strip("-")
+            if not display_name or display_name in display_names:
+                raise ModelCatalogUnavailable(
+                    "The accepted catalog has ambiguous or missing model display names."
+                )
+            display_names.add(display_name)
             routes = model.get("routes")
             if not isinstance(routes, dict):
                 raise ModelCatalogUnavailable("The accepted catalog is missing its route metadata.")

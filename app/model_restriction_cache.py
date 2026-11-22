@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -55,6 +56,15 @@ class ModelRestrictionCache:
                     acquired_at REAL NOT NULL,
                     expires_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS model_accepted_snapshots (
+                    acceptance_key TEXT PRIMARY KEY,
+                    source_cache_key TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    snapshot_sha256 TEXT NOT NULL,
+                    fetched_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    pinned_at REAL NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_model_restriction_cache_expiry
                     ON model_restriction_cache(expires_at);
                 CREATE INDEX IF NOT EXISTS idx_model_restriction_lease_expiry
@@ -88,6 +98,79 @@ class ModelRestrictionCache:
             "fetched_at": float(row["fetched_at"]),
             "expires_at": expires_at,
             "state": "fresh" if expires_at > now else "stale",
+        }
+
+    def get_or_pin_accepted(
+        self,
+        cache_key: str,
+        *,
+        expected_sha256: str,
+    ) -> dict[str, Any] | None:
+        """Atomically preserve a verified snapshot outside the mutable picker key.
+
+        An accepted snapshot remains unchanged when normal picker refreshes
+        replace their own cache row. Multiple workers converge on one record.
+        """
+        if not expected_sha256 or len(expected_sha256) != 64:
+            return None
+        accepted_key = f"accepted:v1:{cache_key}:{expected_sha256}"
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM model_accepted_snapshots WHERE acceptance_key = ?",
+                (accepted_key,),
+            ).fetchone()
+            if row is None:
+                source = conn.execute(
+                    "SELECT * FROM model_restriction_cache WHERE cache_key = ?",
+                    (str(cache_key),),
+                ).fetchone()
+                if source is None:
+                    return None
+                try:
+                    payload = json.loads(str(source["payload_json"]))
+                    if not isinstance(payload, dict):
+                        return None
+                    stamped = str(payload.get("snapshot_sha256") or "")
+                    canonical = dict(payload)
+                    canonical.pop("snapshot_sha256", None)
+                    digest = hashlib.sha256(
+                        json.dumps(
+                            canonical, sort_keys=True, separators=(",", ":")
+                        ).encode("utf-8")
+                    ).hexdigest()
+                except (TypeError, ValueError):
+                    return None
+                if digest != expected_sha256 or stamped != digest:
+                    return None
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO model_accepted_snapshots (
+                        acceptance_key, source_cache_key, payload_json,
+                        snapshot_sha256, fetched_at, expires_at, pinned_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        accepted_key, str(cache_key), str(source["payload_json"]),
+                        digest, float(source["fetched_at"]),
+                        float(source["expires_at"]), self._clock(),
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM model_accepted_snapshots WHERE acceptance_key = ?",
+                    (accepted_key,),
+                ).fetchone()
+        if row is None or str(row["source_cache_key"]) != str(cache_key):
+            return None
+        try:
+            payload = json.loads(str(row["payload_json"]))
+        except (TypeError, ValueError):
+            return None
+        return {
+            "payload": payload,
+            "fetched_at": float(row["fetched_at"]),
+            "expires_at": float(row["expires_at"]),
+            "state": "accepted_pinned",
         }
 
     def claim_refresh(

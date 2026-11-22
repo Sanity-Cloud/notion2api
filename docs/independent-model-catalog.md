@@ -56,17 +56,17 @@ Source freshness is **date-granular** (2026-11-22, not a falsely precise
 capture timestamp); it expires for route authority after seven days.
 The snapshot can still be shown as dated historical UI evidence.
 
-## Release blockers
+## UI-evidence-only discovery limitations
 
-1. Capture a sanitized current browser picker network trace in the same
-   workspace, including exact route IDs and disabled reasons when available.
-2. Prove route identity and successful account-bound test behavior independently
-   for each model permitted to be selectable.
-3. Add an evidence-backed, versioned positive route allowlist and regressions.
-4. Validate aliases, existing conversations, restrictions, retries,
-   timeouts, streaming, profile binding and rollback.
-5. Review and merge the scoped source changes, confirm deployment SHA and
-   observe live /v1/models and chat behavior before declaring success.
+This section describes the experimental, display-only `curated_ui` mode.
+It does not block the separately approved pinned-cache acceptance policy
+described below. The user confirmed that new provider routes **cannot be
+captured from the workspace** and explicitly accepted the 41 stored routes.
+
+For `curated_ui`, new entries remain non-routable until a positive route
+ID is established by an authorized method. Validate aliases, restrictions,
+streaming, profile binding, rollback and live behavior before any release.
+Do not fabricate new IDs from screenshot labels.
 
 Do not copy cookies, tokens, private HAR responses, or other user data into
 this repository. Do not bypass provider permissions or assume model names
@@ -126,11 +126,57 @@ The receipt reports `catalog_user_accepted_current=true` and
 It *also* reports the actual age, stale status and exceeded original
 freshness threshold. These are separate factual and policy attributes.
 The policy is **reversible**: restore
-`NOTION_MODEL_CATALOG_SOURCE=notion_picker` (or the previous release)
-and preserve the cached SQLite record. No cache timestamps or identities
-are mutated. Rollback should not silently clear the shared cache.
+`NOTION_MODEL_CATALOG_SOURCE=notion_picker` (or the previous release).
+The accepted snapshot is pinned on first successful validation to the
+separate `model_accepted_snapshots` SQLite table under a SHA-scoped key.
+Ordinary picker refresh replaces only `model_restriction_cache` and
+cannot overwrite the approved snapshot. The pinned copy retains original
+`fetched_at` and `expires_at`. It must be seeded and its exact SHA
+reread **before** promoting the new process; rollback must preserve this
+table, not merely the mutable picker row.
 
 **Release status:** source-only until PR review, rollback and deployment
 SHA gates pass. A dry-run route resolution is not a verified provider
 submission. Acceptance of old routes does not waive authentication,
 workspace binding, model restrictions, or error propagation.
+
+
+## November 22 independent release review and corrective gate
+
+An independent source review of PR #15 at `5e27d4b3` found that
+accepted model IDs could be silently substituted with Terra during
+transcript construction or transport mapping. The review also identified
+mutable shared-cache and attachment-surface inconsistencies.
+
+**Source corrections under review:**
+
+- Every validated chat request retains the canonical selected model
+  through the legacy transcript-builder layer in accepted-cache mode.
+- The Notion transport binds the exact, allowed
+  `routes[final_surface].final_model_name` from the SHA-pinned catalog
+  immediately before thread creation, attachment upload or inference.
+  Unknown or unsupported routes fail instead of defaulting to Terra.
+- Ordinary attachments select the `markdown-chat` surface; if this
+  surface has no supported accepted route, the request fails as a 400.
+  Computer-use mode is not enabled for accepted-cache routes without
+  separate surface evidence.
+- The cache's immutable acceptance table is created through an
+  additive SQLite schema migration. The original picker cache remains
+  mutable for legacy use. Concurrent workers pin the same acceptance.
+- Duplicate normalized display names now fail validation, rather than
+  depending on ambiguous first-match selection.
+
+An isolated read-only copy of the current shared SQLite database was
+checked under production Python 3.10 against the accepted SHA. All 41
+entries were accounted for: 32 exact serialized workflow routes,
+4 explicitly blocked disabled entries, 5 unsupported workflow routes,
+0 display-name collisions, and 0 unexpected validation failures.
+The probe did not submit any provider request or copy credentials.
+
+**Further release gates:** complete final-source regression tests, push
+and review the corrected commit, seed/verify the pinned acceptance table
+in the actual release path without modifying the mutable snapshot,
+validate the managed launcher and rollback state, and perform one
+authorized native model canary with verified outbound identity and
+provider response. No provider authorization claim follows merely
+from a successful local resolver test.
