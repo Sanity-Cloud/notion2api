@@ -613,6 +613,26 @@ def test_refresh_allowance_rejects_ambiguous_selector(monkeypatch, tmp_path) -> 
     assert response.json()["detail"] == "Provide exactly one of profile_name or account_key"
 
 
+def test_refresh_allowance_rejects_malformed_provider_response_as_502(
+    monkeypatch, tmp_path
+) -> None:
+    fake_client = SimpleNamespace(get_ai_allowance_status=lambda: {})
+    fake_pool = SimpleNamespace(get_client_for_selector=lambda _selector: fake_client)
+    store = NotionRequestTelemetryStore(tmp_path / "allowance-invalid-provider.sqlite3")
+    monkeypatch.setattr(notion_admission, "_REQUEST_TELEMETRY", store)
+
+    with TestClient(app) as client:
+        app.state.account_pool = fake_pool
+        response = client.post(
+            "/v1/usage/allowance/refresh", params={"profile_name": "account-one"}
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "Notion's allowance response did not match the expected schema."
+    )
+
+
 def test_quota_exception_handler_returns_retry_contract() -> None:
     error = UsageQuotaExceededError(
         {

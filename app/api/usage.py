@@ -123,7 +123,13 @@ async def refresh_allowance(
             client = pool.get_client_for_selector(profile_selector)
 
         provider_payload = await run_in_threadpool(client.get_ai_allowance_status)
-        normalized = normalize_notion_ai_allowance(provider_payload)
+        try:
+            normalized = normalize_notion_ai_allowance(provider_payload)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Notion's allowance response did not match the expected schema.",
+            ) from exc
         observation = get_notion_usage_store().record_allowance_observation(
             account_key=_client_allowance_account_key(client),
             rolling_used_percent=normalized["rolling_used_percent"],
