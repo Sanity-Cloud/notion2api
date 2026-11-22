@@ -284,6 +284,13 @@ class CatalogEnvelope:
             "catalog_latest_upstream_selection_restricted": (
                 self.upstream_model_selection_restricted
             ),
+            "catalog_user_accepted_current": self.source == "user_accepted_cache",
+            "catalog_route_evidence": (
+                "user_accepted_cached_snapshot_not_live_verified"
+                if self.source == "user_accepted_cache"
+                else "not_applicable"
+            ),
+            "catalog_runtime_verified": False if self.source == "user_accepted_cache" else None,
         }
 
 
@@ -372,6 +379,58 @@ class ModelCatalogService:
             stale=expires_at <= now,
             upstream_error=upstream_error,
             stale_policy_exceeded=stale_policy_exceeded,
+        )
+
+    def get_accepted_cache(
+        self,
+        client: Any,
+        *,
+        expected_sha256: str,
+        expected_model_count: int,
+    ) -> CatalogEnvelope:
+        """Use one exact user-approved workspace snapshot without picker refresh.
+
+        Acceptance permits trying historically mapped routes; it is not a
+        claim of successful current provider execution or new entitlement.
+        """
+        cached = self.cache.get(
+            self.cache_key(getattr(client, "space_id", "")), allow_stale=True
+        )
+        if cached is None:
+            raise ModelCatalogUnavailable("The accepted model snapshot is missing.")
+        envelope = self._from_cache(cached, source="user_accepted_cache")
+        snapshot = envelope.snapshot
+        recorded_hash = str(snapshot.get("snapshot_sha256") or "")
+        verified_payload = dict(snapshot)
+        verified_payload.pop("snapshot_sha256", None)
+        computed_hash = hashlib.sha256(
+            json.dumps(verified_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if not expected_sha256 or recorded_hash != expected_sha256 or computed_hash != expected_sha256:
+            raise ModelCatalogUnavailable("The accepted model snapshot fingerprint has changed.")
+        models = snapshot.get("models", [])
+        if not isinstance(models, list) or len(models) != expected_model_count:
+            raise ModelCatalogUnavailable("The accepted model snapshot inventory has changed.")
+        ids: set[str] = set()
+        for model in models:
+            if not isinstance(model, dict):
+                raise ModelCatalogUnavailable("The accepted catalog contains invalid model metadata.")
+            identifier = str(model.get("canonical_id") or "").strip()
+            if not identifier or identifier in ids or not isinstance(model.get("is_disabled"), bool):
+                raise ModelCatalogUnavailable("The accepted catalog contains ambiguous model entries.")
+            ids.add(identifier)
+            routes = model.get("routes")
+            if not isinstance(routes, dict):
+                raise ModelCatalogUnavailable("The accepted catalog is missing its route metadata.")
+            for route in routes.values():
+                if not isinstance(route, dict) or (
+                    route.get("supported") is True
+                    and not str(route.get("final_model_name") or "").strip()
+                ):
+                    raise ModelCatalogUnavailable("The accepted catalog contains an invalid route.")
+        return replace(
+            envelope,
+            stale_policy_exceeded=envelope.age_seconds > self._max_stale_seconds(),
         )
 
     def get(

@@ -89,3 +89,48 @@ SHA-256 values were calculated from the uploaded bytes:
 
 This list is only the subset of picker entries visible in the screenshots;
 it is **not** asserted to be the workspace's entire catalog.
+
+## User-accepted cached routes (2026-11-22)
+
+The user explicitly approved treating the existing **41-route SQLite
+snapshot** as the operational model catalog, because current-workspace
+model routes cannot be captured independently and Notion's picker endpoint
+returns an unusable empty list. This acceptance does not establish a
+fresh provider observation or a successful current model execution.
+
+- **Workspace:** Sanity Monkey only, checked against its canonical space ID.
+- **Pinned SHA-256:** `f9feed133087743274253b54277217429456e986a0057657b3f93f49868456f2`.
+- **Inventory:** 41 cached models; 37 not disabled, four marked disabled.
+- **Excluded from selection:** GPT-6 Astra, Kimi K3, Fable 5, Fable 5.1.
+  A missing disabled reason is still treated as disabled.
+- **Source acquisition:** existing persisted snapshot; original `fetched_at`,
+  `expires_at` and age are preserved without rewriting the record.
+- **Route acceptance:** historically cached supported surfaces may be tried
+  with their existing provider IDs. No unknown IDs or routes are invented.
+- **Runtime proof:** not established; a provider can still reject a request.
+
+After release-gate approval, setting
+`NOTION_MODEL_CATALOG_SOURCE=accepted_cache` selects the accepted
+snapshot for **both listing and chat route selection**, without querying
+Notion's model-picker endpoint. The distinct
+`NOTION_MODEL_CATALOG_DISCOVERY_SOURCE=accepted_cache` setting can
+enable the accepted catalog for listings alone.
+
+The acceptance mode is deliberately guarded by the exact persisted
+SHA, model count, structural integrity, workspace ID, individual disabled
+flags and supported route surfaces. It rejects missing, altered or
+incomplete cache records, and never falls back to guessed static routes.
+
+The receipt reports `catalog_user_accepted_current=true` and
+`catalog_route_evidence=user_accepted_cached_snapshot_not_live_verified`.
+It *also* reports the actual age, stale status and exceeded original
+freshness threshold. These are separate factual and policy attributes.
+The policy is **reversible**: restore
+`NOTION_MODEL_CATALOG_SOURCE=notion_picker` (or the previous release)
+and preserve the cached SQLite record. No cache timestamps or identities
+are mutated. Rollback should not silently clear the shared cache.
+
+**Release status:** source-only until PR review, rollback and deployment
+SHA gates pass. A dry-run route resolution is not a verified provider
+submission. Acceptance of old routes does not waive authentication,
+workspace binding, model restrictions, or error propagation.

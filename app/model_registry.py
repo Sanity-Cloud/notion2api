@@ -20,6 +20,13 @@ from app.model_catalog import (
 
 
 
+# The user accepted this exact cached workspace inventory on 2026-11-22.
+# This does not update its source timestamp or prove provider execution.
+# Changing the pinned SHA or model count requires a separate inventory decision.
+ACCEPTED_CACHE_SHA256 = "f9feed133087743274253b54277217429456e986a0057657b3f93f49868456f2"
+ACCEPTED_CACHE_MODEL_COUNT = 41
+ACCEPTED_CACHE_DATE = "2026-11-22"
+
 MODEL_MAP: dict[str, str] = {
     # Anthropic
     "claude-sonnet4.6": "almond-croissant-low",
@@ -913,6 +920,20 @@ def get_model_catalog_for_client(
                 "The independent model catalog is not verified for this workspace."
             )
         envelope = curated_ui_envelope(_static_catalog_records())
+    elif catalog_source == "accepted_cache":
+        # User acceptance is pinned to one known snapshot in one workspace.
+        space_id = str(getattr(client, "space_id", "") or "").replace("-", "").casefold()
+        expected_id = SANITY_MONKEY.contract.workspace_id.replace("-", "").casefold()
+        if space_id != expected_id:
+            raise ModelCatalogUnavailable(
+                "The user-accepted cached models are not approved for this workspace."
+            )
+        service = ModelCatalogService(_SHARED_RESTRICTION_CACHE)
+        envelope = service.get_accepted_cache(
+            client,
+            expected_sha256=ACCEPTED_CACHE_SHA256,
+            expected_model_count=ACCEPTED_CACHE_MODEL_COUNT,
+        )
     elif catalog_source == "notion_picker":
         service = ModelCatalogService(_SHARED_RESTRICTION_CACHE)
         envelope = service.get(
@@ -933,13 +954,27 @@ def list_model_metadata_for_request(request) -> tuple[list[dict[str, object]], d
     # workspace identity without submitting a Notion model-picker request.
     client = (
         pool.get_metadata_client()
-        if discovery_source.lower() == "curated_ui"
+        if (
+            discovery_source.lower() in {"curated_ui", "accepted_cache"}
+            or (
+                not discovery_source
+                and os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker").strip().lower()
+                == "accepted_cache"
+            )
+        )
         else pool.get_client(wait_if_cooling=False)
     )
     envelope = get_model_catalog_for_client(
         client, allow_static_fallback=True, source_override=discovery_source or None
     )
     receipt = envelope.receipt()
+    if envelope.source == "user_accepted_cache":
+        receipt.update({
+            "catalog_acceptance_date": ACCEPTED_CACHE_DATE,
+            "catalog_authority": "user_accepted_exact_cached_inventory",
+            "catalog_workspace": SANITY_MONKEY.key,
+            "catalog_accepted_model_count": ACCEPTED_CACHE_MODEL_COUNT,
+        })
     if envelope.source == "curated_ui":
         receipt.update({
             "catalog_authority": "workspace_ui_display_evidence_only",
@@ -1032,7 +1067,7 @@ def resolve_model_selection(
     )
     # An expired fallback is useful for listing historical model metadata,
     # not as an assertion that a model is still selectable on this workspace.
-    if envelope.stale_policy_exceeded:
+    if envelope.stale_policy_exceeded and envelope.source != "user_accepted_cache":
         if envelope.source == "curated_ui":
             raise ModelCatalogUnavailable(
                 "The independent model-picker evidence needs revalidation."
@@ -1046,6 +1081,8 @@ def resolve_model_selection(
         catalog_label = (
             "independent workspace model catalog"
             if envelope.source == "curated_ui"
+            else "user-accepted cached model catalog"
+            if envelope.source == "user_accepted_cache"
             else "authoritative Notion model catalog"
         )
         raise ModelSelectionError(
