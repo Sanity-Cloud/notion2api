@@ -9,6 +9,7 @@ import uuid
 from difflib import SequenceMatcher
 from typing import Any, Dict, Generator, Iterable, List, Tuple
 
+import anyio
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -3092,6 +3093,13 @@ def _handle_standard_request(
     )
 
 
+async def _prime_heavy_stream(
+    stream_gen: Generator[dict[str, Any], None, None],
+) -> dict[str, Any] | None:
+    """Advance a blocking upstream generator off-loop without abandoning its result."""
+    return await anyio.to_thread.run_sync(next, stream_gen, None)
+
+
 @router.post("/chat/completions", tags=["chat"])
 @controlled_chat_request
 async def create_chat_completion(
@@ -3450,7 +3458,7 @@ async def create_chat_completion(
                 computer_use_review=computer_use_review,
                 thread_title=thread_title,
             )
-            first_item = next(stream_gen, None)
+            first_item = await _prime_heavy_stream(stream_gen)
 
             # text thread_idtext
             if not thread_id and hasattr(client, "current_thread_id"):

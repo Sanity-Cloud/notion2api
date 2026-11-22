@@ -1,8 +1,36 @@
 import asyncio
+from threading import Event
 
 import pytest
 
 from app.api import chat
+
+
+def test_heavy_stream_first_item_does_not_block_event_loop():
+    started = Event()
+    release = Event()
+
+    def blocking_stream():
+        started.set()
+        release.wait(timeout=2)
+        yield {"type": "content", "text": "ready"}
+
+    async def exercise():
+        priming = asyncio.create_task(chat._prime_heavy_stream(blocking_stream()))
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            assert not priming.done()
+            await asyncio.wait_for(asyncio.sleep(0.03), timeout=0.2)
+            assert not priming.done()
+        finally:
+            release.set()
+        assert await priming == {"type": "content", "text": "ready"}
+
+    asyncio.run(exercise())
+
+
+def test_heavy_stream_prime_handles_empty_stream():
+    assert asyncio.run(chat._prime_heavy_stream(iter(()))) is None
 
 
 def test_guard_releases_clean_stream_after_terminal_classification():
