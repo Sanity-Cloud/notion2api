@@ -6,9 +6,10 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
+from app.core.models import normalize_model_lookup_key
 from app.model_restriction_cache import ModelRestrictionCache
 
 CATALOG_SCHEMA_VERSION = 1
@@ -28,6 +29,22 @@ class ModelCatalogUnavailable(ModelCatalogError):
 
 class ModelCatalogValidationError(ModelCatalogError):
     """Raised when an upstream picker response is structurally invalid."""
+
+
+def get_model_catalog_source(source_override: str | None = None) -> str:
+    """Normalize one catalog mode for registry, API, and outbound transport.
+
+    Fail closed on unknown or empty configurations; no layer may quietly
+    fall back to the static Terra route when another selected accepted_cache.
+    """
+    source = (
+        source_override if source_override is not None
+        else os.getenv("NOTION_MODEL_CATALOG_SOURCE", "notion_picker")
+    )
+    mode = str(source).strip().lower()
+    if mode not in {"notion_picker", "accepted_cache", "curated_ui"}:
+        raise ModelCatalogUnavailable("Unrecognized model catalog source configuration.")
+    return mode
 
 
 class ModelSelectionError(ModelCatalogError):
@@ -252,6 +269,7 @@ class CatalogEnvelope:
     stale: bool
     upstream_error: str = ""
     stale_policy_exceeded: bool = False
+    upstream_model_selection_restricted: bool | None = None
 
     def receipt(self) -> dict[str, Any]:
         fallback = self.source in {"last_known_good", "static_fallback"}
@@ -278,6 +296,18 @@ class CatalogEnvelope:
             "catalog_model_selection_restricted": bool(
                 self.snapshot.get("model_selection_restricted", False)
             ),
+            # The snapshot may be old. Keep the latest observed upstream policy
+            # separate rather than reporting historical permission as current.
+            "catalog_latest_upstream_selection_restricted": (
+                self.upstream_model_selection_restricted
+            ),
+            "catalog_user_accepted_current": self.source == "user_accepted_cache",
+            "catalog_route_evidence": (
+                "user_accepted_cached_snapshot_not_live_verified"
+                if self.source == "user_accepted_cache"
+                else "not_applicable"
+            ),
+            "catalog_runtime_verified": False if self.source == "user_accepted_cache" else None,
         }
 
 
@@ -368,6 +398,66 @@ class ModelCatalogService:
             stale_policy_exceeded=stale_policy_exceeded,
         )
 
+    def get_accepted_cache(
+        self,
+        client: Any,
+        *,
+        expected_sha256: str,
+        expected_model_count: int,
+    ) -> CatalogEnvelope:
+        """Use one exact user-approved workspace snapshot without picker refresh.
+
+        Acceptance permits trying historically mapped routes; it is not a
+        claim of successful current provider execution or new entitlement.
+        """
+        cached = self.cache.get_or_pin_accepted(
+            self.cache_key(getattr(client, "space_id", "")),
+            expected_sha256=expected_sha256,
+        )
+        if cached is None:
+            raise ModelCatalogUnavailable("The accepted model snapshot is missing.")
+        envelope = self._from_cache(cached, source="user_accepted_cache")
+        snapshot = envelope.snapshot
+        recorded_hash = str(snapshot.get("snapshot_sha256") or "")
+        verified_payload = dict(snapshot)
+        verified_payload.pop("snapshot_sha256", None)
+        computed_hash = hashlib.sha256(
+            json.dumps(verified_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if not expected_sha256 or recorded_hash != expected_sha256 or computed_hash != expected_sha256:
+            raise ModelCatalogUnavailable("The accepted model snapshot fingerprint has changed.")
+        models = snapshot.get("models", [])
+        if not isinstance(models, list) or len(models) != expected_model_count:
+            raise ModelCatalogUnavailable("The accepted model snapshot inventory has changed.")
+        ids: set[str] = set()
+        display_names: set[str] = set()
+        for model in models:
+            if not isinstance(model, dict):
+                raise ModelCatalogUnavailable("The accepted catalog contains invalid model metadata.")
+            identifier = str(model.get("canonical_id") or "").strip()
+            if not identifier or identifier in ids or not isinstance(model.get("is_disabled"), bool):
+                raise ModelCatalogUnavailable("The accepted catalog contains ambiguous model entries.")
+            ids.add(identifier)
+            display_name = normalize_model_lookup_key(str(model.get("display_name") or ""))
+            if not display_name or display_name in display_names:
+                raise ModelCatalogUnavailable(
+                    "The accepted catalog has ambiguous or missing model display names."
+                )
+            display_names.add(display_name)
+            routes = model.get("routes")
+            if not isinstance(routes, dict):
+                raise ModelCatalogUnavailable("The accepted catalog is missing its route metadata.")
+            for route in routes.values():
+                if not isinstance(route, dict) or (
+                    route.get("supported") is True
+                    and not str(route.get("final_model_name") or "").strip()
+                ):
+                    raise ModelCatalogUnavailable("The accepted catalog contains an invalid route.")
+        return replace(
+            envelope,
+            stale_policy_exceeded=envelope.age_seconds > self._max_stale_seconds(),
+        )
+
     def get(
         self,
         client: Any,
@@ -400,6 +490,7 @@ class ModelCatalogService:
                     static_records=static_records,
                 )
 
+            raw: Any = None
             try:
                 raw = client.get_ai_model_picker_config()
                 normalized = parse_picker_catalog(raw)
@@ -418,14 +509,28 @@ class ModelCatalogService:
                     raise ModelCatalogUnavailable(
                         "Model catalog was not readable after publication."
                     )
-                return self._from_cache(fresh, source="authoritative_live")
+                envelope = self._from_cache(fresh, source="authoritative_live")
+                restricted = raw.get("modelSelectionRestricted") if isinstance(raw, dict) else None
+                return replace(
+                    envelope,
+                    upstream_model_selection_restricted=(
+                        restricted if isinstance(restricted, bool) else None
+                    ),
+                )
             except Exception as exc:
                 self.cache.release_refresh(cache_key, lease_token=lease)
-                return self._fallback(
+                fallback = self._fallback(
                     cache_key,
                     f"{type(exc).__name__}: {exc}",
                     allow_static_fallback=allow_static_fallback,
                     static_records=static_records,
+                )
+                restricted = raw.get("modelSelectionRestricted") if isinstance(raw, dict) else None
+                return replace(
+                    fallback,
+                    upstream_model_selection_restricted=(
+                        restricted if isinstance(restricted, bool) else None
+                    ),
                 )
 
     def _fallback(

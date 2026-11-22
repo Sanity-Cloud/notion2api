@@ -15,6 +15,7 @@ from app.notion_browser_headers import browser_request_headers, configured_notio
 from app.attachments.notion_upload import NotionAttachmentUploader, NotionAttachmentUploadError
 from app.attachments.models import UploadedAttachment
 from app.model_registry import get_notion_model
+from app.model_catalog import get_model_catalog_source
 from app.notion_admission import admitted_session
 from app.notion_hosts import (
     notion_app_api,
@@ -435,9 +436,50 @@ class NotionOpusAPI:
 
             notion_block = dict(block)
             notion_value = dict(value)
-            notion_value["model"] = get_notion_model(str(value.get("model", "") or ""))
+            if get_model_catalog_source() == "accepted_cache":
+                # A static registry fallback here silently replaced unknown
+                # accepted models with Terra. Bind the authorized route later.
+                notion_value["model"] = str(value.get("model", "") or "").strip()
+            else:
+                notion_value["model"] = get_notion_model(str(value.get("model", "") or ""))
             notion_block["value"] = notion_value
             converted.append(notion_block)
+        return converted
+
+    def _bind_accepted_model_route(
+        self,
+        notion_transcript: list[dict[str, Any]],
+        thread_type: str,
+    ) -> list[dict[str, Any]]:
+        """Bind exact accepted-cache route at the final transport surface.
+
+        Source identity and provider-route authorization are checked with the
+        actual request workspace. Never fall back to a static/default route.
+        """
+        from app.model_registry import resolve_model_selection
+
+        configs = [
+            block for block in notion_transcript
+            if block.get("type") == "config" and isinstance(block.get("value"), dict)
+        ]
+        if len(configs) != 1:
+            raise ValueError("Accepted-cache inference needs exactly one config block.")
+        requested = str(configs[0]["value"].get("model") or "").strip()
+        selection = resolve_model_selection(self, requested, surface=thread_type)
+        route = (selection["model_metadata"].get("routes") or {}).get(thread_type)
+        final_name = str(
+            route.get("final_model_name") if isinstance(route, dict) else ""
+        ).strip()
+        if not final_name or not route.get("supported"):
+            raise ValueError("Accepted-cache model has no supported outbound route.")
+        converted: list[dict[str, Any]] = []
+        for block in notion_transcript:
+            if block is configs[0]:
+                updated = dict(block)
+                updated["value"] = {**block["value"], "model": final_name}
+                converted.append(updated)
+            else:
+                converted.append(block)
         return converted
 
     def _resolve_thread_type(self, notion_transcript: list[dict[str, Any]]) -> str:
@@ -2147,6 +2189,10 @@ class NotionOpusAPI:
             # a workflow and reference-image uploads must not downgrade it.
             thread_type = "markdown-chat"
             notion_transcript = self._with_thread_type(notion_transcript, thread_type)
+        if get_model_catalog_source() == "accepted_cache":
+            # Must occur before thread creation, attachment uploads, or inference.
+            # The final surface, not the original workflow assumption, wins.
+            notion_transcript = self._bind_accepted_model_route(notion_transcript, thread_type)
         request_profile = self._resolve_request_profile(thread_type)
         thread_persistence = _resolve_thread_persistence()
 

@@ -1,22 +1,31 @@
-from app.core.models import normalize_model_id
+from app.core.models import normalize_model_lookup_key
 import os
-import re
 import threading
 import time
 import uuid
 
 from app.logger import logger
 from app.model_restriction_cache import ModelRestrictionCache
+from app.independent_model_catalog import WORKSPACE_KEY, curated_ui_envelope
+from app.workspace_routing import SANITY_MONKEY
 from app.model_catalog import (
     CatalogEnvelope,
     ModelCatalogService,
     ModelCatalogUnavailable,
     ModelSelectionError,
+    get_model_catalog_source,
     model_by_id,
     resolve_reasoning_effort,
 )
 
 
+
+# The user accepted this exact cached workspace inventory on 2026-11-22.
+# This does not update its source timestamp or prove provider execution.
+# Changing the pinned SHA or model count requires a separate inventory decision.
+ACCEPTED_CACHE_SHA256 = "f9feed133087743274253b54277217429456e986a0057657b3f93f49868456f2"
+ACCEPTED_CACHE_MODEL_COUNT = 41
+ACCEPTED_CACHE_DATE = "2026-11-22"
 
 MODEL_MAP: dict[str, str] = {
     # Anthropic
@@ -459,10 +468,7 @@ DEFAULT_MODEL = "terra"
 
 
 def _normalize_registry_model_name(model_name: str) -> str:
-    normalized = normalize_model_id(model_name)
-    candidate = str(normalized or "").strip().lower()
-    candidate = re.sub(r"[\s_]+", "-", candidate)
-    return re.sub(r"-+", "-", candidate).strip("-")
+    return normalize_model_lookup_key(model_name)
 
 
 def get_notion_model(model_name: str) -> str:
@@ -814,15 +820,27 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
         for raw in envelope.snapshot.get("models", [])
         if isinstance(raw, dict) and str(raw.get("canonical_id") or "").strip()
     }
-    active_aliases = {
-        _normalize_registry_model_name(alias): target
-        for alias, target in MODEL_MAP.items()
-        if target in catalog_ids and _normalize_registry_model_name(alias)
-    }
+    active_aliases: dict[str, str] = {}
+    if envelope.source != "curated_ui":
+        for alias, target in MODEL_MAP.items():
+            key = _normalize_registry_model_name(alias)
+            if not key or target not in catalog_ids:
+                continue
+            existing = active_aliases.get(key)
+            if (
+                envelope.source == "user_accepted_cache"
+                and existing is not None
+                and existing != target
+            ):
+                raise ModelCatalogUnavailable(
+                    "The accepted model catalog has conflicting static aliases."
+                )
+            active_aliases[key] = target
     unavailable_aliases = {
         _normalize_registry_model_name(alias): target
         for alias, target in MODEL_MAP.items()
-        if target not in catalog_ids and _normalize_registry_model_name(alias)
+        if (envelope.source == "curated_ui" or target not in catalog_ids)
+        and _normalize_registry_model_name(alias)
     }
 
     enriched_models: list[dict[str, object]] = []
@@ -831,8 +849,16 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
             continue
         canonical_id = str(raw.get("canonical_id") or "").strip()
         known_static = canonical_id in NOTION_MODEL_REVERSE_MAP
-        static = get_model_metadata(canonical_id) if known_static else {}
-        public_name = NOTION_MODEL_REVERSE_MAP.get(canonical_id, canonical_id)
+        static = (
+            get_model_metadata(canonical_id)
+            if known_static and envelope.source != "curated_ui"
+            else {}
+        )
+        public_name = (
+            str(raw.get("public_name") or canonical_id)
+            if envelope.source == "curated_ui"
+            else NOTION_MODEL_REVERSE_MAP.get(canonical_id, canonical_id)
+        )
         aliases = [
             alias
             for alias, target in active_aliases.items()
@@ -846,10 +872,42 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
                 "public_name": public_name,
                 "aliases": aliases,
                 "transport": "notion2api",
-                "upstream_host": _upstream_host_for_route(canonical_id),
-                "metadata_source": envelope.source,
+                "upstream_host": (
+                    "" if envelope.source == "curated_ui"
+                    else _upstream_host_for_route(canonical_id)
+                ),
+                "metadata_source": (
+                    raw.get("metadata_source") if envelope.source == "curated_ui"
+                    else envelope.source
+                ),
             }
         )
+    if envelope.source == "user_accepted_cache":
+        # A request can match any of these keys. Every normalized key must
+        # resolve unambiguously to one canonical ID, regardless of record order.
+        key_owners: dict[str, str] = {}
+        for model in enriched_models:
+            canonical_id = str(model["canonical_id"])
+            labels = [
+                canonical_id,
+                model.get("public_name"),
+                model.get("display_name"),
+                *(model.get("aliases") or []),
+            ]
+            for label in labels:
+                key = normalize_model_lookup_key(str(label or ""))
+                if not key:
+                    continue
+                owner = key_owners.setdefault(key, canonical_id)
+                if owner != canonical_id:
+                    raise ModelCatalogUnavailable(
+                        "The accepted catalog has conflicting model lookup keys."
+                    )
+        for alias, target in active_aliases.items():
+            if key_owners.get(alias, target) != target:
+                raise ModelCatalogUnavailable(
+                    "The accepted catalog has conflicting static alias targets."
+                )
     snapshot = dict(envelope.snapshot)
     snapshot["models"] = enriched_models
     snapshot["alias_reconciliation"] = {
@@ -868,6 +926,9 @@ def _enrich_catalog_envelope(envelope: CatalogEnvelope) -> CatalogEnvelope:
         stale=envelope.stale,
         upstream_error=envelope.upstream_error,
         stale_policy_exceeded=envelope.stale_policy_exceeded,
+        upstream_model_selection_restricted=(
+            envelope.upstream_model_selection_restricted
+        ),
     )
 
 
@@ -875,21 +936,80 @@ def get_model_catalog_for_client(
     client,
     *,
     allow_static_fallback: bool = False,
+    source_override: str | None = None,
 ) -> CatalogEnvelope:
-    service = ModelCatalogService(_SHARED_RESTRICTION_CACHE)
-    envelope = service.get(
-        client,
-        allow_static_fallback=allow_static_fallback,
-        static_records=_static_catalog_records(),
-    )
+    catalog_source = get_model_catalog_source(source_override)
+    if catalog_source == "curated_ui":
+        # Never present one workspace's UI observations in another workspace.
+        space_id = str(getattr(client, "space_id", "") or "").replace("-", "").casefold()
+        expected_id = SANITY_MONKEY.contract.workspace_id.replace("-", "").casefold()
+        if WORKSPACE_KEY != SANITY_MONKEY.key or space_id != expected_id:
+            raise ModelCatalogUnavailable(
+                "The independent model catalog is not verified for this workspace."
+            )
+        envelope = curated_ui_envelope(_static_catalog_records())
+    elif catalog_source == "accepted_cache":
+        # User acceptance is pinned to one known snapshot in one workspace.
+        space_id = str(getattr(client, "space_id", "") or "").replace("-", "").casefold()
+        expected_id = SANITY_MONKEY.contract.workspace_id.replace("-", "").casefold()
+        if space_id != expected_id:
+            raise ModelCatalogUnavailable(
+                "The user-accepted cached models are not approved for this workspace."
+            )
+        service = ModelCatalogService(_SHARED_RESTRICTION_CACHE)
+        envelope = service.get_accepted_cache(
+            client,
+            expected_sha256=ACCEPTED_CACHE_SHA256,
+            expected_model_count=ACCEPTED_CACHE_MODEL_COUNT,
+        )
+    elif catalog_source == "notion_picker":
+        service = ModelCatalogService(_SHARED_RESTRICTION_CACHE)
+        envelope = service.get(
+            client,
+            allow_static_fallback=allow_static_fallback,
+            static_records=_static_catalog_records(),
+        )
+    else:
+        raise ModelCatalogUnavailable("Unrecognized model catalog source configuration.")
     return _enrich_catalog_envelope(envelope)
 
 
 def list_model_metadata_for_request(request) -> tuple[list[dict[str, object]], dict[str, object]]:
     pool = request.app.state.account_pool
-    client = pool.get_client(wait_if_cooling=False)
-    envelope = get_model_catalog_for_client(client, allow_static_fallback=True)
+    discovery_source = os.getenv("NOTION_MODEL_CATALOG_DISCOVERY_SOURCE", "").strip()
+    catalog_source = get_model_catalog_source(discovery_source or None)
+    # Static / accepted catalog reads use a non-routing metadata client;
+    # neither account rotation nor picker calls are needed for those sources.
+    client = (
+        pool.get_metadata_client()
+        if catalog_source in {"curated_ui", "accepted_cache"}
+        else pool.get_client(wait_if_cooling=False)
+    )
+    envelope = get_model_catalog_for_client(
+        client, allow_static_fallback=True, source_override=catalog_source
+    )
     receipt = envelope.receipt()
+    if envelope.source == "user_accepted_cache":
+        receipt.update({
+            "catalog_acceptance_date": ACCEPTED_CACHE_DATE,
+            "catalog_authority": "user_accepted_exact_cached_inventory",
+            "catalog_workspace": SANITY_MONKEY.key,
+            "catalog_accepted_model_count": ACCEPTED_CACHE_MODEL_COUNT,
+        })
+    if envelope.source == "curated_ui":
+        receipt.update({
+            "catalog_authority": "workspace_ui_display_evidence_only",
+            "catalog_observed_on": envelope.snapshot.get("catalog_observed_on"),
+            "catalog_workspace": envelope.snapshot.get("workspace_key"),
+            "catalog_routes_verified": False,
+            "catalog_model_selection_restricted": None,
+            "catalog_visible_model_count": len(envelope.snapshot.get("models") or []),
+            "catalog_unverified_route_count": sum(
+                not bool(item.get("route_verified"))
+                for item in envelope.snapshot.get("models", [])
+                if isinstance(item, dict)
+            ),
+        })
     alias_state = envelope.snapshot.get("alias_reconciliation")
     if isinstance(alias_state, dict):
         unavailable = alias_state.get("unavailable_aliases")
@@ -968,24 +1088,46 @@ def resolve_model_selection(
     )
     # An expired fallback is useful for listing historical model metadata,
     # not as an assertion that a model is still selectable on this workspace.
-    if envelope.stale_policy_exceeded:
+    if envelope.stale_policy_exceeded and envelope.source != "user_accepted_cache":
+        if envelope.source == "curated_ui":
+            raise ModelCatalogUnavailable(
+                "The independent model-picker evidence needs revalidation."
+            )
         raise ModelCatalogUnavailable(
             "The last-known-good model catalog exceeds its freshness policy; "
             "model selection requires a successful authoritative refresh."
         )
     model = _catalog_model_for_request(envelope.snapshot, requested_model)
     if model is None:
+        catalog_label = (
+            "independent workspace model catalog"
+            if envelope.source == "curated_ui"
+            else "user-accepted cached model catalog"
+            if envelope.source == "user_accepted_cache"
+            else "authoritative Notion model catalog"
+        )
         raise ModelSelectionError(
-            f"Model '{requested_model}' is not present in the authoritative Notion model catalog.",
+            f"Model '{requested_model}' is not present in the {catalog_label}.",
             code="model_not_available",
             param="model",
         )
     canonical_id = str(model.get("canonical_id") or "")
     if bool(model.get("is_disabled")):
         reason = str(model.get("disabled_reason") or "model_disabled")
+        message = (
+            f"Model '{requested_model}' is restricted by workspace picker: {reason}."
+            if envelope.source == "curated_ui"
+            else f"Model '{requested_model}' is disabled by Notion policy: {reason}."
+        )
         raise ModelSelectionError(
-            f"Model '{requested_model}' is disabled by Notion policy: {reason}.",
+            message,
             code="model_disabled",
+            param="model",
+        )
+    if envelope.source == "curated_ui" and not bool(model.get("route_verified")):
+        raise ModelSelectionError(
+            f"Model '{requested_model}' is visible but its provider route is not independently verified.",
+            code="model_route_unverified",
             param="model",
         )
     routes = model.get("routes") if isinstance(model.get("routes"), dict) else {}
@@ -1002,6 +1144,10 @@ def resolve_model_selection(
         "canonical_id": canonical_id,
         "public_name": model.get("public_name") or canonical_id,
         "surface": surface,
+        "outbound_final_model_name": (
+            str(route.get("final_model_name") or "") if isinstance(route, dict)
+            else ""
+        ),
         "model_metadata": model,
         **effort,
         **envelope.receipt(),
