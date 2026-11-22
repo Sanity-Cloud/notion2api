@@ -1,0 +1,82 @@
+# SanityCloud Notion2API independent model catalog
+
+Status: **EXPERIMENTAL / SOURCE UPDATED**. Not deployed or route-verified.
+
+## Evidence and decision
+
+On November 22, 2026, the user confirmed that six supplied model-picker
+screenshots came from the **current Sanity Monkey workspace**. The UI shows
+models while all four configured accounts receive an empty,
+`modelSelectionRestricted=true` response from Notion's
+`getAvailableModels` endpoint. That endpoint is **not reliable as the
+authoritative model-discovery catalog** for this integration.
+
+The screenshots provide 35 distinct observed names. They explicitly show
+GPT-6 Astra restricted and Grok 4.3 selected in the picker. They do **not**
+prove any submission worked or reveal GPT-6.2 Sol's internal route ID.
+
+## Separation of authority
+
+- **Discovery:** curated, reviewed workspace UI evidence and reproducible
+  browser observations, with evidence dates and source identification.
+- **Route identity:** independently observed canonical IDs or prior mappings,
+  distinguished as *unverified candidates* until checked.
+- **Selection entitlement:** explicit restrictions and successful authorized
+  account/workspace-bound routing validation. Never infer from a label alone.
+- **Notion:** still the messaging provider and project-governance workspace.
+  Its empty model-picker response is retained as diagnostic conflict evidence,
+  **not** a veto over what UI names are displayed.
+- **Governance:** Notion is still SanityCloud's project record of decisions;
+  this policy does not make its broken model picker authoritative.
+
+## Implementation and activation
+
+`NOTION_MODEL_CATALOG_SOURCE=curated_ui` switches discovery to the
+local, versioned `app/independent_model_catalog.py` evidence snapshot.
+It does **not** invoke Notion's `getAvailableModels`. Entries carry
+`route_verified=false`, `selectable=false`, and source provenance;
+unknown names use `unverified:<slug>`, never a fabricated provider ID.
+The resolver rejects these routes with `model_route_unverified` until a
+separately approved, receipt-backed route-verification mechanism is added.
+
+The previous `notion_picker` mode remains the code default for compatibility
+until migration gates pass. Do **not** switch production to the curated mode
+until active routes are verified, because the snapshot is display-only.
+
+Source freshness is **date-granular** (2026-11-22, not a falsely precise
+capture timestamp); it expires for route authority after seven days.
+The snapshot can still be shown as dated historical UI evidence.
+
+## Release blockers
+
+1. Capture a sanitized current browser picker network trace in the same
+   workspace, including exact route IDs and disabled reasons when available.
+2. Prove route identity and successful account-bound test behavior independently
+   for each model permitted to be selectable.
+3. Add an evidence-backed, versioned positive route allowlist and regressions.
+4. Validate aliases, existing conversations, restrictions, retries,
+   timeouts, streaming, profile binding and rollback.
+5. Review and merge the scoped source changes, confirm deployment SHA and
+   observe live /v1/models and chat behavior before declaring success.
+
+Do not copy cookies, tokens, private HAR responses, or other user data into
+this repository. Do not bypass provider permissions or assume model names
+are internal codenames.
+
+## Source image provenance
+
+The six current-workspace screenshots were supplied in this ChatGPT
+conversation. They remain conversation evidence, not copied into Git.
+SHA-256 values were calculated from the uploaded bytes:
+
+| Image filename | SHA-256 |
+|---|---|
+| `1000007037.jpg` | `14f8ff6b1119b1cf15ce46f4ed2b0fb040059d55fceb84b31cd2feef68cabde9` |
+| `1000007038.jpg` | `84f8ffdec171b6496e3c6e968b87b4eaa622fc4d9ae9a4df1c5aa2515e0fe75b` |
+| `1000007039.jpg` | `2ee9e254782db124f15929038a9070282dac77a03ab982c1f8ca81300ed404cf` |
+| `1000007040.jpg` | `8cde460de89a97ba0c98477e7b2fe9c7f011e25cdf4acc60b40e3bfb34804365` |
+| `1000007041.jpg` | `2f9456cb2d081fd58e6e6c159249eafd69be00e6ded74759b08d0d22f0df3244` |
+| `1000007042.jpg` | `b9ac0c35e0e796eec485bca003092e03fe38425d231e838af49de730e09a1633` |
+
+This list is only the subset of picker entries visible in the screenshots;
+it is **not** asserted to be the workspace's entire catalog.
