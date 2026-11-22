@@ -26,6 +26,13 @@ from app.hive_external_effects import (
     get_hive_external_effect_store,
 )
 from app.hive_agent_memory_loadout import AgentMemoryLoadoutOutcomeUnknown
+from app.hive_chatgpt_review import (
+    ReviewerCancelled,
+    ReviewerOutcomeUnknown,
+    ReviewerTransport,
+    reconcile_chatgpt_review,
+    run_chatgpt_review,
+)
 from app.hive_materialization import (
     DispatchStatus,
     LeaseStatus,
@@ -169,6 +176,17 @@ BUILTIN_ADAPTER_SPECS: dict[str, BuiltinAdapterSpec] = {
         requires_human_approval=False,
         requires_independent_review=True,
     ),
+    "builtin.aigentai_chatgpt_review.v1": BuiltinAdapterSpec(
+        implementation_id="builtin.aigentai_chatgpt_review.v1",
+        display_name="AiGentAI Isolated ChatGPT Reviewer",
+        capabilities=("chatgpt_review",),
+        writable_domains=(),
+        minimum_authority="A1",
+        max_timeout_ms=30000,
+        max_payload_bytes=8192,
+        requires_human_approval=True,
+        requires_independent_review=True,
+    ),
 }
 
 
@@ -258,12 +276,14 @@ class HiveExecutionDispatcherStore:
         path: str | Path,
         *,
         agent_memory_loadout_runner: Callable[..., tuple[dict[str, Any], dict[str, Any]]] | None = None,
+        chatgpt_review_transport: ReviewerTransport | None = None,
     ):
         self.path = Path(path).expanduser().resolve()
         self._schema_lock = threading.RLock()
         self.materialization = get_hive_materialization_store(self.path)
         self.workforce = get_hive_workforce_store(self.path)
         self._agent_memory_loadout_runner = agent_memory_loadout_runner
+        self._chatgpt_review_transport = chatgpt_review_transport
         self._ensure_schema()
         self._seed_builtin_adapters()
 
@@ -1318,7 +1338,9 @@ class HiveExecutionDispatcherStore:
             "performed_external_effect": False,
         }
 
-    def _agent_memory_loadout_context(self, *, execution_id: str):
+    def _agent_memory_loadout_context(
+        self, *, execution_id: str, readonly_recovery: bool = False,
+    ):
         from app.hive_agent_memory_loadout import AgentMemoryLoadoutContext
 
         with self._connect() as conn:
@@ -1360,12 +1382,14 @@ class HiveExecutionDispatcherStore:
                 (str(execution["receipt_id"]),),
             ).fetchone()
 
-        if not mission or str(mission["status"]).upper() != "ACTIVE":
+        if not mission or (
+            not readonly_recovery and str(mission["status"]).upper() != "ACTIVE"
+        ):
             raise HiveTransitionError("Agent Memory loadout requires an ACTIVE mission.")
         if (
             not unit
             or str(unit["mission_id"]) != str(execution["mission_id"])
-            or str(unit["status"]).upper() != "ACTIVE"
+            or (not readonly_recovery and str(unit["status"]).upper() != "ACTIVE")
         ):
             raise HiveTransitionError("Agent Memory loadout requires an ACTIVE bound work unit.")
         expected = (
@@ -1379,9 +1403,9 @@ class HiveExecutionDispatcherStore:
             str(worker_lease["worker_id"]),
         ) != expected:
             raise HiveTransitionError("Agent Memory loadout worker lease binding mismatch.")
-        if str(worker_lease["status"]).upper() != LeaseStatus.ACTIVE.value:
+        if not readonly_recovery and str(worker_lease["status"]).upper() != LeaseStatus.ACTIVE.value:
             raise HiveTransitionError("Agent Memory loadout requires an ACTIVE worker lease.")
-        if int(worker_lease["expires_at"] or 0) <= self._now_ms():
+        if not readonly_recovery and int(worker_lease["expires_at"] or 0) <= self._now_ms():
             raise HiveTransitionError("Agent Memory loadout worker lease has expired.")
         if not receipt or (
             str(receipt["mission_id"]),
@@ -1389,7 +1413,7 @@ class HiveExecutionDispatcherStore:
             str(receipt["worker_id"]),
         ) != expected:
             raise HiveTransitionError("Agent Memory loadout dispatch receipt binding mismatch.")
-        if str(receipt["status"]).upper() not in {
+        if not readonly_recovery and str(receipt["status"]).upper() not in {
             DispatchStatus.READY.value,
             DispatchStatus.ACKNOWLEDGED.value,
         }:
@@ -1445,6 +1469,17 @@ class HiveExecutionDispatcherStore:
                 actor=actor,
                 cancelled=cancelled,
             )
+        if implementation_id == "builtin.aigentai_chatgpt_review.v1":
+            if self._chatgpt_review_transport is None:
+                raise HiveTransitionError(
+                    "Qualified owner-bound ChatGPT reviewer transport is not configured."
+                )
+            return run_chatgpt_review(
+                context=self._agent_memory_loadout_context(execution_id=execution_id),
+                payload=payload,
+                transport=self._chatgpt_review_transport,
+                cancelled=cancelled,
+            )
         if implementation_id == "builtin.agent_memory_loadout.v1":
             from app.hive_agent_memory_loadout import run_agent_memory_loadout
 
@@ -1475,6 +1510,62 @@ class HiveExecutionDispatcherStore:
                 f"Compiled adapter implementation is unavailable: {implementation_id}"
             )
         return runner(payload, cancelled)
+
+    def inspect_chatgpt_review_reconciliation(
+        self, *, execution_id: str, actor: str,
+        governance_authorization: dict[str, Any] | None = None,
+        human_approval: bool = False, stale_after_ms: int = 30000,
+    ) -> dict[str, Any]:
+        """A2 read-only recovery; never invokes submit or upgrades task status.
+
+        A crashed worker may have posted a provider turn before the job ID was
+        returned. Read its original key from the persisted Hive execution and
+        locate the provider operation through the qualified transport. Review
+        completion or resolution remains a distinct governed step.
+        """
+        try:
+            require_governed_authorization(
+                governance_authorization, required_authority="A2",
+                legacy_human_approval=human_approval,
+            )
+        except GovernedAuthorizationError as exc:
+            raise HiveTransitionError(str(exc)) from exc
+        self._required(actor, "actor")
+        if self._chatgpt_review_transport is None:
+            raise HiveTransitionError(
+                "Qualified owner-bound ChatGPT reviewer transport is not configured."
+            )
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM hive_dispatch_executions WHERE execution_id = ?",
+                (self._required(execution_id, "execution_id"),),
+            ).fetchone()
+            if not row:
+                raise HiveNotFoundError(f"Execution not found: {execution_id}")
+            execution = self._execution_from_row(row)
+        if execution.implementation_id != "builtin.aigentai_chatgpt_review.v1":
+            raise HiveTransitionError("Execution is not a ChatGPT review.")
+        if execution.status not in {
+            ExecutionStatus.CLAIMED.value, ExecutionStatus.RUNNING.value,
+            ExecutionStatus.OUTCOME_UNKNOWN.value,
+        }:
+            raise HiveTransitionError(
+                f"Review execution cannot be inspected from {execution.status}."
+            )
+        if (execution.status != ExecutionStatus.OUTCOME_UNKNOWN.value
+                and self._now_ms() - execution.updated_at
+                < max(0, int(stale_after_ms))):
+            raise HiveTransitionError(
+                "Review execution is not stale; do not race an active worker."
+            )
+        context = self._agent_memory_loadout_context(
+            execution_id=execution_id, readonly_recovery=True,
+        )
+        result = reconcile_chatgpt_review(
+            context=context, payload=execution.request_payload,
+            transport=self._chatgpt_review_transport,
+        )
+        return {**result, "inspection_only": True}
 
     def _update_execution(
         self,
@@ -1915,6 +2006,15 @@ class HiveExecutionDispatcherStore:
             if target == ExecutionStatus.COMPLETED.value and snapshot.executions:
                 self._reconcile_execution_receipt(snapshot.executions[0])
             return snapshot
+        except ReviewerCancelled as exc:
+            return self._finalize_execution_error(
+                execution_id=execution_id,
+                actor=actor,
+                status=ExecutionStatus.CANCELLED.value,
+                error_code="CANCELLED",
+                error_message=str(exc),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
         except AdapterCancelled as exc:
             return self._finalize_execution_error(
                 execution_id=execution_id,
@@ -1925,6 +2025,11 @@ class HiveExecutionDispatcherStore:
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
         except FutureTimeoutError:
+            # A timed-out ChatGPT review may already have sent a native turn.
+            # Never mark it retryable: reconcile the original durable job.
+            uncertain_review = (
+                adapter.implementation_id == "builtin.aigentai_chatgpt_review.v1"
+            )
             with self._write() as conn:
                 conn.execute(
                     """
@@ -1938,10 +2043,34 @@ class HiveExecutionDispatcherStore:
             return self._finalize_execution_error(
                 execution_id=execution_id,
                 actor=actor,
-                status=ExecutionStatus.TIMED_OUT.value,
-                error_code="TIMEOUT",
+                status=(
+                    ExecutionStatus.OUTCOME_UNKNOWN.value
+                    if uncertain_review else ExecutionStatus.TIMED_OUT.value
+                ),
+                error_code="OUTCOME_UNKNOWN" if uncertain_review else "TIMEOUT",
                 error_message=f"Execution exceeded {current.timeout_ms}ms timeout.",
                 duration_ms=int((time.monotonic() - started) * 1000),
+                extra_evidence=(
+                    {"outcome_unknown": True, "reconciliation_required": True}
+                    if uncertain_review else None
+                ),
+                finished=not uncertain_review,
+            )
+        except ReviewerOutcomeUnknown as exc:
+            return self._finalize_execution_error(
+                execution_id=execution_id,
+                actor=actor,
+                status=ExecutionStatus.OUTCOME_UNKNOWN.value,
+                error_code="OUTCOME_UNKNOWN",
+                error_message=str(exc),
+                duration_ms=int((time.monotonic() - started) * 1000),
+                extra_evidence={
+                    "outcome_unknown": True,
+                    "outcome_unknown_stage": exc.stage,
+                    "reconciliation_required": True,
+                    **dict(exc.evidence),
+                },
+                finished=False,
             )
         except AgentMemoryLoadoutOutcomeUnknown as exc:
             return self._finalize_execution_error(
@@ -2332,6 +2461,14 @@ class HiveExecutionDispatcherStore:
                 return snapshot
             if execution.status == ExecutionStatus.REVIEW_REQUIRED.value:
                 return self._execution_snapshot(conn, execution_id=execution_id)
+            if execution.implementation_id == "builtin.aigentai_chatgpt_review.v1":
+                # A crash from CLAIMED/RUNNING may have submitted a native
+                # ChatGPT turn. Recovery must not invoke _execute_existing and
+                # accidentally send it again, even with an idempotency key.
+                raise HiveTransitionError(
+                    "ChatGPT reviewer cannot be re-executed: reconcile the "
+                    "original provider job without semantic replay."
+                )
             if execution.status not in {
                 ExecutionStatus.CLAIMED.value,
                 ExecutionStatus.RUNNING.value,
