@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import os
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -205,7 +206,13 @@ def _looks_like_notion_url(url: str) -> bool:
     try:
         parsed = urlsplit(str(url or ""))
         hostname = (parsed.hostname or "").lower().rstrip(".")
-        if parsed.scheme not in {"http", "https"} or not hostname:
+        if (
+            parsed.scheme != "https"
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in {None, 443}
+        ):
             return False
         configured_hosts = {
             (urlsplit(origin).hostname or "").lower()
@@ -213,7 +220,7 @@ def _looks_like_notion_url(url: str) -> bool:
         }
         return hostname in configured_hosts or any(
             hostname == domain or hostname.endswith("." + domain)
-            for domain in ("notion.so", "notion.com", "notion.site")
+            for domain in ("notion.so", "notion.com")
         )
     except ValueError:
         return False
@@ -229,26 +236,49 @@ def _find_debug_target(port: int) -> dict[str, Any] | None:
     if not isinstance(items, list):
         return None
 
-    # Prefer a real Notion page, never a chrome:// browser_ui target.
+    # Never hijack an unrelated browser page. Chrome was launched with AI_URL,
+    # so a page that is still about:blank is simply not ready yet.
     pages = [item for item in items if isinstance(item, dict) and item.get("type") == "page"]
     for item in pages:
-        url = str(item.get("url") or "")
-        if _looks_like_notion_url(url) or (urlsplit(url).hostname or "").lower() == "accounts.google.com":
+        if _looks_like_notion_url(str(item.get("url") or "")):
             return item
-    return pages[0] if pages else None
+    for item in pages:
+        try:
+            parsed = urlsplit(str(item.get("url") or ""))
+        except ValueError:
+            continue
+        if parsed.scheme == "https" and (parsed.hostname or "").lower() == "accounts.google.com":
+            return item
+    return None
 
 
-def _parse_cookie_string(cookie_string: str) -> dict[str, str]:
-    cookies: dict[str, str] = {}
-    for part in cookie_string.split(";"):
-        part = part.strip()
-        if "=" in part:
-            name, _, value = part.partition("=")
-            name = name.strip()
-            value = value.strip()
-            if name:
-                cookies[name] = value
-    return cookies
+def _cookie_matches_configured_origin(domain: str, origins: Sequence[str]) -> bool:
+    """Accept only well-formed cookie parent domains of the configured HTTPS app."""
+    raw = str(domain or "").strip().lower()
+    host = raw[1:] if raw.startswith(".") else raw
+    labels = host.split(".")
+    if not labels or any(
+        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+        for label in labels
+    ):
+        return False
+    # A public suffix such as "com" must never be accepted merely because
+    # it happens to be a parent domain of the configured Notion hostname.
+    if not _looks_like_notion_url(f"https://{host}/"):
+        return False
+    for origin in origins:
+        try:
+            parsed = urlsplit(origin)
+            target = (parsed.hostname or "").lower().rstrip(".")
+        except ValueError:
+            continue
+        if (
+            parsed.scheme == "https"
+            and _looks_like_notion_url(origin)
+            and (target == host or target.endswith("." + host))
+        ):
+            return True
+    return False
 
 
 def _extract_cookies_from_cdp(port: int) -> dict[str, str]:
@@ -265,51 +295,57 @@ def _extract_cookies_from_cdp(port: int) -> dict[str, str]:
         client.call("Page.enable")
         client.call("Network.enable")
 
-        try:
-            current_url = client.call("Runtime.evaluate", {"expression": "location.href", "returnByValue": True})
-            current_href = str(current_url.get("result", {}).get("value") or "") if isinstance(current_url, dict) else ""
-            if not _looks_like_notion_url(current_href):
-                client.call("Page.navigate", {"url": AI_URL})
-                time.sleep(2)
-        except Exception:
-            pass
+        # The dedicated Chrome process was already launched at AI_URL.
+        # Never navigate an arbitrary tab or trust its document.cookie.
+        # If OAuth is in progress or navigation has not committed, retry later.
+        current_url = client.call(
+            "Runtime.evaluate", {"expression": "location.href", "returnByValue": True}
+        )
+        current_href = (
+            str(current_url.get("result", {}).get("value") or "")
+            if isinstance(current_url, dict)
+            else ""
+        )
+        if not _looks_like_notion_url(current_href):
+            return {}
 
+        # Only CDP cookie records carry domains and can be origin-filtered.
         cookies: dict[str, str] = {}
 
-        try:
-            cookie_eval = client.call(
-                "Runtime.evaluate",
-                {"expression": "document.cookie", "returnByValue": True},
-            )
-            cookie_string = ""
-            if isinstance(cookie_eval, dict):
-                cookie_string = str(cookie_eval.get("result", {}).get("value") or "")
-            cookies.update(_parse_cookie_string(cookie_string))
-        except Exception:
-            pass
+        cookie_urls = [
+            url for url in dict.fromkeys((BASE_URL, AI_URL, notion_app_origin()))
+            if _looks_like_notion_url(url)
+        ]
+        if not cookie_urls:
+            raise RuntimeError("No verified HTTPS Notion login origin is configured.")
 
         def _collect_notion_cookies(items: Any) -> None:
             if not isinstance(items, list):
-                return
+                raise RuntimeError("Notion cookie response is not a list.")
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                domain = str(item.get("domain") or "").lstrip(".").lower()
-                if not _looks_like_notion_url(f"https://{domain}/"):
+                domain = str(item.get("domain") or "")
+                if not _cookie_matches_configured_origin(domain, cookie_urls):
                     continue
                 name = str(item.get("name") or "").strip()
                 value = str(item.get("value") or "").strip()
-                if name:
+                if name and value:
+                    if name in cookies and cookies[name] != value:
+                        raise RuntimeError("Conflicting cookies for verified Notion origins.")
                     cookies[name] = value
 
-        cookie_urls = list(dict.fromkeys((BASE_URL, AI_URL, notion_app_origin())))
         cookie_result = client.call("Network.getCookies", {"urls": cookie_urls})
+        if not isinstance(cookie_result, dict):
+            raise RuntimeError("Notion cookie response is malformed.")
         _collect_notion_cookies(cookie_result.get("cookies", []))
         if not cookies.get("token_v2"):
             try:
-                _collect_notion_cookies(client.call("Network.getAllCookies").get("cookies", []))
+                fallback = client.call("Network.getAllCookies")
             except Exception:
-                pass
+                fallback = {}
+            if isinstance(fallback, dict):
+                _collect_notion_cookies(fallback.get("cookies", []))
         return cookies
     finally:
         client.close()

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import login
+import pytest
 
 
 def test_official_host_matching_rejects_lookalikes():
     assert login._looks_like_notion_url("https://app.notion.com/ai")
     assert login._looks_like_notion_url("https://www.notion.so/chat")
-    assert login._looks_like_notion_url("https://team.notion.site/page")
+    assert not login._looks_like_notion_url("https://team.notion.site/page")
+    assert not login._looks_like_notion_url("http://app.notion.com/ai")
+    assert not login._looks_like_notion_url("https://evil.example@notion.com/ai")
+    assert not login._looks_like_notion_url("https://www.notion.so:8443/ai")
     assert not login._looks_like_notion_url("https://notion.com.evil.example/")
     assert not login._looks_like_notion_url("https://evil.example/notion.so")
     assert not login._looks_like_notion_url("chrome://omnibox-popup/")
@@ -61,3 +65,160 @@ def test_cookie_fallback_ignores_unrelated_domains(monkeypatch):
     assert result["token_v2"] == "TEST_TOKEN"
     assert "Network.getAllCookies" in fake.methods
     assert fake.methods[-1] == "close"
+
+
+def test_no_foreign_page_is_selected_or_navigated(monkeypatch):
+    entries = [
+        {"type": "page", "url": "https://other.example/", "id": "foreign"},
+        {"type": "page", "url": "about:blank", "id": "blank"},
+        {"type": "browser_ui", "url": "chrome://omnibox-popup", "id": "ui"},
+    ]
+    monkeypatch.setattr(login, "_get_json", lambda _url: entries)
+    assert login._find_debug_target(9222) is None
+
+    entries.append({
+        "type": "page", "url": "https://accounts.google.com/signin", "id": "google"
+    })
+    assert login._find_debug_target(9222)["id"] == "google"
+
+
+@pytest.mark.parametrize("host", [
+    ".notion.com", ".notion.so", ".app.notion.com", "www.notion.so",
+])
+def test_cookie_domain_accepted_only_for_configured_https_origins(host):
+    assert login._cookie_matches_configured_origin(
+        host, [login.BASE_URL, login.notion_app_origin()]
+    )
+
+
+@pytest.mark.parametrize("host", [
+    ".notion.site", ".other.example", ".notion.com.evil.example",
+    "evil@notion.com", "..notion.com", ".notion.com.", "",
+    "foo..notion.com", "notion.com:443", "notion%2ecom",
+])
+def test_cookie_domain_rejects_foreign_and_malformed_host(host):
+    assert not login._cookie_matches_configured_origin(
+        host, [login.BASE_URL, login.notion_app_origin()]
+    )
+
+
+class _FakeCDP:
+    def __init__(self, href, *, cookies=None, fallback=None, location_error=False):
+        self.href = href
+        self.cookies = cookies if cookies is not None else []
+        self.fallback = fallback if fallback is not None else []
+        self.location_error = location_error
+        self.methods = []
+        self.closed = False
+
+    def call(self, method, params=None):
+        expression = (params or {}).get("expression", "")
+        self.methods.append((method, expression))
+        if method == "Runtime.evaluate":
+            if expression != "location.href":
+                raise AssertionError("Untrusted document.cookie was evaluated")
+            if self.location_error:
+                raise RuntimeError("navigation incomplete")
+            return {"result": {"value": self.href}}
+        if method == "Page.navigate":
+            raise AssertionError("An existing tab was navigated")
+        if method == "Network.getCookies":
+            return {"cookies": self.cookies}
+        if method == "Network.getAllCookies":
+            return {"cookies": self.fallback}
+        return {}
+
+    def close(self):
+        self.closed = True
+
+
+def _test_cdp(monkeypatch, fake):
+    monkeypatch.setattr(login, "_find_debug_target", lambda _port: {
+        "type": "page",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/test",
+    })
+    monkeypatch.setattr(login, "_CDPClient", lambda _url: fake)
+    return fake
+
+
+@pytest.mark.parametrize("untrusted_href", [
+    "https://unrelated.example/", "https://accounts.google.com/signin",
+    "about:blank", "http://app.notion.com/ai", "https://team.notion.site/page",
+])
+def test_untrusted_or_unfinished_navigation_yields_no_cookies(
+    monkeypatch, untrusted_href
+):
+    fake = _test_cdp(monkeypatch, _FakeCDP(
+        untrusted_href,
+        fallback=[{
+            "domain": ".notion.com", "name": "token_v2", "value": "DO_NOT_READ"
+        }],
+    ))
+    assert login._extract_cookies_from_cdp(9222) == {}
+    assert fake.closed
+    assert all(
+        method not in {"Page.navigate", "Network.getCookies", "Network.getAllCookies"}
+        for method, _ in fake.methods
+    )
+    assert ("Runtime.evaluate", "document.cookie") not in fake.methods
+
+
+def test_failed_origin_check_never_reads_cookies(monkeypatch):
+    fake = _test_cdp(monkeypatch, _FakeCDP(
+        "https://other.example", location_error=True
+    ))
+    with pytest.raises(RuntimeError, match="navigation incomplete"):
+        login._extract_cookies_from_cdp(9222)
+    assert fake.closed
+    assert all(
+        method not in {"Network.getCookies", "Network.getAllCookies", "Page.navigate"}
+        for method, _ in fake.methods
+    )
+
+
+def test_mixed_notion_and_foreign_cookies_do_not_import_foreign_token(monkeypatch):
+    fake = _test_cdp(monkeypatch, _FakeCDP(
+        "https://app.notion.com/ai",
+        fallback=[
+            {"domain": ".other.example", "name": "token_v2", "value": "FOREIGN"},
+            {"domain": "evil@notion.com", "name": "token_v2", "value": "FOREIGN"},
+            {"domain": ".notion.site", "name": "token_v2", "value": "FOREIGN"},
+            {"domain": ".notion.com", "name": "token_v2", "value": "NOTION_TEST"},
+        ],
+    ))
+    result = login._extract_cookies_from_cdp(9222)
+    assert result["token_v2"] == "NOTION_TEST"
+    assert fake.closed
+    assert ("Runtime.evaluate", "document.cookie") not in fake.methods
+
+
+def test_conflicting_notion_token_domains_fail_closed(monkeypatch):
+    fake = _test_cdp(monkeypatch, _FakeCDP(
+        "https://www.notion.so/ai",
+        cookies=[
+            {"domain": ".notion.com", "name": "token_v2", "value": "FIRST"},
+            {"domain": ".notion.so", "name": "token_v2", "value": "SECOND"},
+        ],
+    ))
+    with pytest.raises(RuntimeError, match="Conflicting cookies"):
+        login._extract_cookies_from_cdp(9222)
+    assert fake.closed
+
+
+def test_cookie_fallback_skipped_when_network_has_valid_token(monkeypatch):
+    fake = _test_cdp(monkeypatch, _FakeCDP(
+        "https://www.notion.so/ai",
+        cookies=[{
+            "domain": ".notion.so", "name": "token_v2", "value": "VALID_TEST"
+        }],
+    ))
+    assert login._extract_cookies_from_cdp(9222)["token_v2"] == "VALID_TEST"
+    assert not any(method == "Network.getAllCookies" for method, _ in fake.methods)
+    assert fake.closed
+
+
+@pytest.mark.parametrize("host", ["com", ".com", "so", ".so"])
+def test_cookie_domain_does_not_accept_public_suffix(host):
+    assert not login._cookie_matches_configured_origin(
+        host, [login.BASE_URL, login.notion_app_origin()]
+    )
