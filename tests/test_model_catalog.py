@@ -182,6 +182,8 @@ def test_authoritative_catalog_cache_is_global_to_workspace(tmp_path: Path) -> N
 
     assert live.source == "authoritative_live"
     assert cached.source == "authoritative_cache"
+    assert live.receipt()["catalog_latest_upstream_selection_restricted"] is None
+    assert cached.receipt()["catalog_latest_upstream_selection_restricted"] is None
     assert first.calls == 1
     assert second.calls == 0
     assert live.snapshot["snapshot_sha256"] == cached.snapshot["snapshot_sha256"]
@@ -221,6 +223,7 @@ def test_catalog_uses_last_known_good_after_stale_policy_threshold(
     assert receipt["catalog_fallback"] is True
     assert receipt["catalog_stale_policy_exceeded"] is True
     assert "upstream unavailable" in receipt["catalog_fallback_reason"]
+    assert receipt["catalog_latest_upstream_selection_restricted"] is None
 
 
 def test_empty_restricted_refresh_preserves_last_known_good(
@@ -251,6 +254,9 @@ def test_empty_restricted_refresh_preserves_last_known_good(
     assert fallback.snapshot["snapshot_sha256"] == original_sha
     assert "no usable models" in fallback.upstream_error
     assert "restricted" in fallback.upstream_error.lower()
+    receipt = fallback.receipt()
+    assert receipt["catalog_model_selection_restricted"] is False
+    assert receipt["catalog_latest_upstream_selection_restricted"] is True
 
 
 def test_catalog_refresh_atomically_replaces_removed_and_new_models(

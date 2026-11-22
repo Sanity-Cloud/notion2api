@@ -6,7 +6,7 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
 from app.model_restriction_cache import ModelRestrictionCache
@@ -252,6 +252,7 @@ class CatalogEnvelope:
     stale: bool
     upstream_error: str = ""
     stale_policy_exceeded: bool = False
+    upstream_model_selection_restricted: bool | None = None
 
     def receipt(self) -> dict[str, Any]:
         fallback = self.source in {"last_known_good", "static_fallback"}
@@ -277,6 +278,11 @@ class CatalogEnvelope:
             ),
             "catalog_model_selection_restricted": bool(
                 self.snapshot.get("model_selection_restricted", False)
+            ),
+            # The snapshot may be old. Keep the latest observed upstream policy
+            # separate rather than reporting historical permission as current.
+            "catalog_latest_upstream_selection_restricted": (
+                self.upstream_model_selection_restricted
             ),
         }
 
@@ -400,6 +406,7 @@ class ModelCatalogService:
                     static_records=static_records,
                 )
 
+            raw: Any = None
             try:
                 raw = client.get_ai_model_picker_config()
                 normalized = parse_picker_catalog(raw)
@@ -418,14 +425,28 @@ class ModelCatalogService:
                     raise ModelCatalogUnavailable(
                         "Model catalog was not readable after publication."
                     )
-                return self._from_cache(fresh, source="authoritative_live")
+                envelope = self._from_cache(fresh, source="authoritative_live")
+                restricted = raw.get("modelSelectionRestricted") if isinstance(raw, dict) else None
+                return replace(
+                    envelope,
+                    upstream_model_selection_restricted=(
+                        restricted if isinstance(restricted, bool) else None
+                    ),
+                )
             except Exception as exc:
                 self.cache.release_refresh(cache_key, lease_token=lease)
-                return self._fallback(
+                fallback = self._fallback(
                     cache_key,
                     f"{type(exc).__name__}: {exc}",
                     allow_static_fallback=allow_static_fallback,
                     static_records=static_records,
+                )
+                restricted = raw.get("modelSelectionRestricted") if isinstance(raw, dict) else None
+                return replace(
+                    fallback,
+                    upstream_model_selection_restricted=(
+                        restricted if isinstance(restricted, bool) else None
+                    ),
                 )
 
     def _fallback(
