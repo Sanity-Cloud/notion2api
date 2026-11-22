@@ -247,7 +247,13 @@ def _find_debug_target(port: int) -> dict[str, Any] | None:
             parsed = urlsplit(str(item.get("url") or ""))
         except ValueError:
             continue
-        if parsed.scheme == "https" and (parsed.hostname or "").lower() == "accounts.google.com":
+        if (
+            parsed.scheme == "https"
+            and (parsed.hostname or "").lower() == "accounts.google.com"
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in {None, 443}
+        ):
             return item
     return None
 
@@ -330,10 +336,13 @@ def _extract_cookies_from_cdp(port: int) -> dict[str, str]:
                     continue
                 name = str(item.get("name") or "").strip()
                 value = str(item.get("value") or "").strip()
-                if name and value:
-                    if name in cookies and cookies[name] != value:
-                        raise RuntimeError("Conflicting cookies for verified Notion origins.")
-                    cookies[name] = value
+                # Only credentials and the optional active-user hint are used
+                # by account discovery. Ignore browser preference/state cookies.
+                if name not in {"token_v2", "notion_user_id"} or not value:
+                    continue
+                if name in cookies and cookies[name] != value:
+                    raise RuntimeError("Conflicting Notion identity cookies.")
+                cookies[name] = value
 
         cookie_result = client.call("Network.getCookies", {"urls": cookie_urls})
         if not isinstance(cookie_result, dict):
@@ -404,21 +413,21 @@ def _launch_and_extract_token(timeout_seconds: int = DEFAULT_LOGIN_TIMEOUT) -> s
 
 def _session_for_token(token_v2: str, cookies: dict[str, str] | None = None) -> requests.Session:
     session = requests.Session()
-    cookie_values = dict(cookies or {})
-    cookie_values["token_v2"] = token_v2
+    # Never flatten all browser cookies into an explicit Cookie header.
+    # Requests applies cookie-domain rules for the configured Notion web host.
+    # notion_user_id is metadata for account selection, not an auth cookie
+    # that needs to be replayed to the web API.
     session.headers.update(
         {
             "Origin": BASE_URL,
             "Referer": AI_URL,
             "User-Agent": USER_AGENT,
             "Content-Type": "application/json",
-            "Cookie": "; ".join(f"{name}={value}" for name, value in cookie_values.items() if value),
         }
     )
-    for name, value in cookie_values.items():
-        if not value:
-            continue
-        session.cookies.set(name, value, domain=notion_cookie_domain(), path="/")
+    session.cookies.set(
+        "token_v2", token_v2, domain=notion_cookie_domain(), path="/"
+    )
     return session
 
 

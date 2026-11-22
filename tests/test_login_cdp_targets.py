@@ -200,7 +200,7 @@ def test_conflicting_notion_token_domains_fail_closed(monkeypatch):
             {"domain": ".notion.so", "name": "token_v2", "value": "SECOND"},
         ],
     ))
-    with pytest.raises(RuntimeError, match="Conflicting cookies"):
+    with pytest.raises(RuntimeError, match="Conflicting Notion identity cookies"):
         login._extract_cookies_from_cdp(9222)
     assert fake.closed
 
@@ -222,3 +222,61 @@ def test_cookie_domain_does_not_accept_public_suffix(host):
     assert not login._cookie_matches_configured_origin(
         host, [login.BASE_URL, login.notion_app_origin()]
     )
+
+
+def test_only_minimal_identity_cookies_are_collected(monkeypatch):
+    fake = _test_cdp(monkeypatch, _FakeCDP(
+        "https://app.notion.com/ai",
+        cookies=[
+            {"domain": ".notion.com", "name": "token_v2", "value": "TEST_TOKEN"},
+            {"domain": ".notion.com", "name": "notion_user_id", "value": "TEST_USER"},
+            {"domain": ".notion.com", "name": "prefs", "value": "A"},
+            {"domain": ".notion.so", "name": "prefs", "value": "B"},
+            {"domain": ".notion.com", "name": "session_state", "value": "PRIVATE"},
+        ],
+    ))
+    cookies = login._extract_cookies_from_cdp(9222)
+    assert cookies == {"token_v2": "TEST_TOKEN", "notion_user_id": "TEST_USER"}
+    assert fake.closed
+
+
+def test_http_request_replays_only_token_cookie_not_auxiliary_state():
+    session = login._session_for_token("TEST_TOKEN", {
+        "token_v2": "TEST_TOKEN",
+        "notion_user_id": "TEST_USER",
+        "prefs": "DO_NOT_REPLAY",
+        "session_state": "DO_NOT_REPLAY",
+    })
+    assert "Cookie" not in session.headers
+    request = login.requests.Request("POST", login.BASE_URL + "/api/v3/getSpaces")
+    prepared = session.prepare_request(request)
+    assert prepared.headers.get("Cookie") == "token_v2=TEST_TOKEN"
+    assert set(session.cookies.keys()) == {"token_v2"}
+
+
+def test_google_oauth_target_rejects_userinfo_and_custom_port(monkeypatch):
+    entries = [
+        {"type": "page", "url": "https://evil@accounts.google.com/signin",
+         "id": "userinfo"},
+        {"type": "page", "url": "https://accounts.google.com:8443/signin",
+         "id": "port"},
+    ]
+    monkeypatch.setattr(login, "_get_json", lambda _url: entries)
+    assert login._find_debug_target(9222) is None
+    entries.append({
+        "type": "page", "url": "https://accounts.google.com/signin",
+        "id": "valid",
+    })
+    assert login._find_debug_target(9222)["id"] == "valid"
+
+
+def test_oauth_polling_retries_without_reusing_foreign_cookies(monkeypatch):
+    observations = iter([{}, {}, {"token_v2": "TEST_NOTION_TOKEN"}])
+    attempts = []
+    monkeypatch.setattr(login, "_extract_cookies_from_cdp", lambda port: (
+        attempts.append(port) or next(observations)
+    ))
+    monkeypatch.setattr(login.time, "sleep", lambda _delay: None)
+    cookies = login._wait_for_browser_cookies(9222, timeout_seconds=5)
+    assert cookies == {"token_v2": "TEST_NOTION_TOKEN"}
+    assert attempts == [9222, 9222, 9222]
